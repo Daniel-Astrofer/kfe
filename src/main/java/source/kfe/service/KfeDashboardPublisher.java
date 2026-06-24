@@ -1,0 +1,37 @@
+package source.kfe.service;
+
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+@Service
+public class KfeDashboardPublisher {
+
+    private final SimpMessagingTemplate messagingTemplate;
+    private final KfeDashboardService dashboardService;
+
+    public KfeDashboardPublisher(
+            SimpMessagingTemplate messagingTemplate,
+            KfeDashboardService dashboardService) {
+        this.messagingTemplate = messagingTemplate;
+        this.dashboardService = dashboardService;
+    }
+
+    public void publishAfterCommit(Long userId) {
+        Runnable publish = () -> messagingTemplate.convertAndSendToUser(
+                String.valueOf(userId),
+                "/queue/kfe-dashboard",
+                dashboardService.dashboard(userId));
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            publish.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publish.run();
+            }
+        });
+    }
+}
