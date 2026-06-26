@@ -116,6 +116,46 @@ class KfePaymentRequestServiceTest {
     }
 
     @Test
+    void createIssuesFreshAddressForCustodialWalletWithoutRotatingWallet() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = new KfeWalletEntity();
+        wallet.setId(walletId);
+        wallet.setUserId(7L);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setStatus(KfeWalletStatus.ACTIVE);
+        wallet.setLastDerivedIndex(-1);
+
+        when(walletRepository.findByIdAndUserId(walletId, 7L)).thenReturn(Optional.of(wallet));
+        when(receiveAddressIssuer.issue("kfe-payment-request-" + walletId))
+                .thenReturn(new KfeReceiveAddressIssuer.IssuedAddress(
+                        "bcrt1qissued",
+                        "bitcoin-core-wallet:kfe",
+                        -1,
+                        "KFE_BITCOIN_CORE_WALLET"));
+        when(addressRepository.save(any(KfeWalletAddressEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentRequestRepository.findByPublicId(anyString())).thenReturn(Optional.empty());
+        when(paymentRequestRepository.save(any(KfePaymentRequestEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.create(7L, new KfeCreatePaymentRequest(
+                walletId,
+                KfeRail.ONCHAIN,
+                10_000L,
+                null,
+                null,
+                null,
+                null,
+                true));
+
+        assertThat(response.walletId()).isEqualTo(walletId);
+        assertThat(response.address()).isEqualTo("bcrt1qissued");
+        assertThat(wallet.getLastDerivedIndex()).isEqualTo(-1);
+        verify(walletService, never()).rotateAddress(7L, walletId);
+        verify(receiveAddressIssuer).issue("kfe-payment-request-" + walletId);
+    }
+
+    @Test
     void cancelDoesNotRegressExpiredPaymentRequest() {
         UUID id = UUID.randomUUID();
         KfePaymentRequestEntity paymentRequest = paymentRequest();

@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import source.common.financial.FinancialNotificationPort;
 import source.common.service.AddressDerivationService;
-import source.kfe.dto.KfeAddressResponse;
 import source.kfe.dto.KfeCreatePaymentRequest;
 import source.kfe.dto.KfePaymentRequestResponse;
 import source.kfe.model.KfeBalanceMovementEntity;
@@ -310,12 +309,7 @@ public class KfePaymentRequestService {
             KfeWalletEntity wallet,
             KfeCreatePaymentRequest request) {
         if (Boolean.TRUE.equals(request.issueFreshAddress())) {
-            if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
-                return issueAddressWithoutRotation(wallet);
-            }
-            KfeAddressResponse rotated = walletService.rotateAddress(userId, wallet.getId());
-            return addressRepository.findById(rotated.id())
-                    .orElseThrow(() -> new IllegalStateException("KFE rotated address was not persisted."));
+            return issueAddressWithoutRotation(wallet);
         }
 
         return addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(

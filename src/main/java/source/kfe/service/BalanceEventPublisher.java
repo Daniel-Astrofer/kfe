@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -16,12 +17,15 @@ public class BalanceEventPublisher {
 
     private final SimpMessagingTemplate messagingTemplate;
 
-    public BalanceEventPublisher(SimpMessagingTemplate messagingTemplate) {
-        this.messagingTemplate = messagingTemplate;
+    public BalanceEventPublisher(ObjectProvider<SimpMessagingTemplate> messagingTemplate) {
+        this.messagingTemplate = messagingTemplate.getIfAvailable();
     }
 
     public void publishBalanceUpdateAfterCommit(Long userId, String walletId, String walletName,
             BigDecimal newBalance, BigDecimal amount, String context) {
+        if (messagingTemplate == null) {
+            return;
+        }
         Runnable publish = () -> {
             try {
                 BalanceUpdateEvent event = new BalanceUpdateEvent(

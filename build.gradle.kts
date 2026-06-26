@@ -71,3 +71,7 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
         include("db/migration/**")
     }
 }
+
+tasks.withType<Test> {
+    useJUnitPlatform()
+}

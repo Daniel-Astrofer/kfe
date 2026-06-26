@@ -47,12 +47,19 @@ public class KfeReceiveAddressIssuer {
         }
 
         if (bitcoinCoreWalletAddressEnabled && bitcoinCoreRpcClient != null) {
-            String address = bitcoinCoreRpcClient.getNewAddress(label != null ? label : "kfe-receive");
-            return new IssuedAddress(
-                    address,
-                    "bitcoin-core-wallet:" + bitcoinCoreRpcClient.walletName(),
-                    -1,
-                    "KFE_BITCOIN_CORE_WALLET");
+            try {
+                String address = bitcoinCoreRpcClient.getNewAddress(label != null ? label : "kfe-receive");
+                return new IssuedAddress(
+                        address,
+                        "bitcoin-core-wallet:" + bitcoinCoreRpcClient.walletName(),
+                        -1,
+                        "KFE_BITCOIN_CORE_WALLET");
+            } catch (RuntimeException rpcFailure) {
+                throw new IllegalStateException(
+                        "O serviço de depósito on-chain está temporariamente indisponível. "
+                                + "O nó Bitcoin não respondeu. Tente novamente em alguns minutos.",
+                        rpcFailure);
+            }
         }
 
         throw new IllegalStateException(
