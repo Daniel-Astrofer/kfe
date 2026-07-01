@@ -36,7 +36,7 @@ public class KfeFinancialWalletProvisioningAdapter implements FinancialWalletPro
                 new KfeCreateWalletRequest(
                         KfeWalletKind.INTERNAL,
                         null,
-                        "carteira global",
+                        "Conta Assegurada",
                         null,
                         null,
                         null,

@@ -20,6 +20,9 @@ import java.util.UUID;
 @Configuration
 public class KfeFinancialFallbackConfiguration {
 
+    private static final String STANDALONE_MPC_UNAVAILABLE =
+            "KFE standalone MPC key provisioning is unavailable.";
+
     @Bean
     @ConditionalOnMissingBean(StructuredAuditLogger.class)
     public StructuredAuditLogger kfeStructuredAuditLogger() {
@@ -56,9 +59,14 @@ public class KfeFinancialFallbackConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(FinancialMpcKeyPort.class)
-    public FinancialMpcKeyPort kfeFinancialMpcKeyPort() {
+    public FinancialMpcKeyPort kfeFinancialMpcKeyPort(
+            @Value("${kfe.standalone.mpc.dev-keygen-enabled:false}") boolean devKeygenEnabled,
+            @Value("${REGION:${region:}}") String region) {
+        if (devKeygenEnabled && "LOCAL".equalsIgnoreCase(region)) {
+            return (walletId, userId) -> "kfe-local-dev-mpc-public-key:" + walletId + ":" + userId;
+        }
         return (walletId, userId) -> {
-            throw new IllegalStateException("KFE standalone MPC key provisioning is unavailable.");
+            throw new IllegalStateException(STANDALONE_MPC_UNAVAILABLE);
         };
     }
 

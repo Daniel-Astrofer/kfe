@@ -90,10 +90,10 @@ public class KfeResponseMapper {
 
     public String walletTypeDescription(KfeWalletKind kind) {
         if (kind == null) {
-            return "Carteira Global";
+            return "Conta Assegurada";
         }
         return switch (kind) {
-            case INTERNAL -> "Carteira Global";
+            case INTERNAL -> "Conta Assegurada";
             case CUSTODIAL_ONCHAIN -> "Carteira Onchain";
             case WATCH_ONLY -> "Carteira Fria";
         };

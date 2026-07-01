@@ -33,7 +33,7 @@ public class KfeWalletService {
 
     private static final Logger log = LoggerFactory.getLogger(KfeWalletService.class);
     private static final String ASSET_BTC = "BTC";
-    private static final String INTERNAL_GLOBAL_WALLET_LABEL = "carteira global";
+    private static final String INTERNAL_GLOBAL_WALLET_LABEL = "Conta Assegurada";
     private static final int FAILURE_REASON_MAX_LENGTH = 180;
     private static final int MAX_ACTIVE_WATCH_ONLY_WALLETS = 2;
     private static final List<KfeWalletStatus> USER_VISIBLE_WALLET_STATUSES = List.of(

@@ -177,7 +177,7 @@ class KfeWalletServiceTest {
     }
 
     @Test
-    void createWalletForcesInternalLabelToGlobalWallet() {
+    void createWalletForcesInternalLabelToAssuredAccount() {
         AtomicReference<KfeWalletEntity> persistedWallet = new AtomicReference<>();
 
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
@@ -203,7 +203,7 @@ class KfeWalletServiceTest {
                             wallet.getStatus(),
                             wallet.getLabel(),
                             wallet.getLabel(),
-                            "Carteira Global",
+                            "Conta Assegurada",
                             "BTC",
                             wallet.isSpendable(),
                             false,
@@ -229,8 +229,8 @@ class KfeWalletServiceTest {
                         null,
                         false));
 
-        assertEquals("carteira global", response.label());
-        assertEquals("carteira global", persistedWallet.get().getLabel());
+        assertEquals("Conta Assegurada", response.label());
+        assertEquals("Conta Assegurada", persistedWallet.get().getLabel());
         verifyNoInteractions(mpcKeyService);
     }
 
