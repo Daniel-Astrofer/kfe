@@ -34,6 +34,13 @@ public interface KfeWalletRepository extends JpaRepository<KfeWalletEntity, UUID
             KfeWalletKind kind,
             Collection<KfeWalletStatus> statuses);
 
+    Optional<KfeWalletEntity> findFirstByUserIdAndKindOrderByCreatedAtDesc(Long userId, KfeWalletKind kind);
+
+    Optional<KfeWalletEntity> findFirstByUserIdAndKindAndStatusInOrderByCreatedAtDesc(
+            Long userId,
+            KfeWalletKind kind,
+            Collection<KfeWalletStatus> statuses);
+
     Optional<KfeWalletEntity> findByIdAndUserId(UUID id, Long userId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

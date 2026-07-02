@@ -34,7 +34,7 @@ public class KfePsbtWorkflowController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE PSBT workflows retrieved.",
-                psbtWorkflowService.list(authenticatedUserId(authentication), walletId)));
+                psbtWorkflowService.list(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId)));
     }
 
     @GetMapping("/{workflowId}")
@@ -43,7 +43,7 @@ public class KfePsbtWorkflowController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE PSBT workflow retrieved.",
-                psbtWorkflowService.get(authenticatedUserId(authentication), workflowId)));
+                psbtWorkflowService.get(KfeAuthenticationSupport.authenticatedUserId(authentication), workflowId)));
     }
 
     @PostMapping("/{workflowId}/signed")
@@ -53,7 +53,7 @@ public class KfePsbtWorkflowController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE signed PSBT accepted.",
-                psbtWorkflowService.attachSignedPsbt(authenticatedUserId(authentication), workflowId, request)));
+                psbtWorkflowService.attachSignedPsbt(KfeAuthenticationSupport.authenticatedUserId(authentication), workflowId, request)));
     }
 
     @PostMapping("/{workflowId}/broadcast")
@@ -62,13 +62,6 @@ public class KfePsbtWorkflowController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE PSBT workflow broadcast.",
-                psbtWorkflowService.broadcast(authenticatedUserId(authentication), workflowId)));
-    }
-
-    private Long authenticatedUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new SecurityException("Authenticated user is required.");
-        }
-        return Long.parseLong(authentication.getName());
+                psbtWorkflowService.broadcast(KfeAuthenticationSupport.authenticatedUserId(authentication), workflowId)));
     }
 }

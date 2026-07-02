@@ -4,6 +4,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.PropertySource;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
@@ -18,6 +19,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 @Profile("kfe")
 @ConditionalOnProperty(name = "kfe.standalone", havingValue = "false", matchIfMissing = true)
 @ComponentScan(basePackages = "source.kfe")
+@PropertySource("classpath:kfe-service-defaults.properties")
 @EntityScan(basePackages = "source.kfe.model")
 @EnableJpaRepositories(basePackages = "source.kfe.repository")
 public class KfeServiceRuntimeConfiguration {

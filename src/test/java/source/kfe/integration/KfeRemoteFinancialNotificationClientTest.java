@@ -85,41 +85,18 @@ class KfeRemoteFinancialNotificationClientTest {
     }
 
     @Test
-    void postsDemoBalanceCreditedNotificationToAuthServer() throws Exception {
-        KfeRemoteFinancialNotificationClient client = client("credential");
-        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
-        UUID walletId = UUID.randomUUID();
-
-        server.expect(requestTo("http://server.test/internal/kfe/notifications/demo-balance-credited"))
-                .andExpect(method(HttpMethod.POST))
-                .andExpect(header("X-KFE-Internal-Secret", "credential"))
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(content().json("""
-                        {
-                          "userId":42,
-                          "walletId":"%s",
-                          "walletName":"Carteira",
-                          "amountBtc":"100.00000000"
-                        }
-                        """.formatted(walletId)))
-                .andRespond(withSuccess());
-
-        client.notifyDemoBalanceCredited(42L, walletId, "Carteira", "100.00000000");
-
-        server.verify();
-    }
-
-    @Test
     void rejectsMissingInternalCredentialBeforeCallingAuthServer() {
         KfeRemoteFinancialNotificationClient client = client("");
 
         assertThrows(
                 IllegalStateException.class,
-                () -> client.notifyDemoBalanceCredited(
+                () -> client.notifyDepositConfirmed(
                         42L,
                         UUID.randomUUID(),
-                        "Carteira",
-                        "100.00000000"));
+                        UUID.randomUUID(),
+                        "ONCHAIN",
+                        1500L,
+                        3));
     }
 
     private KfeRemoteFinancialNotificationClient client(String credential) {

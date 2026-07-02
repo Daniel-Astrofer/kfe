@@ -10,7 +10,6 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
-import source.common.financial.FinancialDemoBalanceCreditedNotificationRequest;
 import source.common.financial.FinancialDepositConfirmedNotificationRequest;
 import source.common.financial.FinancialNotificationPort;
 import source.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
@@ -80,16 +79,6 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
                         walletId,
                         rail,
                         creditedSats));
-    }
-
-    @Override
-    public void notifyDemoBalanceCredited(Long userId, UUID walletId, String walletName, String amountBtc) {
-        post("/internal/kfe/notifications/demo-balance-credited",
-                new FinancialDemoBalanceCreditedNotificationRequest(
-                        userId,
-                        walletId,
-                        walletName,
-                        amountBtc));
     }
 
     private void post(String path, Object request) {

@@ -6,7 +6,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.service.AddressDerivationService;
-import source.common.financial.DevBalanceInjector;
 import source.kfe.dto.KfeAddressResponse;
 import source.kfe.dto.KfeCreateWalletRequest;
 import source.kfe.dto.KfeUpdateWalletRequest;
@@ -54,7 +53,6 @@ public class KfeWalletService {
     private final KfeDashboardPublisher dashboardPublisher;
     private final AddressDerivationService addressDerivationService;
     private final KfeReceiveAddressIssuer receiveAddressIssuer;
-    private final DevBalanceInjector devBalanceInjector;
     private final TransactionTemplate transactionTemplate;
 
     public KfeWalletService(
@@ -69,7 +67,6 @@ public class KfeWalletService {
             KfeDashboardPublisher dashboardPublisher,
             AddressDerivationService addressDerivationService,
             KfeReceiveAddressIssuer receiveAddressIssuer,
-            DevBalanceInjector devBalanceInjector,
             TransactionTemplate transactionTemplate) {
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
@@ -82,7 +79,6 @@ public class KfeWalletService {
         this.dashboardPublisher = dashboardPublisher;
         this.addressDerivationService = addressDerivationService;
         this.receiveAddressIssuer = receiveAddressIssuer;
-        this.devBalanceInjector = devBalanceInjector;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -337,12 +333,6 @@ public class KfeWalletService {
         wallet.setStatus(KfeWalletStatus.ACTIVE);
         walletRepository.save(wallet);
 
-        DevBalanceInjector.ClaimOutcome bonusOutcome =
-                devBalanceInjector.claimTestBalance(userId, walletId);
-        if (bonusOutcome == DevBalanceInjector.ClaimOutcome.CLAIMED) {
-            log.info("[DEV] Granted 100 BTC receive bonus for wallet {}", walletId);
-        }
-
         auditLogService.record(
                 "KFE_WALLET_ADDRESS_ROTATED",
                 null,
@@ -359,6 +349,9 @@ public class KfeWalletService {
     }
 
     private void validateCreateRequest(KfeCreateWalletRequest request) {
+        if (request.kind() == KfeWalletKind.SYSTEM_FUNDS || request.kind() == KfeWalletKind.SYSTEM_PROFIT) {
+            throw new IllegalArgumentException("System wallets are managed by KFE runtime bootstrap.");
+        }
         if (request.kind() == KfeWalletKind.WATCH_ONLY
                 && !hasText(request.xpub())
                 && !hasText(request.descriptor())) {
@@ -511,6 +504,12 @@ public class KfeWalletService {
     private String resolveWalletLabel(KfeCreateWalletRequest request) {
         if (request.kind() == KfeWalletKind.INTERNAL) {
             return INTERNAL_GLOBAL_WALLET_LABEL;
+        }
+        if (request.kind() == KfeWalletKind.SYSTEM_FUNDS) {
+            return "Kerosene Fundos Globais";
+        }
+        if (request.kind() == KfeWalletKind.SYSTEM_PROFIT) {
+            return "Kerosene Lucro";
         }
         if (hasText(request.label())) {
             return request.label().trim();

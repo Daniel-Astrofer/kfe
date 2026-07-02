@@ -15,5 +15,7 @@ public interface KfeUserStatementRepository extends JpaRepository<KfeUserStateme
             Long userId,
             LocalDateTime now);
 
+    boolean existsByTransactionId(UUID transactionId);
+
     long deleteByExpiresAtBefore(LocalDateTime cutoff);
 }

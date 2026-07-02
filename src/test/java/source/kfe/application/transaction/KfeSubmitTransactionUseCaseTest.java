@@ -11,6 +11,7 @@ import source.kfe.model.KfeTransactionStatus;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeBalanceService;
 import source.kfe.service.KfeDashboardPublisher;
+import source.kfe.service.KfeFeeSettlementService;
 import source.kfe.service.KfeHashService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeQuorumGateway;
@@ -43,6 +44,7 @@ class KfeSubmitTransactionUseCaseTest {
     private final KfeBalanceMovementRecorder movementRecorder = mock(KfeBalanceMovementRecorder.class);
     private final KfeTransactionOutboxUseCase outboxUseCase = mock(KfeTransactionOutboxUseCase.class);
     private final KfeTransactionStatementRecorder statementRecorder = mock(KfeTransactionStatementRecorder.class);
+    private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
 
     private final KfeSubmitTransactionUseCase useCase = new KfeSubmitTransactionUseCase(
             transactionRepository,
@@ -60,7 +62,8 @@ class KfeSubmitTransactionUseCaseTest {
             stateMachine,
             movementRecorder,
             outboxUseCase,
-            statementRecorder
+            statementRecorder,
+            feeSettlementService
     );
 
     @Test
@@ -143,6 +146,7 @@ class KfeSubmitTransactionUseCaseTest {
                 3,
                 null,
                 null,
+                0,
                 null,
                 null,
                 null,

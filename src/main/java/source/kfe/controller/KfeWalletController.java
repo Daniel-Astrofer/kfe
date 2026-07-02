@@ -39,7 +39,7 @@ public class KfeWalletController {
     public ResponseEntity<ApiResponse<KfeWalletResponse>> create(
             @Valid @RequestBody KfeCreateWalletRequest request,
             Authentication authentication) {
-        KfeWalletResponse response = financialApi.createWallet(authenticatedUserId(authentication), request);
+        KfeWalletResponse response = financialApi.createWallet(KfeAuthenticationSupport.authenticatedUserId(authentication), request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("KFE wallet created.", response));
     }
@@ -48,7 +48,7 @@ public class KfeWalletController {
     public ResponseEntity<ApiResponse<List<KfeWalletResponse>>> list(Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE wallets retrieved.",
-                financialApi.wallets(authenticatedUserId(authentication))));
+                financialApi.wallets(KfeAuthenticationSupport.authenticatedUserId(authentication))));
     }
 
     @GetMapping("/names")
@@ -65,7 +65,7 @@ public class KfeWalletController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE wallet updated.",
-                financialApi.updateWallet(authenticatedUserId(authentication), walletId, request)));
+                financialApi.updateWallet(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId, request)));
     }
 
     @PostMapping("/{walletId}/archive")
@@ -74,7 +74,7 @@ public class KfeWalletController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE wallet archived.",
-                financialApi.archiveWallet(authenticatedUserId(authentication), walletId)));
+                financialApi.archiveWallet(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId)));
     }
 
     @PostMapping("/{walletId}/addresses/rotate")
@@ -83,7 +83,7 @@ public class KfeWalletController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE wallet address rotated.",
-                financialApi.rotateAddress(authenticatedUserId(authentication), walletId)));
+                financialApi.rotateAddress(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId)));
     }
 
     @GetMapping("/{walletId}/utxos")
@@ -92,7 +92,7 @@ public class KfeWalletController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE wallet UTXOs retrieved.",
-                financialApi.walletUtxos(authenticatedUserId(authentication), walletId)));
+                financialApi.walletUtxos(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId)));
     }
 
     @PostMapping("/{walletId}/cold-wallet/psbt")
@@ -102,13 +102,6 @@ public class KfeWalletController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE cold wallet PSBT created.",
-                financialApi.createColdWalletPsbt(authenticatedUserId(authentication), walletId, request)));
-    }
-
-    private Long authenticatedUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new SecurityException("Authenticated user is required.");
-        }
-        return Long.parseLong(authentication.getName());
+                financialApi.createColdWalletPsbt(KfeAuthenticationSupport.authenticatedUserId(authentication), walletId, request)));
     }
 }

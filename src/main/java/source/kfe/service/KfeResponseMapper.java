@@ -78,6 +78,7 @@ public class KfeResponseMapper {
                 tx.getQuorumAckCount(),
                 tx.getProviderReference(),
                 tx.getBlockchainTxid(),
+                tx.getConfirmations(),
                 tx.getFailureCode(),
                 tx.getFailureMessage(),
                 tx.getCreatedAt(),
@@ -93,9 +94,11 @@ public class KfeResponseMapper {
             return "Conta Assegurada";
         }
         return switch (kind) {
-            case INTERNAL -> "Conta Assegurada";
-            case CUSTODIAL_ONCHAIN -> "Carteira Onchain";
-            case WATCH_ONLY -> "Carteira Fria";
+            case INTERNAL -> "Carteira assegurada pela Kerosene: saldo interno lastreado na carteira de quorum.";
+            case CUSTODIAL_ONCHAIN -> "Custodial on-chain: carteira separada monitorada pela Kerosene, com assinatura sob custódia.";
+            case WATCH_ONLY -> "Cold wallet: saldo observado por xpub/descriptor; fundos não são saldo Kerosene e não são movimentados pelo servidor.";
+            case SYSTEM_FUNDS -> "Fundos Globais";
+            case SYSTEM_PROFIT -> "Lucro Kerosene";
         };
     }
 }

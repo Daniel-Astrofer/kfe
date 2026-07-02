@@ -1,18 +1,19 @@
 package source.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.common.financial.FinancialNotificationPort;
 import source.common.service.AddressDerivationService;
 import source.kfe.dto.KfeCreatePaymentRequest;
 import source.kfe.model.KfePaymentRequestEntity;
 import source.kfe.model.KfePaymentRequestStatus;
 import source.kfe.model.KfeRail;
+import source.kfe.model.KfeTransactionEntity;
+import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletAddressEntity;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
-import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfePaymentRequestRepository;
+import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.when;
 class KfePaymentRequestServiceTest {
 
     private final KfePaymentRequestRepository paymentRequestRepository = mock(KfePaymentRequestRepository.class);
+    private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
     private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
     private final KfeWalletAddressRepository addressRepository = mock(KfeWalletAddressRepository.class);
     private final KfeWalletService walletService = mock(KfeWalletService.class);
@@ -38,29 +40,18 @@ class KfePaymentRequestServiceTest {
     private final KfeReceiveAddressIssuer receiveAddressIssuer = mock(KfeReceiveAddressIssuer.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
 
-    // New dependencies mocked
-    private final source.kfe.repository.KfeTransactionRepository transactionRepository = mock(source.kfe.repository.KfeTransactionRepository.class);
-    private final KfeBalanceMovementRepository movementRepository = mock(KfeBalanceMovementRepository.class);
-    private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
-    private final KfeStatementService statementService = mock(KfeStatementService.class);
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
-    private final FinancialNotificationPort notificationPort = mock(FinancialNotificationPort.class);
 
     private final KfePaymentRequestService service = new KfePaymentRequestService(
             paymentRequestRepository,
             transactionRepository,
-            movementRepository,
             walletRepository,
             addressRepository,
             walletService,
             addressDerivationService,
             receiveAddressIssuer,
             auditLogService,
-            balanceService,
-            statementService,
-            dashboardPublisher,
-            notificationPort,
-            false);
+            dashboardPublisher);
 
     @Test
     void publicGetExpiresOverdueOpenRequestBeforeReturningIt() {
@@ -173,6 +164,32 @@ class KfePaymentRequestServiceTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyMap());
+    }
+
+    @Test
+    void getExposesObservedValidatingTransactionBeforePaymentRequestIsPaid() {
+        UUID id = UUID.randomUUID();
+        KfePaymentRequestEntity paymentRequest = paymentRequest();
+        paymentRequest.setStatus(KfePaymentRequestStatus.OPEN);
+        KfeTransactionEntity tx = new KfeTransactionEntity();
+        tx.setStatus(KfeTransactionStatus.VALIDATING);
+        tx.setBlockchainTxid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        tx.setConfirmations(0);
+        tx.setGrossAmountSats(11_000L);
+        tx.setReceiverAmountSats(10_901L);
+
+        when(paymentRequestRepository.findByIdAndUserId(id, 7L)).thenReturn(Optional.of(paymentRequest));
+        when(transactionRepository.findTopByIdempotencyKeyStartingWithOrderByCreatedAtDesc(
+                "payment-request:" + paymentRequest.getId() + ":")).thenReturn(Optional.of(tx));
+
+        var response = service.get(7L, id);
+
+        assertThat(response.status()).isEqualTo(KfePaymentRequestStatus.OPEN);
+        assertThat(response.settlementStatus()).isEqualTo(KfeTransactionStatus.VALIDATING);
+        assertThat(response.blockchainTxid()).isEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assertThat(response.confirmations()).isZero();
+        assertThat(response.grossAmountSats()).isEqualTo(11_000L);
+        assertThat(response.receiverAmountSats()).isEqualTo(10_901L);
     }
 
     private KfePaymentRequestEntity paymentRequest() {

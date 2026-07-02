@@ -36,6 +36,7 @@ public class KfeInboundSettlementService {
     private final KfeDashboardPublisher dashboardPublisher;
     private final KfeHashService hashService;
     private final FinancialNotificationPort notificationPort;
+    private final KfeFeeSettlementService feeSettlementService;
 
     public KfeInboundSettlementService(
             KfeTransactionRepository transactionRepository,
@@ -47,7 +48,8 @@ public class KfeInboundSettlementService {
             KfeStatementService statementService,
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
-            FinancialNotificationPort notificationPort) {
+            FinancialNotificationPort notificationPort,
+            KfeFeeSettlementService feeSettlementService) {
         this.transactionRepository = transactionRepository;
         this.outboxRepository = outboxRepository;
         this.movementRepository = movementRepository;
@@ -58,6 +60,7 @@ public class KfeInboundSettlementService {
         this.dashboardPublisher = dashboardPublisher;
         this.hashService = hashService;
         this.notificationPort = notificationPort;
+        this.feeSettlementService = feeSettlementService;
     }
 
     @Transactional
@@ -116,6 +119,7 @@ public class KfeInboundSettlementService {
         tx.setFailureMessage(null);
         tx.setStatus(KfeTransactionStatus.SETTLED);
         transactionRepository.save(tx);
+        feeSettlementService.creditKeroseneFee(tx);
 
         auditLogService.record(
                 "KFE_INBOUND_SETTLED",

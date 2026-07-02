@@ -2,27 +2,21 @@ package source.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.common.financial.FinancialNotificationPort;
 import source.common.service.AddressDerivationService;
 import source.kfe.dto.KfeCreatePaymentRequest;
 import source.kfe.dto.KfePaymentRequestResponse;
-import source.kfe.model.KfeBalanceMovementEntity;
-import source.kfe.model.KfeDirection;
 import source.kfe.model.KfePaymentRequestEntity;
 import source.kfe.model.KfePaymentRequestStatus;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletAddressEntity;
 import source.kfe.model.KfeWalletAddressRole;
 import source.kfe.model.KfeWalletAddressStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
-import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletAddressRepository;
@@ -31,10 +25,10 @@ import source.kfe.repository.KfeWalletRepository;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Base64;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,55 +39,38 @@ public class KfePaymentRequestService {
     private static final Logger log = LoggerFactory.getLogger(KfePaymentRequestService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int PUBLIC_ID_BYTES = 18;
-    private static final String ASSET_BTC = "BTC";
-    private static final String DEV_DEPOSIT_PROVIDER = "DEV_LOCAL";
     private static final Pattern EXTENDED_PUBLIC_KEY_PATTERN = Pattern.compile(
             "([xtyzuv]pub[1-9A-HJ-NP-Za-km-z]+)");
 
     private final KfePaymentRequestRepository paymentRequestRepository;
     private final KfeTransactionRepository transactionRepository;
-    private final KfeBalanceMovementRepository movementRepository;
     private final KfeWalletRepository walletRepository;
     private final KfeWalletAddressRepository addressRepository;
     private final KfeWalletService walletService;
     private final AddressDerivationService addressDerivationService;
     private final KfeReceiveAddressIssuer receiveAddressIssuer;
     private final KfeAuditLogService auditLogService;
-    private final KfeBalanceService balanceService;
-    private final KfeStatementService statementService;
     private final KfeDashboardPublisher dashboardPublisher;
-    private final FinancialNotificationPort notificationPort;
-    private final boolean devInstantDepositCreditEnabled;
 
     public KfePaymentRequestService(
             KfePaymentRequestRepository paymentRequestRepository,
             KfeTransactionRepository transactionRepository,
-            KfeBalanceMovementRepository movementRepository,
             KfeWalletRepository walletRepository,
             KfeWalletAddressRepository addressRepository,
             KfeWalletService walletService,
             AddressDerivationService addressDerivationService,
             KfeReceiveAddressIssuer receiveAddressIssuer,
             KfeAuditLogService auditLogService,
-            KfeBalanceService balanceService,
-            KfeStatementService statementService,
-            KfeDashboardPublisher dashboardPublisher,
-            FinancialNotificationPort notificationPort,
-            @Value("${app.dev.deposit.instant-credit-enabled:false}") boolean devInstantDepositCreditEnabled) {
+            KfeDashboardPublisher dashboardPublisher) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
-        this.movementRepository = movementRepository;
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
         this.walletService = walletService;
         this.addressDerivationService = addressDerivationService;
         this.receiveAddressIssuer = receiveAddressIssuer;
         this.auditLogService = auditLogService;
-        this.balanceService = balanceService;
-        this.statementService = statementService;
         this.dashboardPublisher = dashboardPublisher;
-        this.notificationPort = notificationPort;
-        this.devInstantDepositCreditEnabled = devInstantDepositCreditEnabled;
     }
 
     @Transactional
@@ -130,120 +107,7 @@ public class KfePaymentRequestService {
                         "publicId", paymentRequest.getPublicId(),
                         "walletId", wallet.getId().toString(),
                         "rail", paymentRequest.getRail().name()));
-        paymentRequest = applyDevInstantDepositCreditIfEnabled(paymentRequest);
         return toResponse(paymentRequest);
-    }
-
-    private KfePaymentRequestEntity applyDevInstantDepositCreditIfEnabled(KfePaymentRequestEntity paymentRequest) {
-        if (!devInstantDepositCreditEnabled) {
-            return paymentRequest;
-        }
-        Long requestedAmountSats = paymentRequest.getAmountSats();
-        if (requestedAmountSats == null || requestedAmountSats <= 0L) {
-            return paymentRequest;
-        }
-
-        long creditSats = requestedAmountSats;
-        KfeTransactionEntity tx = new KfeTransactionEntity();
-        tx.setUserId(paymentRequest.getUserId());
-        tx.setIdempotencyKey("dev-payment-request-" + paymentRequest.getId());
-        tx.setDestinationWalletId(paymentRequest.getWalletId());
-        tx.setRail(paymentRequest.getRail());
-        tx.setDirection(KfeDirection.INBOUND);
-        tx.setStatus(KfeTransactionStatus.SETTLED);
-        tx.setGrossAmountSats(creditSats);
-        tx.setReceiverAmountSats(creditSats);
-        tx.setNetworkFeeSats(0L);
-        tx.setKeroseneFeeSats(0L);
-        tx.setTotalDebitSats(0L);
-        tx.setProvider(DEV_DEPOSIT_PROVIDER);
-        tx.setProviderReference("dev-payment-request-" + paymentRequest.getId());
-        tx.setConfirmations(0);
-        if (paymentRequest.getRail() == KfeRail.ONCHAIN) {
-            tx.setBlockchainTxid("dev-" + paymentRequest.getId());
-        } else if (paymentRequest.getRail() == KfeRail.LIGHTNING) {
-            tx.setPaymentHash("dev-" + paymentRequest.getId());
-        }
-        tx = transactionRepository.save(tx);
-
-        balanceService.creditAvailable(paymentRequest.getWalletId(), ASSET_BTC, creditSats);
-        recordDevDepositMovement(tx.getId(), paymentRequest.getWalletId(), creditSats);
-        recordDevDepositStatement(paymentRequest, tx, creditSats);
-        notifyDevDepositCredited(paymentRequest, tx, creditSats);
-
-        paymentRequest.setStatus(KfePaymentRequestStatus.PAID);
-        paymentRequest.setPaidTransactionId(tx.getId());
-        KfePaymentRequestEntity credited = paymentRequestRepository.save(paymentRequest);
-
-        auditLogService.record(
-                "KFE_DEV_DEPOSIT_INSTANT_CREDITED",
-                tx.getId(),
-                paymentRequest.getWalletId(),
-                null,
-                KfeTransactionStatus.SETTLED,
-                Map.of(
-                        "paymentRequestId", paymentRequest.getId().toString(),
-                        "publicId", paymentRequest.getPublicId(),
-                        "walletId", paymentRequest.getWalletId().toString(),
-                        "creditedSats", creditSats,
-                        "confirmations", 0,
-                        "devInstantCredit", true,
-                        "property", "app.dev.deposit.instant-credit-enabled"));
-        dashboardPublisher.publishAfterCommit(paymentRequest.getUserId());
-        return credited;
-    }
-
-    private void recordDevDepositMovement(UUID transactionId, UUID walletId, long amountSats) {
-        KfeBalanceMovementEntity movement = new KfeBalanceMovementEntity();
-        movement.setTransactionId(transactionId);
-        movement.setWalletId(walletId);
-        movement.setMovementType("CREDIT_DEV_DEPOSIT");
-        movement.setAmountSats(amountSats);
-        movement.setFromBucket(null);
-        movement.setToBucket("AVAILABLE");
-        movementRepository.save(movement);
-    }
-
-    private void recordDevDepositStatement(
-            KfePaymentRequestEntity paymentRequest,
-            KfeTransactionEntity tx,
-            long creditSats) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("transactionId", tx.getId().toString());
-        payload.put("paymentRequestId", paymentRequest.getId().toString());
-        payload.put("publicId", paymentRequest.getPublicId());
-        payload.put("status", tx.getStatus().name());
-        payload.put("rail", tx.getRail().name());
-        payload.put("direction", tx.getDirection().name());
-        payload.put("grossAmountSats", tx.getGrossAmountSats());
-        payload.put("receiverAmountSats", tx.getReceiverAmountSats());
-        payload.put("networkFeeSats", tx.getNetworkFeeSats());
-        payload.put("keroseneFeeSats", tx.getKeroseneFeeSats());
-        payload.put("totalDebitSats", tx.getTotalDebitSats());
-        payload.put("creditedSats", creditSats);
-        payload.put("confirmations", 0);
-        payload.put("provider", DEV_DEPOSIT_PROVIDER);
-        payload.put("devInstantCredit", true);
-        statementService.recordUserStatement(paymentRequest.getUserId(), paymentRequest.getWalletId(), tx, payload);
-    }
-
-    private void notifyDevDepositCredited(KfePaymentRequestEntity paymentRequest, KfeTransactionEntity tx, long creditSats) {
-        try {
-            notificationPort.notifyPaymentRequestDepositConfirmed(
-                    paymentRequest.getUserId(),
-                    tx.getId(),
-                    paymentRequest.getId(),
-                    paymentRequest.getPublicId(),
-                    paymentRequest.getWalletId(),
-                    paymentRequest.getRail().name(),
-                    creditSats);
-        } catch (RuntimeException exception) {
-            log.warn(
-                    "KFE dev deposit was credited but notification failed. paymentRequestId={} transactionId={} error={}",
-                    paymentRequest.getId(),
-                    tx.getId(),
-                    exception.getMessage());
-        }
     }
 
     @Transactional
@@ -412,7 +276,7 @@ public class KfePaymentRequestService {
     }
 
     private KfePaymentRequestEntity expireIfDue(KfePaymentRequestEntity paymentRequest) {
-        if (paymentRequest.isExpired(LocalDateTime.now())) {
+        if (paymentRequest.isExpired(LocalDateTime.now()) && findSettlementTransaction(paymentRequest).isEmpty()) {
             paymentRequest.expire();
             return paymentRequestRepository.save(paymentRequest);
         }
@@ -433,6 +297,7 @@ public class KfePaymentRequestService {
     }
 
     private KfePaymentRequestResponse toResponse(KfePaymentRequestEntity entity) {
+        KfeTransactionEntity settlementTx = findSettlementTransaction(entity).orElse(null);
         return new KfePaymentRequestResponse(
                 entity.getId(),
                 entity.getPublicId(),
@@ -447,9 +312,23 @@ public class KfePaymentRequestService {
                 entity.getMemo(),
                 entity.getPayerHint(),
                 entity.getPaidTransactionId(),
+                settlementTx == null ? null : settlementTx.getId(),
+                settlementTx == null ? null : settlementTx.getStatus(),
+                settlementTx == null ? null : settlementTx.getBlockchainTxid(),
+                settlementTx == null ? 0 : settlementTx.getConfirmations(),
+                settlementTx == null ? null : settlementTx.getGrossAmountSats(),
+                settlementTx == null ? null : settlementTx.getReceiverAmountSats(),
                 entity.getExpiresAt(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt());
+    }
+
+    private Optional<KfeTransactionEntity> findSettlementTransaction(KfePaymentRequestEntity entity) {
+        if (entity.getPaidTransactionId() != null) {
+            return transactionRepository.findById(entity.getPaidTransactionId());
+        }
+        return transactionRepository.findTopByIdempotencyKeyStartingWithOrderByCreatedAtDesc(
+                "payment-request:" + entity.getId() + ":");
     }
 
     private String generatePublicId() {

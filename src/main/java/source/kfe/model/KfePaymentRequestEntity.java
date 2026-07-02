@@ -108,6 +108,11 @@ public class KfePaymentRequestEntity {
         cancelledAt = LocalDateTime.now();
     }
 
+    public void markPaid(UUID transactionId) {
+        status = KfePaymentRequestStatus.PAID;
+        paidTransactionId = transactionId;
+    }
+
     public UUID getId() {
         return id;
     }

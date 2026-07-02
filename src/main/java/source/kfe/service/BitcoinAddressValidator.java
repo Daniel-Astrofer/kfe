@@ -33,7 +33,7 @@ public class BitcoinAddressValidator {
         String normalized = bitcoinNetwork != null ? bitcoinNetwork.trim().toLowerCase() : "mainnet";
         return switch (normalized) {
             case "main", "mainnet", "livenet" -> BitcoinNetwork.MAINNET;
-            case "test", "testnet", "testnet3", "signet" -> BitcoinNetwork.TESTNET;
+            case "test", "testnet", "testnet3", "testnet4", "signet" -> BitcoinNetwork.TESTNET;
             case "regtest", "reg" -> BitcoinNetwork.REGTEST;
             default -> throw new IllegalStateException("Unsupported bitcoin.network: " + bitcoinNetwork);
         };

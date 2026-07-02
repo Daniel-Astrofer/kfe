@@ -36,6 +36,7 @@ public class KfeExecutionTransactionHelper {
     private final KfeDashboardPublisher dashboardPublisher;
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
+    private final KfeFeeSettlementService feeSettlementService;
 
     public KfeExecutionTransactionHelper(
             KfeExecutionOutboxRepository outboxRepository,
@@ -48,7 +49,8 @@ public class KfeExecutionTransactionHelper {
             KfeStatementService statementService,
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            KfeFeeSettlementService feeSettlementService) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -60,6 +62,7 @@ public class KfeExecutionTransactionHelper {
         this.dashboardPublisher = dashboardPublisher;
         this.hashService = hashService;
         this.objectMapper = objectMapper;
+        this.feeSettlementService = feeSettlementService;
     }
 
     public record PreparationResult(
@@ -170,6 +173,7 @@ public class KfeExecutionTransactionHelper {
         movement(tx.getId(), sourceWalletId, "SETTLE_DEBIT", tx.getTotalDebitSats(), "LOCKED", null);
         transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
                 Map.of("providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, ""))));
+        feeSettlementService.creditKeroseneFee(tx);
         recordStatement(tx, sourceWalletId, providerPayload);
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);
@@ -207,6 +211,7 @@ public class KfeExecutionTransactionHelper {
         movement(tx.getId(), sourceWalletId, "SETTLE_DEBIT", tx.getTotalDebitSats(), "LOCKED", null);
         transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
                 Map.of("providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, ""))));
+        feeSettlementService.creditKeroseneFee(tx);
         recordStatement(tx, sourceWalletId, providerPayload);
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);

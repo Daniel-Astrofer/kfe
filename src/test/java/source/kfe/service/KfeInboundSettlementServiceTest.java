@@ -63,6 +63,9 @@ class KfeInboundSettlementServiceTest {
     @Mock
     private FinancialNotificationPort notificationPort;
 
+    @Mock
+    private KfeFeeSettlementService feeSettlementService;
+
     private KfeInboundSettlementService service;
 
     @BeforeEach
@@ -77,7 +80,8 @@ class KfeInboundSettlementServiceTest {
                 statementService,
                 dashboardPublisher,
                 hashService,
-                notificationPort
+                notificationPort,
+                feeSettlementService
         );
     }
 

@@ -35,14 +35,14 @@ public class KfePaymentRequestController {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(
                         "KFE payment request created.",
-                        paymentRequestService.create(authenticatedUserId(authentication), request)));
+                        paymentRequestService.create(KfeAuthenticationSupport.authenticatedUserId(authentication), request)));
     }
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<KfePaymentRequestResponse>>> list(Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE payment requests retrieved.",
-                paymentRequestService.list(authenticatedUserId(authentication))));
+                paymentRequestService.list(KfeAuthenticationSupport.authenticatedUserId(authentication))));
     }
 
     @GetMapping("/{requestId}")
@@ -51,7 +51,7 @@ public class KfePaymentRequestController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE payment request retrieved.",
-                paymentRequestService.get(authenticatedUserId(authentication), requestId)));
+                paymentRequestService.get(KfeAuthenticationSupport.authenticatedUserId(authentication), requestId)));
     }
 
     @PostMapping("/{requestId}/expire")
@@ -60,7 +60,7 @@ public class KfePaymentRequestController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE payment request expired.",
-                paymentRequestService.expire(authenticatedUserId(authentication), requestId)));
+                paymentRequestService.expire(KfeAuthenticationSupport.authenticatedUserId(authentication), requestId)));
     }
 
     @PostMapping("/{requestId}/hide")
@@ -69,7 +69,7 @@ public class KfePaymentRequestController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE payment request hidden.",
-                paymentRequestService.hide(authenticatedUserId(authentication), requestId)));
+                paymentRequestService.hide(KfeAuthenticationSupport.authenticatedUserId(authentication), requestId)));
     }
 
     @PostMapping("/{requestId}/cancel")
@@ -78,13 +78,6 @@ public class KfePaymentRequestController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE payment request cancelled.",
-                paymentRequestService.cancel(authenticatedUserId(authentication), requestId)));
-    }
-
-    private Long authenticatedUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new SecurityException("Authenticated user is required.");
-        }
-        return Long.parseLong(authentication.getName());
+                paymentRequestService.cancel(KfeAuthenticationSupport.authenticatedUserId(authentication), requestId)));
     }
 }

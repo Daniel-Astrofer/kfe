@@ -16,6 +16,7 @@ import source.kfe.model.KfeWalletEntity;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeBalanceService;
 import source.kfe.service.KfeDashboardPublisher;
+import source.kfe.service.KfeFeeSettlementService;
 import source.kfe.service.KfeHashService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeQuorumGateway;
@@ -48,6 +49,7 @@ public class KfeSubmitTransactionUseCase {
     private final KfeBalanceMovementRecorder movementRecorder;
     private final KfeTransactionOutboxUseCase outboxUseCase;
     private final KfeTransactionStatementRecorder statementRecorder;
+    private final KfeFeeSettlementService feeSettlementService;
 
     public KfeSubmitTransactionUseCase(
             KfeTransactionRepository transactionRepository,
@@ -65,7 +67,8 @@ public class KfeSubmitTransactionUseCase {
             KfeTransactionStateMachine stateMachine,
             KfeBalanceMovementRecorder movementRecorder,
             KfeTransactionOutboxUseCase outboxUseCase,
-            KfeTransactionStatementRecorder statementRecorder) {
+            KfeTransactionStatementRecorder statementRecorder,
+            KfeFeeSettlementService feeSettlementService) {
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
         this.tickerPort = tickerPort;
@@ -82,6 +85,7 @@ public class KfeSubmitTransactionUseCase {
         this.movementRecorder = movementRecorder;
         this.outboxUseCase = outboxUseCase;
         this.statementRecorder = statementRecorder;
+        this.feeSettlementService = feeSettlementService;
     }
 
     /**
@@ -216,6 +220,7 @@ public class KfeSubmitTransactionUseCase {
         movementRecorder.record(tx.getId(), destinationWallet.getId(), "CREDIT", tx.getReceiverAmountSats(), null, "AVAILABLE");
         stateMachine.transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
                 Map.of("rail", tx.getRail().name()));
+        feeSettlementService.creditKeroseneFee(tx);
 
         statementRecorder.record(userId, tx, sourceWallet.getId(), null);
         if (!destinationWallet.getUserId().equals(userId)) {

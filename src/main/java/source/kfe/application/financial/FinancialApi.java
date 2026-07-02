@@ -1,6 +1,7 @@
 package source.kfe.application.financial;
 
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
 import source.kfe.dto.KfeAddressResponse;
 import source.kfe.dto.KfeColdWalletPsbtRequest;
 import source.kfe.dto.KfeColdWalletPsbtResponse;
@@ -89,6 +90,16 @@ public class FinancialApi {
                 .findByIdAndUserId(transactionId, userId)
                 .map(responseMapper::toTransactionResponse)
                 .orElseThrow(() -> new IllegalArgumentException("KFE transaction not found."));
+    }
+
+    public List<KfeTransactionResponse> transactions(Long userId, int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(200, Math.max(1, size));
+        return transactionRepository
+                .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(safePage, safeSize))
+                .stream()
+                .map(responseMapper::toTransactionResponse)
+                .toList();
     }
 
     public KfeWalletResponse createWallet(Long userId, KfeCreateWalletRequest request) {

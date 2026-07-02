@@ -31,6 +31,13 @@ public class KfeStatementService {
         statementRepository.save(statement);
     }
 
+    public void recordUserStatementIfAbsent(Long userId, UUID walletId, KfeTransactionEntity transaction, Map<String, ?> payload) {
+        if (statementRepository.existsByTransactionId(transaction.getId())) {
+            return;
+        }
+        recordUserStatement(userId, walletId, transaction, payload);
+    }
+
     private String toJson(Map<String, ?> payload) {
         try {
             return objectMapper.writeValueAsString(payload != null ? payload : Map.of());

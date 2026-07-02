@@ -125,10 +125,6 @@ public class KfeFinancialFallbackConfiguration {
                     String rail,
                     long creditedSats) {
             }
-
-            @Override
-            public void notifyDemoBalanceCredited(Long userId, UUID walletId, String walletName, String amountBtc) {
-            }
         };
     }
 
@@ -144,15 +140,6 @@ public class KfeFinancialFallbackConfiguration {
             @Override
             public Optional<FinancialUserHandle> findById(Long userId) {
                 return Optional.empty();
-            }
-
-            @Override
-            public boolean hasReceivedDemoCredit(Long userId) {
-                return true;
-            }
-
-            @Override
-            public void markDemoCreditReceived(Long userId) {
             }
         };
     }

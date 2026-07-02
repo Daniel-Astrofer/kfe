@@ -32,7 +32,7 @@ public class KfeTaxEventController {
     public ResponseEntity<ApiResponse<List<KfeTaxEventResponse>>> list(Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE tax events retrieved.",
-                taxEventService.list(authenticatedUserId(authentication))));
+                taxEventService.list(KfeAuthenticationSupport.authenticatedUserId(authentication))));
     }
 
     @GetMapping("/export")
@@ -41,7 +41,7 @@ public class KfeTaxEventController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE tax events export generated.",
-                taxEventService.export(authenticatedUserId(authentication), format)));
+                taxEventService.export(KfeAuthenticationSupport.authenticatedUserId(authentication), format)));
     }
 
     @PostMapping("/{eventId}/classify")
@@ -51,13 +51,6 @@ public class KfeTaxEventController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE tax event classified.",
-                taxEventService.classify(authenticatedUserId(authentication), eventId, request)));
-    }
-
-    private Long authenticatedUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new SecurityException("Authenticated user is required.");
-        }
-        return Long.parseLong(authentication.getName());
+                taxEventService.classify(KfeAuthenticationSupport.authenticatedUserId(authentication), eventId, request)));
     }
 }

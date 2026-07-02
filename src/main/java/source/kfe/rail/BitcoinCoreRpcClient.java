@@ -62,6 +62,14 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
 
     @Override
     public JsonNode executeRpc(String method, Object... params) {
+        return executeRpcAt(resolveEndpoint(), method, params);
+    }
+
+    public JsonNode executeNodeRpc(String method, Object... params) {
+        return executeRpcAt(baseUrl, method, params);
+    }
+
+    private JsonNode executeRpcAt(String endpoint, String method, Object... params) {
         try {
             ObjectNode request = objectMapper.createObjectNode();
             request.put("jsonrpc", "1.0");
@@ -78,7 +86,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.set(HttpHeaders.AUTHORIZATION, basicAuthHeader());
             HttpEntity<String> entity = new HttpEntity<>(objectMapper.writeValueAsString(request), headers);
-            ResponseEntity<String> response = restTemplate.postForEntity(resolveEndpoint(), entity, String.class);
+            ResponseEntity<String> response = restTemplate.postForEntity(endpoint, entity, String.class);
             if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
                 throw new IllegalStateException("Bitcoin Core RPC returned HTTP " + response.getStatusCode());
             }
@@ -117,6 +125,57 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
 
     public String walletName() {
         return walletName;
+    }
+
+    public String chain() {
+        return text(blockchainInfo(), "chain");
+    }
+
+    public JsonNode blockchainInfo() {
+        return unwrapResult(executeNodeRpc("getblockchaininfo"));
+    }
+
+    public void ensureWalletLoaded(String wallet) {
+        String cleanWallet = sanitizeWalletName(wallet);
+        if (cleanWallet.isBlank()) {
+            return;
+        }
+        if (listWallets().contains(cleanWallet)) {
+            return;
+        }
+        if (listWalletDir().contains(cleanWallet)) {
+            try {
+                unwrapResult(executeNodeRpc("loadwallet", cleanWallet));
+                return;
+            } catch (RuntimeException loadFailure) {
+                if (listWallets().contains(cleanWallet)) {
+                    return;
+                }
+                throw loadFailure;
+            }
+        }
+        unwrapResult(executeNodeRpc("createwallet", cleanWallet, false, false, "", false, true));
+    }
+
+    private List<String> listWallets() {
+        JsonNode result = unwrapResult(executeNodeRpc("listwallets"));
+        if (result == null || !result.isArray()) {
+            return List.of();
+        }
+        return objectMapper.convertValue(
+                result,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+    }
+
+    private List<String> listWalletDir() {
+        JsonNode result = unwrapResult(executeNodeRpc("listwalletdir"));
+        JsonNode wallets = result != null ? result.path("wallets") : null;
+        if (wallets == null || !wallets.isArray()) {
+            return List.of();
+        }
+        return objectMapper.convertValue(
+                wallets.findValues("name"),
+                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
     }
 
     public String getNewAddress(String label) {

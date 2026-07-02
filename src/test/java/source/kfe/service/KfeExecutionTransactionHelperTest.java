@@ -34,6 +34,7 @@ class KfeExecutionTransactionHelperTest {
     private final KfeStatementService statementService = mock(KfeStatementService.class);
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final KfeHashService hashService = mock(KfeHashService.class);
+    private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
 
     private final KfeExecutionTransactionHelper helper = new KfeExecutionTransactionHelper(
             outboxRepository,
@@ -46,7 +47,8 @@ class KfeExecutionTransactionHelperTest {
             statementService,
             dashboardPublisher,
             hashService,
-            new ObjectMapper());
+            new ObjectMapper(),
+            feeSettlementService);
 
     @Test
     void settleOutboundOnlyDispatchesOutboxWhenTransactionAlreadySettled() {
@@ -139,7 +141,8 @@ class KfeExecutionTransactionHelperTest {
                 statementService,
                 idempotencyRepository,
                 auditLogService,
-                dashboardPublisher);
+                dashboardPublisher,
+                feeSettlementService);
         verify(transactionRepository, never()).save(tx);
     }
 }

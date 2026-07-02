@@ -7,7 +7,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.common.financial.DevBalanceInjector;
 import source.common.service.AddressDerivationService;
 import source.kfe.dto.KfeCreateWalletRequest;
 import source.kfe.dto.KfeUpdateWalletRequest;
@@ -68,9 +67,6 @@ class KfeWalletServiceTest {
     private KfeReceiveAddressIssuer receiveAddressIssuer;
 
     @Mock
-    private DevBalanceInjector devBalanceInjector;
-
-    @Mock
     private TransactionTemplate transactionTemplate;
 
     private KfeWalletService service;
@@ -89,7 +85,6 @@ class KfeWalletServiceTest {
                 dashboardPublisher,
                 addressDerivationService,
                 receiveAddressIssuer,
-                devBalanceInjector,
                 transactionTemplate
         );
     }

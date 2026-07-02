@@ -30,6 +30,7 @@ public record KfeTransactionResponse(
         int quorumAckCount,
         String providerReference,
         String blockchainTxid,
+        int confirmations,
         String failureCode,
         String failureMessage,
         LocalDateTime createdAt,

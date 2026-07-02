@@ -23,13 +23,6 @@ public class KfeDashboardController {
     public ResponseEntity<ApiResponse<KfeDashboardResponse>> dashboard(Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE dashboard retrieved.",
-                dashboardService.dashboard(authenticatedUserId(authentication))));
-    }
-
-    private Long authenticatedUserId(Authentication authentication) {
-        if (authentication == null || authentication.getName() == null) {
-            throw new SecurityException("Authenticated user is required.");
-        }
-        return Long.parseLong(authentication.getName());
+                dashboardService.dashboard(KfeAuthenticationSupport.authenticatedUserId(authentication))));
     }
 }
