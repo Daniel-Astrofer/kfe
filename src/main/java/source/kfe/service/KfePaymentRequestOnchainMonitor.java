@@ -10,6 +10,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialNotificationPort;
 import source.kfe.application.transaction.KfeBalanceMovementRecorder;
 import source.kfe.model.KfeDirection;
@@ -27,6 +28,7 @@ import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Component
@@ -49,6 +51,7 @@ public class KfePaymentRequestOnchainMonitor {
     private final KfeStatementService statementService;
     private final KfeDashboardPublisher dashboardPublisher;
     private final FinancialNotificationPort notificationPort;
+    private final TransactionTemplate transactionTemplate;
     private final int batchSize;
     private final int minConfirmations;
 
@@ -64,6 +67,7 @@ public class KfePaymentRequestOnchainMonitor {
             KfeStatementService statementService,
             KfeDashboardPublisher dashboardPublisher,
             FinancialNotificationPort notificationPort,
+            TransactionTemplate transactionTemplate,
             @Value("${kfe.payment-request-monitor.batch-size:50}") int batchSize,
             @Value("${kfe.payment-request-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
             int minConfirmations) {
@@ -78,6 +82,7 @@ public class KfePaymentRequestOnchainMonitor {
         this.statementService = statementService;
         this.dashboardPublisher = dashboardPublisher;
         this.notificationPort = notificationPort;
+        this.transactionTemplate = transactionTemplate;
         this.batchSize = Math.max(1, batchSize);
         this.minConfirmations = Math.max(1, minConfirmations);
     }
@@ -85,7 +90,6 @@ public class KfePaymentRequestOnchainMonitor {
     @Scheduled(
             fixedDelayString = "${kfe.payment-request-monitor.fixed-delay-ms:30000}",
             initialDelayString = "${kfe.payment-request-monitor.initial-delay-ms:20000}")
-    @Transactional
     public void reconcileOpenOnchainPaymentRequests() {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
@@ -99,19 +103,22 @@ public class KfePaymentRequestOnchainMonitor {
         for (KfePaymentRequestEntity request : requests) {
             try {
                 findObservedPayment(client, request)
-                        .ifPresent(payment -> {
-                            if (payment.confirmations() >= minConfirmations) {
-                                settlePaymentRequest(request.getId(), payment);
-                            } else {
-                                observePaymentRequest(request.getId(), payment);
-                            }
-                        });
+                        .ifPresent(payment -> transactionTemplate.executeWithoutResult(
+                                status -> reconcileObservedPayment(request.getId(), payment)));
             } catch (RuntimeException exception) {
                 log.warn(
                         "[KFE PaymentRequest Monitor] reconciliation failed paymentRequestId={}: {}",
                         request.getId(),
                         exception.getMessage());
             }
+        }
+    }
+
+    private void reconcileObservedPayment(UUID paymentRequestId, ObservedPayment payment) {
+        if (payment.confirmations() >= minConfirmations) {
+            settlePaymentRequest(paymentRequestId, payment);
+        } else {
+            observePaymentRequest(paymentRequestId, payment);
         }
     }
 
