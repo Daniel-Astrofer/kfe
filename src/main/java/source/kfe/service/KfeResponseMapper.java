@@ -11,6 +11,8 @@ import source.kfe.model.KfeWalletAddressStatus;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.repository.KfeWalletAddressRepository;
 
+import java.util.UUID;
+
 @Component
 public class KfeResponseMapper {
 
@@ -56,11 +58,16 @@ public class KfeResponseMapper {
     }
 
     public KfeTransactionResponse toTransactionResponse(KfeTransactionEntity tx) {
+        return toTransactionResponse(tx, tx.getUserId());
+    }
+
+    public KfeTransactionResponse toTransactionResponse(KfeTransactionEntity tx, Long requestingUserId) {
         return new KfeTransactionResponse(
                 tx.getId(),
                 tx.getStatus(),
                 tx.getRail(),
                 tx.getDirection(),
+                perspectiveWalletId(tx, requestingUserId),
                 tx.getSourceWalletId(),
                 tx.getDestinationWalletId(),
                 tx.getGrossAmountSats(),
@@ -76,13 +83,27 @@ public class KfeResponseMapper {
                 tx.getDisplayAmountBrl(),
                 tx.getQuorumProposalHash(),
                 tx.getQuorumAckCount(),
+                tx.getProvider(),
                 tx.getProviderReference(),
+                tx.getExternalReference(),
+                tx.getMemo(),
                 tx.getBlockchainTxid(),
+                tx.getPaymentHash(),
                 tx.getConfirmations(),
                 tx.getFailureCode(),
                 tx.getFailureMessage(),
                 tx.getCreatedAt(),
                 tx.getUpdatedAt());
+    }
+
+    private UUID perspectiveWalletId(KfeTransactionEntity tx, Long requestingUserId) {
+        if (requestingUserId == null) {
+            return null;
+        }
+        if (requestingUserId.equals(tx.getUserId())) {
+            return tx.getSourceWalletId() != null ? tx.getSourceWalletId() : tx.getDestinationWalletId();
+        }
+        return tx.getDestinationWalletId();
     }
 
     private boolean hasText(String value) {

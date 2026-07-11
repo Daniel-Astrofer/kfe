@@ -5,9 +5,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import source.common.financial.FinancialTickerPort;
 import source.kfe.dto.KfeSubmitTransactionRequest;
 import source.kfe.dto.KfeTransactionResponse;
+import source.kfe.model.KfeIdempotencyEntity;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionStatus;
+import source.kfe.model.KfeTransactionEntity;
+import source.kfe.model.KfeWalletEntity;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeBalanceService;
 import source.kfe.service.KfeDashboardPublisher;
@@ -19,8 +21,11 @@ import source.kfe.service.KfeResponseMapper;
 
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -106,6 +111,40 @@ class KfeSubmitTransactionUseCaseTest {
         verify(transactionRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
+    @Test
+    void persistsExternalReferenceAndMemoInTransactionMasterIntent() {
+        Long userId = 123L;
+        KfeSubmitTransactionRequest request = outboundRequest();
+        KfeIdempotencyEntity idempotency = new KfeIdempotencyEntity();
+        KfeWalletEntity sourceWallet = new KfeWalletEntity();
+        KfeTransactionResponse response = transactionResponse();
+
+        when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(idempotencyUseCase.requestHash(userId, request)).thenReturn("request-hash");
+        when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
+        when(idempotencyUseCase.reserve(userId, request, "request-hash")).thenReturn(idempotency);
+        when(transactionRepository.save(any(KfeTransactionEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(walletResolver.resolveSourceWallet(userId, request)).thenReturn(sourceWallet);
+        when(walletResolver.requiresSourceReserve(request)).thenReturn(true);
+        when(pricingService.quote(KfeRail.ONCHAIN, KfeDirection.OUTBOUND, 100_000L, 1_000L))
+                .thenReturn(new KfePricingService.Quote(100_000L, 100_000L, 1_000L, 101_900L, 900L));
+        when(hashService.sha256(anyString())).thenReturn("proposal-hash");
+        when(quorumGateway.requireHealthyUnanimousConsensus("proposal-hash"))
+                .thenReturn(new KfeQuorumGateway.Result(3, 3));
+        when(responseMapper.toTransactionResponse(any(KfeTransactionEntity.class))).thenReturn(response);
+
+        KfeTransactionResponse result = useCase.submit(userId, request);
+
+        assertSame(response, result);
+        var transactionCaptor = org.mockito.ArgumentCaptor.forClass(KfeTransactionEntity.class);
+        verify(transactionRepository, org.mockito.Mockito.atLeastOnce()).save(transactionCaptor.capture());
+        KfeTransactionEntity transaction = transactionCaptor.getValue();
+        assertThat(transaction.getExternalReference())
+                .isEqualTo("bcrt1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh");
+        assertThat(transaction.getMemo()).isEqualTo("memo");
+    }
+
     private KfeSubmitTransactionRequest outboundRequest() {
         return new KfeSubmitTransactionRequest(
                 "idemp-key",
@@ -124,32 +163,6 @@ class KfeSubmitTransactionUseCaseTest {
     }
 
     private KfeTransactionResponse transactionResponse() {
-        return new KfeTransactionResponse(
-                UUID.randomUUID(),
-                KfeTransactionStatus.SETTLED,
-                KfeRail.ONCHAIN,
-                KfeDirection.OUTBOUND,
-                UUID.randomUUID(),
-                null,
-                100_000L,
-                99_000L,
-                1000L,
-                0L,
-                101_000L,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                "proposal-hash",
-                3,
-                null,
-                null,
-                0,
-                null,
-                null,
-                null,
-                null);
+        return mock(KfeTransactionResponse.class);
     }
 }

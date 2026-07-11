@@ -252,8 +252,11 @@ public class KfeQuorumPsbtSigningService {
         if (fundedPsbt.psbt() == null || fundedPsbt.psbt().isBlank()) {
             throw new IllegalStateException("Bitcoin Core did not return a PSBT.");
         }
-        if (maxFeeSats > 0L && fundedPsbt.feeSats() > maxFeeSats) {
-            throw new IllegalStateException("Funded PSBT fee exceeds configured on-chain fee cap.");
+        if (maxFeeSats < 0L) {
+            throw new IllegalArgumentException("On-chain fee limit must be non-negative.");
+        }
+        if (fundedPsbt.feeSats() > maxFeeSats) {
+            throw new IllegalArgumentException("Funded PSBT fee exceeds configured on-chain fee cap.");
         }
     }
 

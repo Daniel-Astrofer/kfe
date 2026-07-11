@@ -38,6 +38,12 @@ public class KfeTransactionEntity {
     @Column(name = "destination_wallet_id")
     private UUID destinationWalletId;
 
+    @Column(name = "external_reference", columnDefinition = "TEXT")
+    private String externalReference;
+
+    @Column(name = "memo", length = 255)
+    private String memo;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "rail", nullable = false, length = 32)
     private KfeRail rail;
@@ -162,6 +168,22 @@ public class KfeTransactionEntity {
 
     public void setDestinationWalletId(UUID destinationWalletId) {
         this.destinationWalletId = destinationWalletId;
+    }
+
+    public String getExternalReference() {
+        return externalReference;
+    }
+
+    public void setExternalReference(String externalReference) {
+        this.externalReference = externalReference;
+    }
+
+    public String getMemo() {
+        return memo;
+    }
+
+    public void setMemo(String memo) {
+        this.memo = memo;
     }
 
     public KfeRail getRail() {

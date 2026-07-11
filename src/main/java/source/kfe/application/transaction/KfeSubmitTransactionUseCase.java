@@ -204,6 +204,8 @@ public class KfeSubmitTransactionUseCase {
         tx.setDirection(request.direction());
         tx.setSourceWalletId(request.sourceWalletId());
         tx.setDestinationWalletId(request.destinationWalletId());
+        tx.setExternalReference(clean(request.externalReference()));
+        tx.setMemo(clean(request.memo()));
         tx.setGrossAmountSats(request.amountSats());
         return transactionRepository.save(tx);
     }
@@ -286,6 +288,10 @@ public class KfeSubmitTransactionUseCase {
 
     private String safe(String value) {
         return value != null ? value : "";
+    }
+
+    private String clean(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     private record SubmissionAttempt(

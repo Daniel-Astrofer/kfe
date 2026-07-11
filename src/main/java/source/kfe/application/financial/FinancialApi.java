@@ -15,6 +15,8 @@ import source.kfe.dto.KfeUpdateWalletRequest;
 import source.kfe.dto.KfeUtxoResponse;
 import source.kfe.dto.KfeWalletNameOption;
 import source.kfe.dto.KfeWalletResponse;
+import source.kfe.model.KfeDirection;
+import source.kfe.model.KfeRail;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeResponseMapper;
 import source.kfe.service.KfePricingService;
@@ -87,8 +89,8 @@ public class FinancialApi {
 
     public KfeTransactionResponse transaction(Long userId, UUID transactionId) {
         return transactionRepository
-                .findByIdAndUserId(transactionId, userId)
-                .map(responseMapper::toTransactionResponse)
+                .findParticipantVisibleById(transactionId, userId, KfeRail.INTERNAL, KfeDirection.INTERNAL)
+                .map(transaction -> responseMapper.toTransactionResponse(transaction, userId))
                 .orElseThrow(() -> new IllegalArgumentException("KFE transaction not found."));
     }
 
@@ -96,9 +98,10 @@ public class FinancialApi {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(200, Math.max(1, size));
         return transactionRepository
-                .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(safePage, safeSize))
+                .findParticipantVisibleByUserId(userId, KfeRail.INTERNAL, KfeDirection.INTERNAL,
+                        PageRequest.of(safePage, safeSize))
                 .stream()
-                .map(responseMapper::toTransactionResponse)
+                .map(transaction -> responseMapper.toTransactionResponse(transaction, userId))
                 .toList();
     }
 

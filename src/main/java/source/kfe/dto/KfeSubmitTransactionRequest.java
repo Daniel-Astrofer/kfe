@@ -3,6 +3,7 @@ package source.kfe.dto;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeRail;
 
@@ -17,6 +18,7 @@ public record KfeSubmitTransactionRequest(
         @Min(1) long amountSats,
         @Min(0) long networkFeeSats,
         String externalReference,
+        @Size(max = 255)
         String memo,
         String totpCode,
         String passkeyAssertionJson,

@@ -125,8 +125,8 @@ public class KfeExecutionTransactionHelper {
                 .orElseThrow(() -> new IllegalStateException("Source KFE wallet not found."));
 
         JsonNode payload = payload(outbox);
-        String externalReference = text(payload, "externalReference", null);
-        String memo = text(payload, "memo", null);
+        String externalReference = text(payload, "externalReference", tx.getExternalReference());
+        String memo = text(payload, "memo", tx.getMemo());
 
         return new PreparationResult(
                 true,
@@ -165,8 +165,8 @@ public class KfeExecutionTransactionHelper {
         tx.setProvider(provider);
         tx.setProviderReference(providerReference);
         tx.setBlockchainTxid(blockchainTxid);
-        if (feeSats > 0L) {
-            tx.setNetworkFeeSats(feeSats);
+        if (!reconcileOutboundFee(outbox, tx, sourceWalletId, feeSats)) {
+            return;
         }
 
         balanceService.settleReservedDebit(sourceWalletId, ASSET_BTC, tx.getTotalDebitSats());
@@ -203,8 +203,8 @@ public class KfeExecutionTransactionHelper {
         tx.setProviderReference(providerReference);
         tx.setBlockchainTxid(blockchainTxid);
         tx.setPaymentHash(paymentHash);
-        if (feeSats > 0L) {
-            tx.setNetworkFeeSats(feeSats);
+        if (!reconcileOutboundFee(outbox, tx, sourceWalletId, feeSats)) {
+            return;
         }
 
         balanceService.settleReservedDebit(sourceWalletId, ASSET_BTC, tx.getTotalDebitSats());
@@ -216,6 +216,63 @@ public class KfeExecutionTransactionHelper {
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private boolean reconcileOutboundFee(
+            KfeExecutionOutboxEntity outbox,
+            KfeTransactionEntity tx,
+            UUID sourceWalletId,
+            long actualFeeSats) {
+        long reservedFeeSats = tx.getNetworkFeeSats();
+        if (actualFeeSats < 0L) {
+            markRequiresReconciliation(
+                    outbox,
+                    tx,
+                    "INVALID_ACTUAL_FEE",
+                    "Provider returned a negative network fee.");
+            return false;
+        }
+        if (actualFeeSats > reservedFeeSats) {
+            markRequiresReconciliation(
+                    outbox,
+                    tx,
+                    "ACTUAL_FEE_EXCEEDS_RESERVED",
+                    "Actual network fee exceeds the reserved fee limit.");
+            return false;
+        }
+
+        final long debitWithoutNetworkFee;
+        final long reconciledTotalDebit;
+        try {
+            debitWithoutNetworkFee = Math.subtractExact(tx.getTotalDebitSats(), reservedFeeSats);
+            reconciledTotalDebit = Math.addExact(debitWithoutNetworkFee, actualFeeSats);
+        } catch (ArithmeticException exception) {
+            markRequiresReconciliation(
+                    outbox,
+                    tx,
+                    "FEE_RECONCILIATION_OVERFLOW",
+                    "Network fee reconciliation overflowed the transaction amount.");
+            return false;
+        }
+        if (debitWithoutNetworkFee <= 0L
+                || reconciledTotalDebit <= 0L
+                || reconciledTotalDebit > tx.getTotalDebitSats()) {
+            markRequiresReconciliation(
+                    outbox,
+                    tx,
+                    "INVALID_RECONCILED_DEBIT",
+                    "Network fee reconciliation produced an invalid total debit.");
+            return false;
+        }
+
+        long releaseSats = tx.getTotalDebitSats() - reconciledTotalDebit;
+        tx.setNetworkFeeSats(actualFeeSats);
+        tx.setTotalDebitSats(reconciledTotalDebit);
+        if (releaseSats > 0L) {
+            balanceService.releaseReserved(sourceWalletId, ASSET_BTC, releaseSats);
+            movement(tx.getId(), sourceWalletId, "RELEASE_FEE_RESERVE", releaseSats, "LOCKED", "AVAILABLE");
+        }
+        return true;
     }
 
     @Transactional
@@ -335,6 +392,11 @@ public class KfeExecutionTransactionHelper {
 
         outbox.setAttempts(outbox.getAttempts() + 1);
         outbox.setStatus("UNKNOWN");
+        outbox.setProviderReference(firstNonBlank(
+                outbox.getProviderReference(),
+                tx.getProviderReference(),
+                tx.getBlockchainTxid(),
+                tx.getPaymentHash()));
         outbox.setLastError(trim(code + ": " + message, 1000));
         outbox.setNextAttemptAt(null);
         clearClaim(outbox);
@@ -453,6 +515,8 @@ public class KfeExecutionTransactionHelper {
         payload.put("totalDebitSats", tx.getTotalDebitSats());
         payload.put("provider", tx.getProvider());
         payload.put("providerReferenceHash", hashService.sha256(firstNonBlank(tx.getProviderReference(), "")));
+        payload.put("externalReference", tx.getExternalReference());
+        payload.put("memo", tx.getMemo());
         payload.put("blockchainTxid", tx.getBlockchainTxid());
         payload.put("paymentHash", tx.getPaymentHash());
         if (providerPayload != null && !providerPayload.isBlank()) {

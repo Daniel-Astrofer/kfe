@@ -2,7 +2,11 @@ package source.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import source.kfe.model.KfeBalanceMovementEntity;
+import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeExecutionOutboxEntity;
+import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 import source.kfe.repository.KfeBalanceMovementRepository;
@@ -16,8 +20,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -123,6 +129,79 @@ class KfeExecutionTransactionHelperTest {
         verify(outboxRepository).save(outbox);
     }
 
+    @Test
+    void settleOutboundDebitsActualFeeAndReleasesUnusedFeeReserve() {
+        UUID outboxId = UUID.randomUUID();
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+        KfeExecutionOutboxEntity outbox = claimedOutbox(transactionId);
+        KfeTransactionEntity tx = executingTransaction(walletId, 1_000L);
+
+        when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
+        when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
+        when(hashService.sha256(anyString())).thenReturn("hash");
+
+        helper.settleOutbound(
+                outboxId,
+                transactionId,
+                "BITCOIN_CORE",
+                "provider-reference",
+                "blockchain-txid",
+                700L,
+                walletId,
+                "{}");
+
+        assertThat(tx.getNetworkFeeSats()).isEqualTo(700L);
+        assertThat(tx.getTotalDebitSats()).isEqualTo(101_600L);
+        assertThat(tx.getStatus()).isEqualTo(KfeTransactionStatus.SETTLED);
+        assertThat(tx.getProvider()).isEqualTo("BITCOIN_CORE");
+        assertThat(outbox.getStatus()).isEqualTo("DISPATCHED");
+        verify(balanceService).releaseReserved(walletId, "BTC", 300L);
+        verify(balanceService).settleReservedDebit(walletId, "BTC", 101_600L);
+
+        ArgumentCaptor<KfeBalanceMovementEntity> movements =
+                ArgumentCaptor.forClass(KfeBalanceMovementEntity.class);
+        verify(movementRepository, times(2)).save(movements.capture());
+        assertThat(movements.getAllValues())
+                .extracting(KfeBalanceMovementEntity::getMovementType, KfeBalanceMovementEntity::getAmountSats)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("RELEASE_FEE_RESERVE", 300L),
+                        org.assertj.core.groups.Tuple.tuple("SETTLE_DEBIT", 101_600L));
+        verify(feeSettlementService).creditKeroseneFee(tx);
+    }
+
+    @Test
+    void settleOutboundKeepsReserveLockedWhenActualFeeExceedsReservedFee() {
+        UUID outboxId = UUID.randomUUID();
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+        KfeExecutionOutboxEntity outbox = claimedOutbox(transactionId);
+        KfeTransactionEntity tx = executingTransaction(walletId, 500L);
+
+        when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
+        when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
+        when(hashService.sha256(anyString())).thenReturn("hash");
+
+        helper.settleOutbound(
+                outboxId,
+                transactionId,
+                "BITCOIN_CORE",
+                "provider-reference",
+                "blockchain-txid",
+                600L,
+                walletId,
+                "{}");
+
+        assertThat(tx.getNetworkFeeSats()).isEqualTo(500L);
+        assertThat(tx.getTotalDebitSats()).isEqualTo(101_400L);
+        assertThat(tx.getStatus()).isEqualTo(KfeTransactionStatus.REQUIRES_RECONCILIATION);
+        assertThat(tx.getFailureCode()).isEqualTo("ACTUAL_FEE_EXCEEDS_RESERVED");
+        assertThat(outbox.getStatus()).isEqualTo("UNKNOWN");
+        assertThat(outbox.getProviderReference()).isEqualTo("provider-reference");
+        verifyNoInteractions(balanceService, feeSettlementService);
+        verify(movementRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
     private KfeExecutionOutboxEntity claimedOutbox(UUID transactionId) {
         KfeExecutionOutboxEntity outbox = new KfeExecutionOutboxEntity();
         outbox.setTransactionId(transactionId);
@@ -132,6 +211,24 @@ class KfeExecutionTransactionHelperTest {
         outbox.setClaimedAt(LocalDateTime.now());
         outbox.setPayloadHash("payload-hash");
         return outbox;
+    }
+
+    private KfeTransactionEntity executingTransaction(UUID walletId, long reservedFeeSats) {
+        KfeTransactionEntity tx = new KfeTransactionEntity();
+        tx.setUserId(42L);
+        tx.setIdempotencyKey("idempotency-key");
+        tx.setSourceWalletId(walletId);
+        tx.setRail(KfeRail.ONCHAIN);
+        tx.setDirection(KfeDirection.OUTBOUND);
+        tx.setStatus(KfeTransactionStatus.EXECUTING);
+        tx.setGrossAmountSats(100_000L);
+        tx.setReceiverAmountSats(100_000L);
+        tx.setNetworkFeeSats(reservedFeeSats);
+        tx.setKeroseneFeeSats(900L);
+        tx.setTotalDebitSats(100_900L + reservedFeeSats);
+        tx.setExternalReference("bcrt1qdestination");
+        tx.setMemo("memo");
+        return tx;
     }
 
     private void verifyNoTerminalSideEffects(KfeTransactionEntity tx) {
