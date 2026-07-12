@@ -78,16 +78,19 @@ public class KfePaymentRequestService {
         validateCreateRequest(request);
         KfeWalletEntity wallet = walletRepository.findByIdAndUserId(request.walletId(), userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
-        requireReceivingWallet(wallet, request);
+        KfeRail rail = resolveRail(request.rail());
+        requireReceivingWallet(wallet, request, rail);
 
-        KfeWalletAddressEntity address = resolveReceivingAddress(userId, wallet, request);
+        KfeWalletAddressEntity address = rail == KfeRail.ONCHAIN
+                ? resolveReceivingAddress(userId, wallet, request)
+                : null;
         KfePaymentRequestEntity paymentRequest = new KfePaymentRequestEntity();
         paymentRequest.setPublicId(generatePublicId());
         paymentRequest.setUserId(userId);
         paymentRequest.setWalletId(wallet.getId());
-        paymentRequest.setAddressId(address.getId());
-        paymentRequest.setAddress(address.getAddress());
-        paymentRequest.setRail(resolveRail(request.rail()));
+        paymentRequest.setAddressId(address == null ? null : address.getId());
+        paymentRequest.setAddress(address == null ? internalWalletReference(wallet) : address.getAddress());
+        paymentRequest.setRail(rail);
         paymentRequest.setStatus(KfePaymentRequestStatus.OPEN);
         paymentRequest.setAmountSats(request.amountSats());
         paymentRequest.setDescription(clean(request.description()));
@@ -233,9 +236,15 @@ public class KfePaymentRequestService {
         return addressRepository.save(address);
     }
 
-    private void requireReceivingWallet(KfeWalletEntity wallet, KfeCreatePaymentRequest request) {
+    private void requireReceivingWallet(
+            KfeWalletEntity wallet,
+            KfeCreatePaymentRequest request,
+            KfeRail rail) {
         if (wallet.getStatus() != KfeWalletStatus.ACTIVE) {
             throw new IllegalStateException("KFE wallet must be active to create a payment request.");
+        }
+        if (rail == KfeRail.INTERNAL) {
+            return;
         }
         if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
             return;
@@ -266,13 +275,19 @@ public class KfePaymentRequestService {
         if (request.expiresAt() != null && request.expiresAt().isBefore(LocalDateTime.now())) {
             throw new IllegalArgumentException("KFE payment request expiration must be in the future.");
         }
-        if (request.rail() != null && request.rail() != KfeRail.ONCHAIN) {
-            throw new IllegalArgumentException("KFE payment requests currently support ONCHAIN receiving only.");
+        if (request.rail() != null
+                && request.rail() != KfeRail.ONCHAIN
+                && request.rail() != KfeRail.INTERNAL) {
+            throw new IllegalArgumentException("KFE payment requests support INTERNAL and ONCHAIN receiving only.");
         }
     }
 
     private KfeRail resolveRail(KfeRail requested) {
         return requested == null ? KfeRail.ONCHAIN : requested;
+    }
+
+    private String internalWalletReference(KfeWalletEntity wallet) {
+        return "kerosene:wallet:" + wallet.getId();
     }
 
     private KfePaymentRequestEntity expireIfDue(KfePaymentRequestEntity paymentRequest) {

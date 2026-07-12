@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class KfePaymentRequestServiceTest {
@@ -144,6 +145,37 @@ class KfePaymentRequestServiceTest {
         assertThat(wallet.getLastDerivedIndex()).isEqualTo(-1);
         verify(walletService, never()).rotateAddress(7L, walletId);
         verify(receiveAddressIssuer).issue("kfe-payment-request-" + walletId);
+    }
+
+    @Test
+    void createInternalRequestUsesStructuredWalletReferenceWithoutBitcoinAddress() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = new KfeWalletEntity();
+        wallet.setId(walletId);
+        wallet.setUserId(7L);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setStatus(KfeWalletStatus.ACTIVE);
+
+        when(walletRepository.findByIdAndUserId(walletId, 7L)).thenReturn(Optional.of(wallet));
+        when(paymentRequestRepository.findByPublicId(anyString())).thenReturn(Optional.empty());
+        when(paymentRequestRepository.save(any(KfePaymentRequestEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.create(7L, new KfeCreatePaymentRequest(
+                walletId,
+                KfeRail.INTERNAL,
+                10_000L,
+                "Internal payment",
+                null,
+                null,
+                null,
+                null));
+
+        assertThat(response.walletId()).isEqualTo(walletId);
+        assertThat(response.rail()).isEqualTo(KfeRail.INTERNAL);
+        assertThat(response.addressId()).isNull();
+        assertThat(response.address()).isEqualTo("kerosene:wallet:" + walletId);
+        verifyNoInteractions(addressRepository, addressDerivationService, receiveAddressIssuer, walletService);
     }
 
     @Test
