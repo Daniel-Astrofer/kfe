@@ -21,7 +21,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class KfeTransactionAuthorizationUseCaseTest {
 
     @Test
-    void testJacksonDeserializesAppPinCorrectly() throws Exception {
+    void testJacksonDeserializesTransactionAuthorizationAndPaymentRequestReference() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new Jdk8Module());
         String json = """
@@ -34,11 +34,13 @@ class KfeTransactionAuthorizationUseCaseTest {
                   "amountSats": 10000,
                   "networkFeeSats": 0,
                   "memo": "test",
-                  "appPin": "1234"
+                  "appPin": "1234",
+                  "paymentRequestPublicId": "public-internal-id"
                 }
                 """;
         KfeSubmitTransactionRequest request = mapper.readValue(json, KfeSubmitTransactionRequest.class);
         assertEquals("1234", request.appPin());
+        assertEquals("public-internal-id", request.paymentRequestPublicId());
     }
 
     private final FinancialTransactionApprovalPort transactionApprovalPort = mock(FinancialTransactionApprovalPort.class);

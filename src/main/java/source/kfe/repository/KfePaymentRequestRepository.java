@@ -27,6 +27,10 @@ public interface KfePaymentRequestRepository extends JpaRepository<KfePaymentReq
 
     Optional<KfePaymentRequestEntity> findByPublicId(String publicId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from KfePaymentRequestEntity p where p.publicId = :publicId")
+    Optional<KfePaymentRequestEntity> findByPublicIdForUpdate(@Param("publicId") String publicId);
+
     List<KfePaymentRequestEntity> findByUserIdOrderByCreatedAtDesc(Long userId);
 
     List<KfePaymentRequestEntity> findByWalletIdAndStatusOrderByCreatedAtDesc(

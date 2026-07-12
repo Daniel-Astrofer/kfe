@@ -23,13 +23,15 @@ public record KfeSubmitTransactionRequest(
         String totpCode,
         String passkeyAssertionJson,
         String confirmationPassphrase,
-        String appPin) {
+        String appPin,
+        @Size(max = 48)
+        String paymentRequestPublicId) {
 
     public KfeSubmitTransactionRequest withDestinationWalletId(UUID resolvedDestinationWalletId) {
         return new KfeSubmitTransactionRequest(
                 idempotencyKey, rail, direction, sourceWalletId, resolvedDestinationWalletId, amountSats,
                 networkFeeSats, externalReference, memo, totpCode, passkeyAssertionJson,
-                confirmationPassphrase, appPin);
+                confirmationPassphrase, appPin, paymentRequestPublicId);
     }
 
     public KfeSubmitTransactionRequest(
@@ -46,7 +48,7 @@ public record KfeSubmitTransactionRequest(
             String passkeyAssertionJson,
             String confirmationPassphrase) {
         this(idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats, networkFeeSats,
-                externalReference, memo, totpCode, passkeyAssertionJson, confirmationPassphrase, null);
+                externalReference, memo, totpCode, passkeyAssertionJson, confirmationPassphrase, null, null);
     }
 
     public KfeSubmitTransactionRequest(
@@ -60,6 +62,6 @@ public record KfeSubmitTransactionRequest(
             String externalReference,
             String memo) {
         this(idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats, networkFeeSats,
-                externalReference, memo, null, null, null, null);
+                externalReference, memo, null, null, null, null, null);
     }
 }

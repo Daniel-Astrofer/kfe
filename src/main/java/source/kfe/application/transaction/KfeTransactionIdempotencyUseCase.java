@@ -85,6 +85,7 @@ public class KfeTransactionIdempotencyUseCase {
                 String.valueOf(request.amountSats()),
                 String.valueOf(request.networkFeeSats()),
                 safe(request.externalReference()),
+                safe(request.paymentRequestPublicId()),
                 safe(request.memo())));
     }
 

@@ -9,6 +9,7 @@ import source.kfe.dto.KfeSubmitTransactionRequest;
 import source.kfe.dto.KfeTransactionResponse;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeIdempotencyEntity;
+import source.kfe.model.KfePaymentRequestEntity;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
@@ -50,6 +51,7 @@ public class KfeSubmitTransactionUseCase {
     private final KfeTransactionOutboxUseCase outboxUseCase;
     private final KfeTransactionStatementRecorder statementRecorder;
     private final KfeFeeSettlementService feeSettlementService;
+    private final KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase;
 
     public KfeSubmitTransactionUseCase(
             KfeTransactionRepository transactionRepository,
@@ -68,7 +70,8 @@ public class KfeSubmitTransactionUseCase {
             KfeBalanceMovementRecorder movementRecorder,
             KfeTransactionOutboxUseCase outboxUseCase,
             KfeTransactionStatementRecorder statementRecorder,
-            KfeFeeSettlementService feeSettlementService) {
+            KfeFeeSettlementService feeSettlementService,
+            KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase) {
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
         this.tickerPort = tickerPort;
@@ -86,6 +89,7 @@ public class KfeSubmitTransactionUseCase {
         this.outboxUseCase = outboxUseCase;
         this.statementRecorder = statementRecorder;
         this.feeSettlementService = feeSettlementService;
+        this.paymentRequestSettlementUseCase = paymentRequestSettlementUseCase;
     }
 
     /**
@@ -106,6 +110,7 @@ public class KfeSubmitTransactionUseCase {
         if (attempt.existingResponse() != null) {
             return attempt.existingResponse();
         }
+        KfePaymentRequestEntity paymentRequest = paymentRequestSettlementUseCase.lockAndValidate(request);
 
         KfeTransactionEntity tx = createIntent(userId, request);
         stateMachine.audit(tx, "KFE_TRANSACTION_INTENT", null, tx.getStatus(), null);
@@ -113,20 +118,21 @@ public class KfeSubmitTransactionUseCase {
         PreparedTransaction prepared = validateQuoteAndQuorum(userId, tx, request, attempt.requestHash());
         WalletLock lock = reserveAndLock(request, prepared);
         routeLockedTransaction(userId, request, prepared, lock);
+        paymentRequestSettlementUseCase.markPaid(paymentRequest, prepared.tx());
 
         return completePublishAndRespond(userId, attempt.idempotency(), prepared.tx(), lock.destinationWallet());
     }
 
     private SubmissionAttempt validateAndReserve(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         validator.validate(request);
-        walletResolver.requireNotSelfPayment(userId, request);
-        authorizationUseCase.authorize(userId, request, deviceHash);
-
         String requestHash = idempotencyUseCase.requestHash(userId, request);
         KfeIdempotencyEntity existingIdempotency = idempotencyUseCase.find(userId, request.idempotencyKey());
         if (existingIdempotency != null) {
             return SubmissionAttempt.existing(requestHash, idempotencyUseCase.existingResponse(existingIdempotency, requestHash));
         }
+
+        walletResolver.requireNotSelfPayment(userId, request);
+        authorizationUseCase.authorize(userId, request, deviceHash);
 
         KfeIdempotencyEntity idempotency;
         try {
@@ -204,7 +210,7 @@ public class KfeSubmitTransactionUseCase {
         tx.setDirection(request.direction());
         tx.setSourceWalletId(request.sourceWalletId());
         tx.setDestinationWalletId(request.destinationWalletId());
-        tx.setExternalReference(clean(request.externalReference()));
+        tx.setExternalReference(transactionReference(request));
         tx.setMemo(clean(request.memo()));
         tx.setGrossAmountSats(request.amountSats());
         return transactionRepository.save(tx);
@@ -276,7 +282,8 @@ public class KfeSubmitTransactionUseCase {
                 String.valueOf(tx.getNetworkFeeSats()),
                 String.valueOf(tx.getKeroseneFeeSats()),
                 String.valueOf(tx.getTotalDebitSats()),
-                safe(request.externalReference())));
+                safe(request.externalReference()),
+                safe(request.paymentRequestPublicId())));
     }
 
     private void publishDashboards(Long userId, KfeWalletEntity destinationWallet) {
@@ -292,6 +299,13 @@ public class KfeSubmitTransactionUseCase {
 
     private String clean(String value) {
         return value != null && !value.isBlank() ? value.trim() : null;
+    }
+
+    private String transactionReference(KfeSubmitTransactionRequest request) {
+        String paymentRequestPublicId = clean(request.paymentRequestPublicId());
+        return paymentRequestPublicId != null
+                ? paymentRequestPublicId
+                : clean(request.externalReference());
     }
 
     private record SubmissionAttempt(

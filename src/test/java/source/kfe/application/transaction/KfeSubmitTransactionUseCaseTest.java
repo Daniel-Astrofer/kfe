@@ -7,6 +7,7 @@ import source.kfe.dto.KfeSubmitTransactionRequest;
 import source.kfe.dto.KfeTransactionResponse;
 import source.kfe.model.KfeIdempotencyEntity;
 import source.kfe.model.KfeDirection;
+import source.kfe.model.KfePaymentRequestEntity;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeWalletEntity;
@@ -50,6 +51,8 @@ class KfeSubmitTransactionUseCaseTest {
     private final KfeTransactionOutboxUseCase outboxUseCase = mock(KfeTransactionOutboxUseCase.class);
     private final KfeTransactionStatementRecorder statementRecorder = mock(KfeTransactionStatementRecorder.class);
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
+    private final KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase =
+            mock(KfeInternalPaymentRequestSettlementUseCase.class);
 
     private final KfeSubmitTransactionUseCase useCase = new KfeSubmitTransactionUseCase(
             transactionRepository,
@@ -68,11 +71,12 @@ class KfeSubmitTransactionUseCaseTest {
             movementRecorder,
             outboxUseCase,
             statementRecorder,
-            feeSettlementService
+            feeSettlementService,
+            paymentRequestSettlementUseCase
     );
 
     @Test
-    void duplicateIdempotencyReservationReturnsExistingTransactionResponse() {
+    void existingIdempotencyResponseSkipsAuthorizationAndPaymentRequestLock() {
         Long userId = 123L;
         KfeSubmitTransactionRequest request = outboundRequest();
         String requestHash = "request-hash";
@@ -80,9 +84,31 @@ class KfeSubmitTransactionUseCaseTest {
         KfeTransactionResponse existingResponse = transactionResponse();
 
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn(requestHash);
+        KfeIdempotencyEntity existingIdempotency = new KfeIdempotencyEntity();
+        when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(existingIdempotency);
+        when(idempotencyUseCase.existingResponse(existingIdempotency, requestHash)).thenReturn(existingResponse);
+
+        KfeTransactionResponse response = useCase.submit(userId, request);
+
+        assertSame(existingResponse, response);
+        verify(idempotencyUseCase).existingResponse(existingIdempotency, requestHash);
+        verify(authorizationUseCase, never()).authorize(any(), any(), any());
+        verify(walletResolver, never()).requireNotSelfPayment(any(), any());
+        verify(paymentRequestSettlementUseCase, never()).lockAndValidate(any());
+        verify(transactionRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void concurrentIdempotencyReservationReturnsCommittedTransactionResponse() {
+        Long userId = 123L;
+        KfeSubmitTransactionRequest request = outboundRequest();
+        String requestHash = "request-hash";
+        KfeTransactionResponse existingResponse = transactionResponse();
+        when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(idempotencyUseCase.requestHash(userId, request)).thenReturn(requestHash);
         when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
         when(idempotencyUseCase.reserve(userId, request, requestHash))
-                .thenThrow(new DataIntegrityViolationException("duplicate idempotency reservation"));
+                .thenThrow(new DataIntegrityViolationException("concurrent idempotency reservation"));
         when(idempotencyUseCase.getExistingByIdempotency(userId, request.idempotencyKey(), requestHash))
                 .thenReturn(existingResponse);
 
@@ -90,6 +116,7 @@ class KfeSubmitTransactionUseCaseTest {
 
         assertSame(existingResponse, response);
         verify(idempotencyUseCase).getExistingByIdempotency(userId, request.idempotencyKey(), requestHash);
+        verify(paymentRequestSettlementUseCase, never()).lockAndValidate(any());
         verify(transactionRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
@@ -143,6 +170,59 @@ class KfeSubmitTransactionUseCaseTest {
         assertThat(transaction.getExternalReference())
                 .isEqualTo("bcrt1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh");
         assertThat(transaction.getMemo()).isEqualTo("memo");
+    }
+
+    @Test
+    void settlesAndLinksInternalPaymentRequestInTheSameSubmission() {
+        Long userId = 123L;
+        UUID sourceWalletId = UUID.randomUUID();
+        UUID destinationWalletId = UUID.randomUUID();
+        String publicId = "public-internal-id";
+        KfeSubmitTransactionRequest request = new KfeSubmitTransactionRequest(
+                "internal-idemp-key",
+                KfeRail.INTERNAL,
+                KfeDirection.INTERNAL,
+                sourceWalletId,
+                destinationWalletId,
+                10_000L,
+                0L,
+                null,
+                "payment request",
+                null,
+                "passkey-json",
+                null,
+                "123456",
+                publicId);
+        KfeIdempotencyEntity idempotency = new KfeIdempotencyEntity();
+        KfePaymentRequestEntity paymentRequest = new KfePaymentRequestEntity();
+        KfeWalletEntity sourceWallet = new KfeWalletEntity();
+        KfeWalletEntity destinationWallet = new KfeWalletEntity();
+        destinationWallet.setUserId(456L);
+        KfeTransactionResponse response = transactionResponse();
+
+        when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(idempotencyUseCase.requestHash(userId, request)).thenReturn("internal-request-hash");
+        when(idempotencyUseCase.reserve(userId, request, "internal-request-hash")).thenReturn(idempotency);
+        when(paymentRequestSettlementUseCase.lockAndValidate(request)).thenReturn(paymentRequest);
+        when(transactionRepository.save(any(KfeTransactionEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(walletResolver.resolveSourceWallet(userId, request)).thenReturn(sourceWallet);
+        when(walletResolver.resolveDestinationWallet(userId, request)).thenReturn(destinationWallet);
+        when(walletResolver.requiresSourceReserve(request)).thenReturn(true);
+        when(pricingService.quote(KfeRail.INTERNAL, KfeDirection.INTERNAL, 10_000L, 0L))
+                .thenReturn(new KfePricingService.Quote(10_000L, 9_910L, 0L, 10_000L, 90L));
+        when(hashService.sha256(anyString())).thenReturn("internal-proposal-hash");
+        when(quorumGateway.requireHealthyUnanimousConsensus("internal-proposal-hash"))
+                .thenReturn(new KfeQuorumGateway.Result(3, 3));
+        when(responseMapper.toTransactionResponse(any(KfeTransactionEntity.class))).thenReturn(response);
+
+        KfeTransactionResponse result = useCase.submit(userId, request);
+
+        assertSame(response, result);
+        var transactionCaptor = org.mockito.ArgumentCaptor.forClass(KfeTransactionEntity.class);
+        verify(paymentRequestSettlementUseCase).markPaid(org.mockito.ArgumentMatchers.eq(paymentRequest),
+                transactionCaptor.capture());
+        assertThat(transactionCaptor.getValue().getExternalReference()).isEqualTo(publicId);
     }
 
     private KfeSubmitTransactionRequest outboundRequest() {
