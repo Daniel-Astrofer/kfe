@@ -45,6 +45,9 @@ public class KfeTransactionWalletResolver {
 
         FinancialUserDirectoryPort.FinancialUserHandle user = userDirectory.findByUsername(reference)
                 .orElseThrow(() -> new IllegalArgumentException("Destination user not found."));
+        if (!user.active()) {
+            throw new IllegalArgumentException("Destination user is not active.");
+        }
         KfeWalletEntity wallet = walletRepository.findByUserIdOrderByCreatedAtDesc(user.id())
                 .stream()
                 .filter(this::isSpendableActiveWallet)

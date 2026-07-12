@@ -49,6 +49,19 @@ class KfeTransactionWalletResolverTest {
     }
 
     @Test
+    void rejectsInternalDestinationForInactiveUser() {
+        when(userDirectory.findByUsername("disabled"))
+                .thenReturn(Optional.of(
+                        new FinancialUserDirectoryPort.FinancialUserHandle(42L, "disabled", false)));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> resolver.resolveInternalDestinationReference(
+                        internalRequest(null, "@disabled")));
+        verify(walletRepository, never()).findByUserIdOrderByCreatedAtDesc(42L);
+    }
+
+    @Test
     void resolvesInternalDestinationUuidReferenceWithoutUsernameLookup() {
         UUID walletId = UUID.randomUUID();
 
