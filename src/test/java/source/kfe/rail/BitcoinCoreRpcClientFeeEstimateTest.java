@@ -78,4 +78,25 @@ class BitcoinCoreRpcClientFeeEstimateTest {
                 .hasMessageContaining("non-positive smart fee rate");
         server.verify();
     }
+
+    @Test
+    void delegatesAddressValidationToBitcoinCore() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate);
+        BitcoinCoreRpcClient client = new BitcoinCoreRpcClient(
+                restTemplate,
+                new ObjectMapper(),
+                "http://bitcoin.test:18443",
+                "rpc-user",
+                "rpc-password",
+                "");
+        server.expect(requestTo("http://bitcoin.test:18443"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"method\":\"validateaddress\"")))
+                .andRespond(withSuccess(
+                        "{\"result\":{\"isvalid\":true},\"error\":null}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThat(client.isValidAddress("bc1ptestaddress")).isTrue();
+        server.verify();
+    }
 }

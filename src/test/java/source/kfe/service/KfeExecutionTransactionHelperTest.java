@@ -42,19 +42,7 @@ class KfeExecutionTransactionHelperTest {
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
 
-    private final KfeExecutionTransactionHelper helper = new KfeExecutionTransactionHelper(
-            outboxRepository,
-            transactionRepository,
-            walletRepository,
-            idempotencyRepository,
-            movementRepository,
-            balanceService,
-            auditLogService,
-            statementService,
-            dashboardPublisher,
-            hashService,
-            new ObjectMapper(),
-            feeSettlementService);
+    private final KfeExecutionTransactionHelper helper = helper(8);
 
     @Test
     void settleOutboundOnlyDispatchesOutboxWhenTransactionAlreadySettled() {
@@ -200,6 +188,76 @@ class KfeExecutionTransactionHelperTest {
         assertThat(outbox.getProviderReference()).isEqualTo("provider-reference");
         verifyNoInteractions(balanceService, feeSettlementService);
         verify(movementRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void retryExhaustionFailsTransactionAndReleasesReservedBalance() {
+        UUID outboxId = UUID.randomUUID();
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+        KfeExecutionOutboxEntity outbox = claimedOutbox(transactionId);
+        outbox.setAttempts(2);
+        KfeTransactionEntity tx = executingTransaction(walletId, 500L);
+
+        when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
+        when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
+        when(hashService.sha256(anyString())).thenReturn("hash");
+
+        helper(3).markRetryableFailure(
+                outboxId,
+                transactionId,
+                "PROVIDER_RETRYABLE_FAILURE",
+                "Bitcoin provider unavailable");
+
+        assertThat(outbox.getAttempts()).isEqualTo(3);
+        assertThat(outbox.getStatus()).isEqualTo("FAILED_FINAL");
+        assertThat(outbox.getNextAttemptAt()).isNull();
+        assertThat(tx.getStatus()).isEqualTo(KfeTransactionStatus.FAILED);
+        assertThat(tx.getFailureCode()).isEqualTo("PROVIDER_RETRY_EXHAUSTED");
+        verify(balanceService).releaseReserved(walletId, "BTC", tx.getTotalDebitSats());
+    }
+
+    @Test
+    void retryBelowLimitRemainsScheduledWithoutReleasingReserve() {
+        UUID outboxId = UUID.randomUUID();
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+        KfeExecutionOutboxEntity outbox = claimedOutbox(transactionId);
+        outbox.setAttempts(1);
+        KfeTransactionEntity tx = executingTransaction(walletId, 500L);
+
+        when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
+        when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
+        when(hashService.sha256(anyString())).thenReturn("hash");
+
+        helper(3).markRetryableFailure(
+                outboxId,
+                transactionId,
+                "PROVIDER_RETRYABLE_FAILURE",
+                "Bitcoin provider unavailable");
+
+        assertThat(outbox.getAttempts()).isEqualTo(2);
+        assertThat(outbox.getStatus()).isEqualTo("FAILED_RETRYABLE");
+        assertThat(outbox.getNextAttemptAt()).isNotNull();
+        assertThat(tx.getStatus()).isEqualTo(KfeTransactionStatus.EXECUTING);
+        verifyNoInteractions(balanceService);
+    }
+
+    private KfeExecutionTransactionHelper helper(int maxRetryAttempts) {
+        return new KfeExecutionTransactionHelper(
+                outboxRepository,
+                transactionRepository,
+                walletRepository,
+                idempotencyRepository,
+                movementRepository,
+                balanceService,
+                auditLogService,
+                statementService,
+                dashboardPublisher,
+                hashService,
+                new ObjectMapper(),
+                feeSettlementService,
+                maxRetryAttempts);
     }
 
     private KfeExecutionOutboxEntity claimedOutbox(UUID transactionId) {

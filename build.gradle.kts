@@ -44,6 +44,9 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor")
     implementation("io.micrometer:micrometer-registry-prometheus")
+    implementation("org.bitcoinj:bitcoinj-core:0.15.10") {
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    }
     implementation("org.flywaydb:flyway-core")
     implementation("org.postgresql:postgresql")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.13.0")

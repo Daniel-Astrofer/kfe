@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import source.kfe.model.KfeBalanceMovementEntity;
@@ -37,6 +38,7 @@ public class KfeExecutionTransactionHelper {
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
     private final KfeFeeSettlementService feeSettlementService;
+    private final int maxRetryAttempts;
 
     public KfeExecutionTransactionHelper(
             KfeExecutionOutboxRepository outboxRepository,
@@ -50,7 +52,8 @@ public class KfeExecutionTransactionHelper {
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
             ObjectMapper objectMapper,
-            KfeFeeSettlementService feeSettlementService) {
+            KfeFeeSettlementService feeSettlementService,
+            @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -63,6 +66,10 @@ public class KfeExecutionTransactionHelper {
         this.hashService = hashService;
         this.objectMapper = objectMapper;
         this.feeSettlementService = feeSettlementService;
+        if (maxRetryAttempts <= 0) {
+            throw new IllegalArgumentException("maxRetryAttempts must be positive.");
+        }
+        this.maxRetryAttempts = maxRetryAttempts;
     }
 
     public record PreparationResult(
@@ -322,6 +329,15 @@ public class KfeExecutionTransactionHelper {
             return;
         }
 
+        if (outbox.getAttempts() + 1 >= maxRetryAttempts) {
+            finalizeFailure(
+                    outbox,
+                    tx,
+                    "PROVIDER_RETRY_EXHAUSTED",
+                    "Provider execution failed after " + maxRetryAttempts + " attempts: " + message);
+            return;
+        }
+
         outbox.setAttempts(outbox.getAttempts() + 1);
         outbox.setStatus("FAILED_RETRYABLE");
         outbox.setLastError(trim(code + ": " + message, 1000));
@@ -346,6 +362,14 @@ public class KfeExecutionTransactionHelper {
             return;
         }
 
+        finalizeFailure(outbox, tx, code, message);
+    }
+
+    private void finalizeFailure(
+            KfeExecutionOutboxEntity outbox,
+            KfeTransactionEntity tx,
+            String code,
+            String message) {
         if (tx.getSourceWalletId() != null && tx.getTotalDebitSats() > 0L) {
             balanceService.releaseReserved(tx.getSourceWalletId(), ASSET_BTC, tx.getTotalDebitSats());
             movement(tx.getId(), tx.getSourceWalletId(), "RELEASE_RESERVE", tx.getTotalDebitSats(), "LOCKED", "AVAILABLE");

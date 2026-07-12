@@ -135,6 +135,14 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         return unwrapResult(executeNodeRpc("getblockchaininfo"));
     }
 
+    public boolean isValidAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return false;
+        }
+        JsonNode result = unwrapResult(executeNodeRpc("validateaddress", address.trim()));
+        return result != null && result.path("isvalid").asBoolean(false);
+    }
+
     public long estimateSmartFeeRateSatPerVbyte(int confirmationTarget) {
         if (confirmationTarget <= 0) {
             throw new IllegalArgumentException("confirmationTarget must be positive");
