@@ -135,6 +135,25 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         return unwrapResult(executeNodeRpc("getblockchaininfo"));
     }
 
+    public long estimateSmartFeeRateSatPerVbyte(int confirmationTarget) {
+        if (confirmationTarget <= 0) {
+            throw new IllegalArgumentException("confirmationTarget must be positive");
+        }
+        JsonNode result = unwrapResult(executeNodeRpc("estimatesmartfee", confirmationTarget, "CONSERVATIVE"));
+        JsonNode feeRate = result != null ? result.path("feerate") : null;
+        if (feeRate == null || feeRate.isMissingNode() || feeRate.isNull() || !feeRate.isNumber()) {
+            throw new IllegalStateException("Bitcoin Core did not return a smart fee rate.");
+        }
+        long satPerVbyte = feeRate.decimalValue()
+                .multiply(SATOSHIS_PER_BITCOIN)
+                .divide(BigDecimal.valueOf(1000L), 0, RoundingMode.CEILING)
+                .longValueExact();
+        if (satPerVbyte <= 0L) {
+            throw new IllegalStateException("Bitcoin Core returned a non-positive smart fee rate.");
+        }
+        return satPerVbyte;
+    }
+
     public void ensureWalletLoaded(String wallet) {
         String cleanWallet = sanitizeWalletName(wallet);
         if (cleanWallet.isBlank()) {

@@ -20,6 +20,7 @@ import source.kfe.model.KfeRail;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeResponseMapper;
 import source.kfe.service.KfePricingService;
+import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfeTransactionEngine;
 import source.kfe.service.KfeWalletNetworkService;
 import source.kfe.service.KfeWalletService;
@@ -34,6 +35,7 @@ public class FinancialApi {
     private final KfeTransactionRepository transactionRepository;
     private final KfeResponseMapper responseMapper;
     private final KfePricingService pricingService;
+    private final KfeNetworkFeeEstimateService networkFeeEstimateService;
     private final KfeWalletService walletService;
     private final KfeWalletNetworkService walletNetworkService;
 
@@ -42,12 +44,14 @@ public class FinancialApi {
             KfeTransactionRepository transactionRepository,
             KfeResponseMapper responseMapper,
             KfePricingService pricingService,
+            KfeNetworkFeeEstimateService networkFeeEstimateService,
             KfeWalletService walletService,
             KfeWalletNetworkService walletNetworkService) {
         this.transactionEngine = transactionEngine;
         this.transactionRepository = transactionRepository;
         this.responseMapper = responseMapper;
         this.pricingService = pricingService;
+        this.networkFeeEstimateService = networkFeeEstimateService;
         this.walletService = walletService;
         this.walletNetworkService = walletNetworkService;
     }
@@ -72,11 +76,15 @@ public class FinancialApi {
     }
 
     public KfeTransactionQuoteResponse quoteTransaction(KfeTransactionQuoteRequest request) {
+        KfeNetworkFeeEstimateService.Estimate feeEstimate = networkFeeEstimateService.estimate(
+                request.rail(),
+                request.direction(),
+                request.networkFeeSats());
         KfePricingService.Quote quote = pricingService.quote(
                 request.rail(),
                 request.direction(),
                 request.amountSats(),
-                request.networkFeeSats());
+                feeEstimate.selectedNetworkFeeSats());
         return new KfeTransactionQuoteResponse(
                 request.rail(),
                 request.direction(),
@@ -84,7 +92,15 @@ public class FinancialApi {
                 quote.receiverAmountSats(),
                 quote.networkFeeSats(),
                 quote.totalDebitSats(),
-                quote.keroseneFeeSats());
+                quote.keroseneFeeSats(),
+                Math.addExact(quote.networkFeeSats(), quote.keroseneFeeSats()),
+                feeEstimate.selectedFeeRateSatPerVbyte(),
+                feeEstimate.estimatedVbytes(),
+                feeEstimate.selectedTargetBlocks(),
+                feeEstimate.selectedEstimatedSeconds(),
+                feeEstimate.selectedSource(),
+                feeEstimate.expiresAt(),
+                feeEstimate.tiers());
     }
 
     public KfeTransactionResponse transaction(Long userId, UUID transactionId) {
