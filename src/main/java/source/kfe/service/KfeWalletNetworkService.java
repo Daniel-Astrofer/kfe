@@ -70,24 +70,44 @@ public class KfeWalletNetworkService {
 
     @Transactional(readOnly = true)
     public KfeReceivingCapabilitiesResponse receivingCapabilities(String receiverIdentifier) {
-        Optional<FinancialUserDirectoryPort.FinancialUserHandle> receiver = resolveUser(receiverIdentifier);
-        if (receiver.isEmpty() || !Boolean.TRUE.equals(receiver.get().active())) {
+        ResolvedReceiver resolved = resolveReceiver(receiverIdentifier);
+        if (resolved == null
+                || resolved.user() == null
+                || !Boolean.TRUE.equals(resolved.user().active())) {
             return unavailable("RECEIVER_NOT_READY");
         }
 
-        List<KfeWalletEntity> activeWallets = walletRepository.findByUserIdOrderByCreatedAtDesc(receiver.get().id())
+        FinancialUserDirectoryPort.FinancialUserHandle receiver = resolved.user();
+        List<KfeWalletEntity> activeWallets = walletRepository.findByUserIdOrderByCreatedAtDesc(receiver.id())
                 .stream()
                 .filter(wallet -> wallet.getStatus() == KfeWalletStatus.ACTIVE)
                 .toList();
 
-        Optional<KfeWalletEntity> internalWallet = activeWallets.stream()
-                .filter(wallet -> wallet.getKind() == KfeWalletKind.INTERNAL && wallet.isSpendable())
-                .findFirst();
+        // Prefer the wallet explicitly addressed by UUID (frontend locks destination to internalWalletId).
+        Optional<KfeWalletEntity> internalWallet = Optional.empty();
+        if (resolved.preferredWalletId() != null) {
+            internalWallet = activeWallets.stream()
+                    .filter(wallet -> resolved.preferredWalletId().equals(wallet.getId()))
+                    .filter(wallet -> wallet.getKind() == KfeWalletKind.INTERNAL && wallet.isSpendable())
+                    .findFirst();
+        }
+        if (internalWallet.isEmpty()) {
+            internalWallet = activeWallets.stream()
+                    .filter(wallet -> wallet.getKind() == KfeWalletKind.INTERNAL && wallet.isSpendable())
+                    .findFirst();
+        }
         boolean internal = internalWallet.isPresent();
-        boolean onchain = activeWallets.stream().anyMatch(this::hasActiveReceiveAddress);
         boolean lightning = false;
 
+        Optional<OnchainReceiveTarget> onchainTarget = resolveOnchainReceiveTarget(
+                activeWallets,
+                resolved.preferredWalletId());
+        boolean onchain = onchainTarget.isPresent();
+
         List<String> rails = availableRails(internal, lightning, onchain);
+        // preferredRail must only point at a rail that is actually available.
+        String preferredRail = preferredRail(rails);
+
         List<String> missing = new ArrayList<>();
         if (!internal) {
             missing.add("KFE_INTERNAL_WALLET_NOT_FOUND");
@@ -103,10 +123,12 @@ public class KfeWalletNetworkService {
                 internal,
                 lightning,
                 onchain,
-                rails.isEmpty() ? null : rails.get(0),
+                preferredRail,
                 List.copyOf(missing),
-                "@" + receiver.get().username(),
+                "@" + receiver.username(),
                 internalWallet.map(KfeWalletEntity::getId).orElse(null),
+                onchainTarget.map(OnchainReceiveTarget::address).orElse(null),
+                onchainTarget.map(OnchainReceiveTarget::walletId).orElse(null),
                 rails,
                 DEFAULT_LIMITS);
     }
@@ -202,18 +224,57 @@ public class KfeWalletNetworkService {
                 inputs);
     }
 
-    private Optional<FinancialUserDirectoryPort.FinancialUserHandle> resolveUser(String receiverIdentifier) {
+    /**
+     * Resolves a receiver from username, numeric user id, or KFE wallet UUID.
+     *
+     * <p>The Flutter send flow calls this with a username first, then locks the destination to the
+     * returned {@code internalWalletId}. A second capabilities check with that UUID must still work —
+     * treating a wallet id as a username yields 404 from the core directory and false
+     * {@code RECEIVER_NOT_READY}.</p>
+     */
+    private ResolvedReceiver resolveReceiver(String receiverIdentifier) {
         if (!hasText(receiverIdentifier)) {
-            return Optional.empty();
+            return null;
         }
         String normalized = receiverIdentifier.trim();
-        if (normalized.startsWith("@")) {
-            normalized = normalized.substring(1);
+        while (normalized.startsWith("@")) {
+            normalized = normalized.substring(1).trim();
         }
+        if (!hasText(normalized)) {
+            return null;
+        }
+
+        UUID walletId = parseUuid(normalized);
+        if (walletId != null) {
+            Optional<KfeWalletEntity> wallet = walletRepository.findById(walletId);
+            if (wallet.isEmpty()) {
+                return null;
+            }
+            Optional<FinancialUserDirectoryPort.FinancialUserHandle> user =
+                    userDirectory.findById(wallet.get().getUserId());
+            return user.map(handle -> new ResolvedReceiver(handle, walletId)).orElse(null);
+        }
+
+        Optional<FinancialUserDirectoryPort.FinancialUserHandle> user;
         if (normalized.matches("\\d+")) {
-            return userDirectory.findById(Long.parseLong(normalized));
+            user = userDirectory.findById(Long.parseLong(normalized));
+        } else {
+            user = userDirectory.findByUsername(normalized);
         }
-        return userDirectory.findByUsername(normalized);
+        return user.map(handle -> new ResolvedReceiver(handle, null)).orElse(null);
+    }
+
+    private UUID parseUuid(String value) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private record ResolvedReceiver(
+            FinancialUserDirectoryPort.FinancialUserHandle user,
+            UUID preferredWalletId) {
     }
 
     private KfeReceivingCapabilitiesResponse unavailable(String reason) {
@@ -225,14 +286,67 @@ public class KfeWalletNetworkService {
                 List.of(reason),
                 null,
                 null,
+                null,
+                null,
                 List.of(),
                 DEFAULT_LIMITS);
     }
 
     private boolean hasActiveReceiveAddress(KfeWalletEntity wallet) {
+        return activeReceiveAddress(wallet.getId()).isPresent();
+    }
+
+    private Optional<String> activeReceiveAddress(UUID walletId) {
         return addressRepository
-                .findTopByWalletIdAndStatusOrderByCreatedAtDesc(wallet.getId(), KfeWalletAddressStatus.ACTIVE)
-                .isPresent();
+                .findTopByWalletIdAndStatusOrderByCreatedAtDesc(walletId, KfeWalletAddressStatus.ACTIVE)
+                .map(KfeWalletAddressEntity::getAddress)
+                .filter(this::hasText)
+                .map(String::trim);
+    }
+
+    /**
+     * Picks the best public on-chain receive target for dual-rail send.
+     * Order: preferred wallet → CUSTODIAL_ONCHAIN → INTERNAL → WATCH_ONLY (any with ACTIVE address).
+     */
+    private Optional<OnchainReceiveTarget> resolveOnchainReceiveTarget(
+            List<KfeWalletEntity> activeWallets,
+            UUID preferredWalletId) {
+        if (preferredWalletId != null) {
+            Optional<OnchainReceiveTarget> preferred = activeWallets.stream()
+                    .filter(wallet -> preferredWalletId.equals(wallet.getId()))
+                    .map(this::toOnchainTarget)
+                    .flatMap(Optional::stream)
+                    .findFirst();
+            if (preferred.isPresent()) {
+                return preferred;
+            }
+        }
+        Optional<OnchainReceiveTarget> custodial = firstOnchainTarget(
+                activeWallets, KfeWalletKind.CUSTODIAL_ONCHAIN);
+        if (custodial.isPresent()) {
+            return custodial;
+        }
+        Optional<OnchainReceiveTarget> internal = firstOnchainTarget(
+                activeWallets, KfeWalletKind.INTERNAL);
+        if (internal.isPresent()) {
+            return internal;
+        }
+        return firstOnchainTarget(activeWallets, KfeWalletKind.WATCH_ONLY);
+    }
+
+    private Optional<OnchainReceiveTarget> firstOnchainTarget(
+            List<KfeWalletEntity> wallets,
+            KfeWalletKind kind) {
+        return wallets.stream()
+                .filter(wallet -> wallet.getKind() == kind)
+                .map(this::toOnchainTarget)
+                .flatMap(Optional::stream)
+                .findFirst();
+    }
+
+    private Optional<OnchainReceiveTarget> toOnchainTarget(KfeWalletEntity wallet) {
+        return activeReceiveAddress(wallet.getId())
+                .map(address -> new OnchainReceiveTarget(wallet.getId(), address));
     }
 
     private List<String> availableRails(boolean internal, boolean lightning, boolean onchain) {
@@ -247,6 +361,26 @@ public class KfeWalletNetworkService {
             rails.add("ONCHAIN");
         }
         return List.copyOf(rails);
+    }
+
+    /** Prefer INTERNAL, then LIGHTNING, then ONCHAIN — only among available rails. */
+    private String preferredRail(List<String> rails) {
+        if (rails == null || rails.isEmpty()) {
+            return null;
+        }
+        if (rails.contains("INTERNAL")) {
+            return "INTERNAL";
+        }
+        if (rails.contains("LIGHTNING")) {
+            return "LIGHTNING";
+        }
+        if (rails.contains("ONCHAIN")) {
+            return "ONCHAIN";
+        }
+        return rails.get(0);
+    }
+
+    private record OnchainReceiveTarget(UUID walletId, String address) {
     }
 
     private List<KfeWalletAddressEntity> activeAddresses(UUID walletId) {

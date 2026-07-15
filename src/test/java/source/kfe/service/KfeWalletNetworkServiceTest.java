@@ -75,8 +75,80 @@ class KfeWalletNetworkServiceTest {
         assertThat(response.canReceiveLightning()).isFalse();
         assertThat(response.receiverDisplayName()).isEqualTo("@alice");
         assertThat(response.internalWalletId()).isEqualTo(wallet.getId());
+        assertThat(response.preferredRail()).isEqualTo("INTERNAL");
+        assertThat(response.onchainReceiveAddress()).isEqualTo(address.getAddress());
+        assertThat(response.onchainWalletId()).isEqualTo(wallet.getId());
         assertThat(response.availableRails()).containsExactly("INTERNAL", "ONCHAIN");
         assertThat(response.missingRequirements()).containsExactly("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+    }
+
+    @Test
+    void receivingCapabilitiesResolvesWalletUuidWithoutUsernameDirectoryLookup() {
+        FinancialUserDirectoryPort.FinancialUserHandle user =
+                new FinancialUserDirectoryPort.FinancialUserHandle(42L, "alice", true);
+
+        KfeWalletEntity wallet = wallet(KfeWalletKind.INTERNAL);
+        KfeWalletAddressEntity address = address(wallet.getId());
+
+        when(walletRepository.findById(wallet.getId())).thenReturn(Optional.of(wallet));
+        when(userDirectory.findById(42L)).thenReturn(Optional.of(user));
+        when(walletRepository.findByUserIdOrderByCreatedAtDesc(42L)).thenReturn(List.of(wallet));
+        when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                wallet.getId(),
+                KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.of(address));
+
+        KfeReceivingCapabilitiesResponse response =
+                service.receivingCapabilities(wallet.getId().toString());
+
+        assertThat(response.canReceiveInternal()).isTrue();
+        assertThat(response.receiverDisplayName()).isEqualTo("@alice");
+        assertThat(response.internalWalletId()).isEqualTo(wallet.getId());
+        assertThat(response.onchainReceiveAddress()).isEqualTo(address.getAddress());
+        assertThat(response.preferredRail()).isEqualTo("INTERNAL");
+        assertThat(response.missingRequirements()).containsExactly("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+    }
+
+    @Test
+    void receivingCapabilitiesPrefersCustodialOnchainAddressWhenPresent() {
+        FinancialUserDirectoryPort.FinancialUserHandle user =
+                new FinancialUserDirectoryPort.FinancialUserHandle(42L, "alice", true);
+
+        KfeWalletEntity internal = wallet(KfeWalletKind.INTERNAL);
+        KfeWalletEntity custodial = wallet(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        KfeWalletAddressEntity custodialAddress = address(custodial.getId());
+        custodialAddress.setAddress("tb1qcustodialxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+
+        when(userDirectory.findByUsername("alice")).thenReturn(Optional.of(user));
+        when(walletRepository.findByUserIdOrderByCreatedAtDesc(42L))
+                .thenReturn(List.of(internal, custodial));
+        when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                internal.getId(),
+                KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.empty());
+        when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                custodial.getId(),
+                KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.of(custodialAddress));
+
+        KfeReceivingCapabilitiesResponse response = service.receivingCapabilities("@alice");
+
+        assertThat(response.canReceiveInternal()).isTrue();
+        assertThat(response.canReceiveOnchain()).isTrue();
+        assertThat(response.onchainReceiveAddress()).isEqualTo(custodialAddress.getAddress());
+        assertThat(response.onchainWalletId()).isEqualTo(custodial.getId());
+        assertThat(response.preferredRail()).isEqualTo("INTERNAL");
+        assertThat(response.availableRails()).containsExactly("INTERNAL", "ONCHAIN");
+    }
+
+    @Test
+    void receivingCapabilitiesReturnsNotReadyForUnknownWalletUuid() {
+        UUID missingWalletId = UUID.randomUUID();
+        when(walletRepository.findById(missingWalletId)).thenReturn(Optional.empty());
+
+        KfeReceivingCapabilitiesResponse response =
+                service.receivingCapabilities(missingWalletId.toString());
+
+        assertThat(response.canReceiveInternal()).isFalse();
+        assertThat(response.missingRequirements()).containsExactly("RECEIVER_NOT_READY");
+        assertThat(response.internalWalletId()).isNull();
     }
 
     @Test

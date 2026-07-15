@@ -1,42 +1,91 @@
 package source.kfe.service;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.EnumerablePropertySource;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.PropertySource;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Directory of third-party onramp/offramp URLs for beta.
+ * Kerosene does not process fiat; these are outbound links only.
+ *
+ * Configure any of:
+ *   kfe.onramp.url.buy
+ *   kfe.onramp.url.sell
+ *   kfe.onramp.url.help
+ *   kfe.onramp.url.moonpay
+ *   kfe.onramp.url.transak
+ *   ...
+ * Env form: KFE_ONRAMP_URL_MOONPAY=https://...
+ */
 @Service
 public class KfeOnrampDirectoryService {
 
-    private final String buyUrl;
-    private final String sellUrl;
-    private final String helpUrl;
+    private static final String PREFIX = "kfe.onramp.url.";
 
-    public KfeOnrampDirectoryService(
-            @Value("${kfe.onramp.url.buy:}") String buyUrl,
-            @Value("${kfe.onramp.url.sell:}") String sellUrl,
-            @Value("${kfe.onramp.url.help:}") String helpUrl) {
-        this.buyUrl = clean(buyUrl);
-        this.sellUrl = clean(sellUrl);
-        this.helpUrl = clean(helpUrl);
+    private final Map<String, String> urls;
+
+    public KfeOnrampDirectoryService(Environment environment) {
+        this.urls = Map.copyOf(loadUrls(environment));
     }
 
     public Map<String, String> urls() {
-        Map<String, String> urls = new LinkedHashMap<>();
-        putIfPresent(urls, "buy", buyUrl);
-        putIfPresent(urls, "sell", sellUrl);
-        putIfPresent(urls, "help", helpUrl);
-        return Map.copyOf(urls);
+        return urls;
     }
 
-    private void putIfPresent(Map<String, String> urls, String key, String value) {
-        if (value != null && !value.isBlank()) {
-            urls.put(key, value);
+    private static Map<String, String> loadUrls(Environment environment) {
+        Map<String, String> found = new LinkedHashMap<>();
+
+        // Always try the canonical beta keys first so order is stable.
+        putIfConfigured(environment, found, "buy");
+        putIfConfigured(environment, found, "sell");
+        putIfConfigured(environment, found, "help");
+        putIfConfigured(environment, found, "moonpay");
+        putIfConfigured(environment, found, "transak");
+        putIfConfigured(environment, found, "ramp");
+        putIfConfigured(environment, found, "onramper");
+        putIfConfigured(environment, found, "stripe");
+        putIfConfigured(environment, found, "coinbase");
+        putIfConfigured(environment, found, "banxa");
+        putIfConfigured(environment, found, "mercuryo");
+        putIfConfigured(environment, found, "wert");
+        putIfConfigured(environment, found, "gatefi");
+
+        if (environment instanceof ConfigurableEnvironment configurable) {
+            for (PropertySource<?> propertySource : configurable.getPropertySources()) {
+                if (!(propertySource instanceof EnumerablePropertySource<?> enumerable)) {
+                    continue;
+                }
+                for (String propertyName : enumerable.getPropertyNames()) {
+                    if (propertyName == null || !propertyName.startsWith(PREFIX)) {
+                        continue;
+                    }
+                    String key = propertyName.substring(PREFIX.length()).trim().toLowerCase(Locale.ROOT);
+                    if (key.isEmpty() || found.containsKey(key)) {
+                        continue;
+                    }
+                    putIfConfigured(environment, found, key);
+                }
+            }
         }
+
+        return found;
     }
 
-    private String clean(String value) {
-        return value == null ? "" : value.trim();
+    private static void putIfConfigured(Environment environment, Map<String, String> urls, String key) {
+        String value = environment.getProperty(PREFIX + key);
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        String cleaned = value.trim();
+        if (!cleaned.startsWith("https://") && !cleaned.startsWith("http://")) {
+            return;
+        }
+        urls.put(key, cleaned);
     }
 }

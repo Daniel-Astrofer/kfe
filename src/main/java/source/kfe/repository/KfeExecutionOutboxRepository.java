@@ -23,6 +23,8 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
     @Query("select o from KfeExecutionOutboxEntity o where o.id = :id")
     Optional<KfeExecutionOutboxEntity> findByIdForUpdate(@Param("id") UUID id);
 
+    List<KfeExecutionOutboxEntity> findByTransactionId(UUID transactionId);
+
     @Query("""
             select o from KfeExecutionOutboxEntity o
             where o.status = 'UNKNOWN'

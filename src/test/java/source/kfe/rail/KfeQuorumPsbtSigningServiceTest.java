@@ -23,7 +23,9 @@ class KfeQuorumPsbtSigningServiceTest {
             "http://signer-one",
             "api-key",
             "signer-one",
-            true);
+            true,
+            false,
+            "bitcoin-core-wallet");
 
     @Test
     void rejectsFundedPsbtBeforeSigningWhenActualFeeExceedsReservedLimit() {
@@ -44,6 +46,64 @@ class KfeQuorumPsbtSigningServiceTest {
 
         assertThat(preflight.feeSats()).isEqualTo(500L);
         assertThat(preflight.configuredSignerCount()).isEqualTo(1);
+    }
+
+    @Test
+    void localCoreSignerAloneSatisfiesQuorumWhenEnabled() {
+        KfeQuorumPsbtSigningService localOnly = new KfeQuorumPsbtSigningService(
+                bitcoinCoreProvider,
+                mock(RestTemplate.class),
+                new ObjectMapper(),
+                1,
+                6,
+                "",
+                "",
+                "",
+                false,
+                true,
+                "bitcoin-core-wallet");
+
+        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6))
+                .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 200L));
+        when(bitcoinCore.walletProcessPsbt("funded-psbt")).thenReturn("signed-psbt");
+        when(bitcoinCore.combinePsbt(org.mockito.ArgumentMatchers.anyList())).thenReturn("combined-psbt");
+        when(bitcoinCore.finalizePsbt("combined-psbt"))
+                .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("deadbeef", true));
+        when(bitcoinCore.sendRawTransaction("deadbeef")).thenReturn("txid-local");
+
+        var execution = localOnly.execute(new KfeOnchainPaymentGateway.OnchainPaymentCommand(
+                42L,
+                null,
+                "wallet",
+                "bcrt1qdestination",
+                100_000L,
+                500L,
+                "memo",
+                "idem",
+                "proof"));
+
+        assertThat(execution.txid()).isEqualTo("txid-local");
+        assertThat(execution.acceptedSigners()).containsExactly("bitcoin-core-wallet");
+    }
+
+    @Test
+    void rejectsWhenNoSignerSeatsConfigured() {
+        KfeQuorumPsbtSigningService none = new KfeQuorumPsbtSigningService(
+                bitcoinCoreProvider,
+                mock(RestTemplate.class),
+                new ObjectMapper(),
+                1,
+                6,
+                "",
+                "",
+                "",
+                true,
+                false,
+                "bitcoin-core-wallet");
+
+        assertThatThrownBy(() -> none.preflight(command(500L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No quorum PSBT signer");
     }
 
     private KfeOnchainPaymentGateway.OnchainPreflightCommand command(long maxFeeSats) {

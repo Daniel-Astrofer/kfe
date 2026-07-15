@@ -81,6 +81,42 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
                         creditedSats));
     }
 
+    @Override
+    public void notifyDepositDetected(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long creditedSats,
+            int confirmations) {
+        post("/internal/kfe/notifications/deposit-detected",
+                new FinancialDepositConfirmedNotificationRequest(
+                        userId,
+                        transactionId,
+                        walletId,
+                        rail,
+                        creditedSats,
+                        confirmations));
+    }
+
+    @Override
+    public void notifyDepositConfirmationProgress(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long creditedSats,
+            int confirmations) {
+        post("/internal/kfe/notifications/deposit-progress",
+                new FinancialDepositConfirmedNotificationRequest(
+                        userId,
+                        transactionId,
+                        walletId,
+                        rail,
+                        creditedSats,
+                        confirmations));
+    }
+
     private void post(String path, Object request) {
         try {
             restTemplate.postForEntity(baseUrl + path, internalJsonEntity(request), Void.class);

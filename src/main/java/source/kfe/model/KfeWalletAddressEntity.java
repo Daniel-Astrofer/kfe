@@ -150,4 +150,8 @@ public class KfeWalletAddressEntity {
     public LocalDateTime getRetiredAt() {
         return retiredAt;
     }
+
+    public void setRetiredAt(LocalDateTime retiredAt) {
+        this.retiredAt = retiredAt;
+    }
 }

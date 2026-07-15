@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -19,6 +20,7 @@ import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletName;
 import source.kfe.model.KfeWalletStatus;
 import source.common.exception.FinancialProviderUnavailableException;
+import source.kfe.rail.BitcoinCoreRpcClient;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
@@ -54,6 +56,8 @@ public class KfeWalletService {
     private final AddressDerivationService addressDerivationService;
     private final KfeReceiveAddressIssuer receiveAddressIssuer;
     private final TransactionTemplate transactionTemplate;
+    private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+    private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
 
     public KfeWalletService(
             KfeWalletRepository walletRepository,
@@ -67,7 +71,9 @@ public class KfeWalletService {
             KfeDashboardPublisher dashboardPublisher,
             AddressDerivationService addressDerivationService,
             KfeReceiveAddressIssuer receiveAddressIssuer,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService) {
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
         this.balanceService = balanceService;
@@ -80,6 +86,8 @@ public class KfeWalletService {
         this.addressDerivationService = addressDerivationService;
         this.receiveAddressIssuer = receiveAddressIssuer;
         this.transactionTemplate = transactionTemplate;
+        this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
+        this.onchainBalanceSyncService = onchainBalanceSyncService;
     }
 
     public KfeWalletResponse createWallet(Long userId, KfeCreateWalletRequest request) {
@@ -91,13 +99,19 @@ public class KfeWalletService {
         KfeQuorumGateway.Result quorum = requireWalletCreateQuorum(userId, pending, proposalHash);
         String mpcPublicKey = provisionMpcPublicKey(userId, pending);
 
+        final UUID walletId = pending.walletId();
         try {
-            return Objects.requireNonNull(transactionTemplate.execute(status ->
-                    activateWallet(userId, request, pending.walletId(), proposalHash, quorum, mpcPublicKey)));
+            KfeWalletResponse response = Objects.requireNonNull(transactionTemplate.execute(status ->
+                    activateWallet(userId, request, walletId, proposalHash, quorum, mpcPublicKey)));
+            // Core RPC must run AFTER DB commit. Nested @Transactional failures
+            // (scantxoutset / getdescriptorinfo) mark the outer TX rollback-only
+            // even when exceptions are caught — surfacing as UnexpectedRollbackException.
+            runPostActivationChainHooks(walletId);
+            return response;
         } catch (RuntimeException exception) {
             markWalletCreationFailed(
                     userId,
-                    pending.walletId(),
+                    walletId,
                     KfeWalletStatus.KEYGEN_FAILED,
                     "Wallet activation failed: " + safeReason(exception));
             throw exception;
@@ -202,9 +216,13 @@ public class KfeWalletService {
 
         if (hasText(request.initialAddress())) {
             createProvidedAddress(wallet, request);
-        } else if (Boolean.TRUE.equals(request.issueInitialAddress())) {
+        } else if (Boolean.TRUE.equals(request.issueInitialAddress())
+                || shouldAutoIssueWatchOnlyAddress(wallet, request)) {
             issueFreshAddress(wallet, false);
         }
+
+        // Bitcoin Core import + observed balance sync intentionally deferred to
+        // runPostActivationChainHooks() after this transaction commits.
 
         auditLogService.record(
                 "KFE_WALLET_CREATED",
@@ -219,6 +237,188 @@ public class KfeWalletService {
                         "quorumAckCount", quorum.acceptedNodes()));
         dashboardPublisher.publishAfterCommit(userId);
         return responseMapper.toWalletResponse(wallet);
+    }
+
+    /**
+     * Best-effort chain hooks after wallet row is ACTIVE and committed.
+     * Failures never undo wallet creation.
+     */
+    private void runPostActivationChainHooks(UUID walletId) {
+        KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+        if (wallet == null) {
+            return;
+        }
+        importWatchOnlyIntoBitcoinCore(wallet);
+        syncChainObservedBestEffort(wallet);
+    }
+
+    private void syncChainObservedBestEffort(KfeWalletEntity wallet) {
+        if (wallet.getKind() != KfeWalletKind.WATCH_ONLY
+                && wallet.getKind() != KfeWalletKind.CUSTODIAL_ONCHAIN) {
+            return;
+        }
+        KfeOnchainBalanceSyncService sync = onchainBalanceSyncService.getIfAvailable();
+        if (sync == null) {
+            return;
+        }
+        try {
+            sync.syncWallet(wallet.getId());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Wallet] Initial chain balance sync failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        } catch (Exception exception) {
+            log.warn(
+                    "[KFE Wallet] Initial chain balance sync failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    /**
+     * Cold/watch-only wallets should always get a first receive address when an xpub
+     * is present, even if the client forgot {@code issueInitialAddress=true}.
+     */
+    private boolean shouldAutoIssueWatchOnlyAddress(KfeWalletEntity wallet, KfeCreateWalletRequest request) {
+        return wallet.getKind() == KfeWalletKind.WATCH_ONLY
+                && hasText(wallet.getXpub())
+                && !hasText(request.initialAddress());
+    }
+
+    /**
+     * Best-effort Core import so listunspent / payment monitors can see cold funds.
+     * Failure is logged but does not roll back wallet creation (client can still store xpub).
+     */
+    private void importWatchOnlyIntoBitcoinCore(KfeWalletEntity wallet) {
+        if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
+            return;
+        }
+        BitcoinCoreRpcClient core = bitcoinCoreRpcClient.getIfAvailable();
+        if (core == null) {
+            log.warn(
+                    "[KFE Wallet] Bitcoin Core RPC unavailable; watch-only descriptor not imported walletId={}",
+                    wallet.getId());
+            return;
+        }
+        String descriptor = resolveWatchOnlyDescriptor(wallet);
+        if (!hasText(descriptor)) {
+            log.warn(
+                    "[KFE Wallet] No descriptor/xpub to import for watch-only walletId={}",
+                    wallet.getId());
+            return;
+        }
+        try {
+            // Best-effort: shared hot Core wallets with private keys often reject
+            // watch-only descriptor imports (-4). Balance still comes from scantxoutset.
+            core.importWatchOnlyDescriptor(
+                    descriptor,
+                    java.time.LocalDateTime.ofInstant(
+                            java.time.Instant.EPOCH,
+                            java.time.ZoneOffset.UTC));
+            log.info(
+                    "[KFE Wallet] Imported watch-only descriptor into Bitcoin Core walletId={}",
+                    wallet.getId());
+        } catch (RuntimeException exception) {
+            String msg = exception.getMessage() == null ? "" : exception.getMessage();
+            if (msg.contains("private keys") || msg.contains("watch-only")) {
+                log.info(
+                        "[KFE Wallet] Core wallet cannot hold watch-only descriptors walletId={} — using scantxoutset for balance",
+                        wallet.getId());
+            } else {
+                log.warn(
+                        "[KFE Wallet] Failed to import watch-only descriptor walletId={}: {}",
+                        wallet.getId(),
+                        msg);
+            }
+        } catch (Exception exception) {
+            log.warn(
+                    "[KFE Wallet] Failed to import watch-only descriptor walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    private String resolveWatchOnlyDescriptor(KfeWalletEntity wallet) {
+        // Prefer rebuilding from xpub when the stored descriptor looks truncated/invalid.
+        // Historical bug: StringCryptoConverter padded/truncated to 128 bytes and clipped
+        // "/0/*)" off electrum descriptors (≈133+ chars), which Core then rejects.
+        if (hasText(wallet.getDescriptor())) {
+            String stored = rewriteDescriptorXpubsForNetwork(wallet.getDescriptor().trim());
+            if (isUsableOutputDescriptor(stored)) {
+                return stored;
+            }
+            log.warn(
+                    "[KFE Wallet] Stored descriptor unusable for walletId={} (len={}); rebuilding from xpub",
+                    wallet.getId(),
+                    stored.length());
+        }
+        if (!hasText(wallet.getXpub())) {
+            return null;
+        }
+        return buildWpkhReceiveDescriptor(wallet);
+    }
+
+    private String buildWpkhReceiveDescriptor(KfeWalletEntity wallet) {
+        String fingerprint = hasText(wallet.getFingerprint())
+                ? wallet.getFingerprint().trim()
+                : "00000000";
+        String accountPath = hasText(wallet.getDerivationPath())
+                ? wallet.getDerivationPath().trim().replaceFirst("^m/", "").replace("'", "h")
+                : "84h/0h/0h";
+        // Electrum standard account path is bare "m" → omit path in origin if empty.
+        String origin = accountPath.isEmpty() || "m".equalsIgnoreCase(accountPath)
+                ? fingerprint
+                : fingerprint + "/" + accountPath;
+        String networkXpub = addressDerivationService.toNetworkExtendedPublicKey(wallet.getXpub().trim());
+        return "wpkh([" + origin + "]" + networkXpub + "/0/*)";
+    }
+
+    /**
+     * Minimal structural check before handing a descriptor to Bitcoin Core.
+     * Truncated ciphertext decrypts to strings missing the closing {@code /*)} branch.
+     */
+    private static boolean isUsableOutputDescriptor(String descriptor) {
+        if (descriptor == null || descriptor.isBlank()) {
+            return false;
+        }
+        String bare = descriptor.trim();
+        int hash = bare.indexOf('#');
+        if (hash >= 0) {
+            bare = bare.substring(0, hash);
+        }
+        if (!bare.contains("(") || !bare.endsWith(")")) {
+            return false;
+        }
+        // Range descriptors we import always include a wildcard branch.
+        if (bare.contains("/*") || bare.matches(".*\\)/\\d+\\)$")) {
+            return true;
+        }
+        // addr(...) or raw single-key without wildcard is still usable.
+        return bare.startsWith("addr(") || bare.startsWith("raw(");
+    }
+
+    private String rewriteDescriptorXpubsForNetwork(String descriptor) {
+        if (descriptor == null || descriptor.isBlank()) {
+            return descriptor;
+        }
+        // Match xpub/tpub/ypub/zpub/upub/vpub base58 bodies and re-encode for this network.
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "\\b([xtyzuv]pub[1-9A-HJ-NP-Za-km-z]{20,})\\b");
+        java.util.regex.Matcher matcher = pattern.matcher(descriptor);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            String raw = matcher.group(1);
+            String rewritten;
+            try {
+                rewritten = addressDerivationService.toNetworkExtendedPublicKey(raw);
+            } catch (RuntimeException ignored) {
+                rewritten = raw;
+            }
+            matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(rewritten));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
     }
 
     @Transactional(readOnly = true)
@@ -310,8 +510,9 @@ public class KfeWalletService {
     private PendingAddressRotation beginAddressRotation(Long userId, UUID walletId) {
         KfeWalletEntity wallet = walletRepository.findByIdAndUserIdForUpdate(walletId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
-        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
-            throw new IllegalArgumentException("WATCH_ONLY wallets do not issue receiving addresses.");
+        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY && !hasText(wallet.getXpub())) {
+            throw new IllegalArgumentException(
+                    "WATCH_ONLY wallets require an XPUB to issue receiving addresses.");
         }
         requireActive(wallet);
 
@@ -383,10 +584,19 @@ public class KfeWalletService {
                     addressDerivationService.deriveAddressDetailsFromXpub(wallet.getXpub(), nextIndex);
             wallet.setLastDerivedIndex(nextIndex);
             walletRepository.save(wallet);
+            String accountPath = hasText(wallet.getDerivationPath())
+                    ? wallet.getDerivationPath().trim()
+                    : "m/84'/0'/0'";
+            if ("m".equals(accountPath) || "m/".equals(accountPath)) {
+                accountPath = "m";
+            }
+            String childPath = "m".equals(accountPath)
+                    ? "m/0/" + nextIndex
+                    : accountPath + "/0/" + nextIndex;
             return saveAddress(
                     wallet,
                     derived.address(),
-                    "m/84'/0'/0'/0/" + nextIndex,
+                    childPath,
                     nextIndex,
                     "KFE_XPUB_DERIVATION");
         }
@@ -420,9 +630,41 @@ public class KfeWalletService {
             String derivationPath,
             Integer derivationIndex,
             String providerReference) {
+        String normalized = addressValue == null ? "" : addressValue.trim();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("Address is required.");
+        }
+
+        // Re-import of the same seed/xpub reuses the same first receive address.
+        // Unique constraint on address must not fail create after archive/KEYGEN_FAILED.
+        java.util.Optional<KfeWalletAddressEntity> existing =
+                addressRepository.findFirstByAddressIgnoreCase(normalized);
+        if (existing.isPresent()) {
+            KfeWalletAddressEntity address = existing.get();
+            if (!wallet.getId().equals(address.getWalletId())) {
+                KfeWalletEntity previous = walletRepository.findById(address.getWalletId()).orElse(null);
+                if (previous != null && previous.getStatus() == KfeWalletStatus.ACTIVE
+                        && !previous.getId().equals(wallet.getId())) {
+                    throw new IllegalArgumentException(
+                            "Este endereço já está vinculado a outra carteira ativa. "
+                                    + "Arquive a carteira antiga antes de reimportar a mesma seed.");
+                }
+                address.setWalletId(wallet.getId());
+            }
+            address.setAddressRole(KfeWalletAddressRole.RECEIVE);
+            address.setStatus(KfeWalletAddressStatus.ACTIVE);
+            address.setDerivationPath(derivationPath);
+            address.setDerivationIndex(derivationIndex);
+            if (hasText(providerReference)) {
+                address.setProviderReference(providerReference);
+            }
+            address.setRetiredAt(null);
+            return addressRepository.save(address);
+        }
+
         KfeWalletAddressEntity address = new KfeWalletAddressEntity();
         address.setWalletId(wallet.getId());
-        address.setAddress(addressValue);
+        address.setAddress(normalized);
         address.setAddressRole(KfeWalletAddressRole.RECEIVE);
         address.setStatus(KfeWalletAddressStatus.ACTIVE);
         address.setDerivationPath(derivationPath);

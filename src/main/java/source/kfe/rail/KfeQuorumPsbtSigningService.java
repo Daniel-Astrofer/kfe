@@ -21,6 +21,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Production PSBT signing for custodial on-chain outbounds.
+ *
+ * <p>Signers may be:
+ * <ul>
+ *   <li>Remote HTTP endpoints ({@code quorum.psbt.signer-urls}) — multiparty HSM/sidecar nodes</li>
+ *   <li>Local Bitcoin Core wallet ({@code quorum.psbt.local-core-signer-enabled}) via
+ *       {@code walletprocesspsbt} — first-class when keys live in Core (or as one quorum seat)</li>
+ * </ul>
+ *
+ * Quorum requires {@code required-signatures} distinct successful signatures before
+ * combine → finalize → broadcast.
+ */
 @Service
 public class KfeQuorumPsbtSigningService {
 
@@ -35,6 +48,8 @@ public class KfeQuorumPsbtSigningService {
     private final List<String> signerApiKeys;
     private final List<String> signerIds;
     private final boolean requireSignerIdentity;
+    private final boolean localCoreSignerEnabled;
+    private final String localCoreSignerId;
 
     public KfeQuorumPsbtSigningService(
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
@@ -45,7 +60,9 @@ public class KfeQuorumPsbtSigningService {
             @Value("${quorum.psbt.signer-urls:}") String signerUrls,
             @Value("${quorum.psbt.signer-api-keys:}") String signerApiKeys,
             @Value("${quorum.psbt.signer-ids:}") String signerIds,
-            @Value("${quorum.psbt.require-signer-identity:true}") boolean requireSignerIdentity) {
+            @Value("${quorum.psbt.require-signer-identity:true}") boolean requireSignerIdentity,
+            @Value("${quorum.psbt.local-core-signer-enabled:false}") boolean localCoreSignerEnabled,
+            @Value("${quorum.psbt.local-core-signer-id:bitcoin-core-wallet}") String localCoreSignerId) {
         this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
@@ -55,6 +72,8 @@ public class KfeQuorumPsbtSigningService {
         this.signerApiKeys = splitCsv(signerApiKeys);
         this.signerIds = splitCsv(signerIds);
         this.requireSignerIdentity = requireSignerIdentity;
+        this.localCoreSignerEnabled = localCoreSignerEnabled;
+        this.localCoreSignerId = firstNonBlank(localCoreSignerId, "bitcoin-core-wallet");
     }
 
     public OnchainFundingPreflight preflight(KfeOnchainPaymentGateway.OnchainPreflightCommand command) {
@@ -69,7 +88,7 @@ public class KfeQuorumPsbtSigningService {
         return new OnchainFundingPreflight(
                 fundedPsbt.feeSats(),
                 sha256(fundedPsbt.psbt()),
-                signerUrls.size());
+                configuredSignerCount());
     }
 
     public OnchainExecution execute(KfeOnchainPaymentGateway.OnchainPaymentCommand command) {
@@ -94,6 +113,27 @@ public class KfeQuorumPsbtSigningService {
         partialPsbts.add(fundedPsbt.psbt());
         List<String> acceptedSigners = new ArrayList<>();
 
+        // 1) Local Core wallet is a first-class production signer seat when enabled.
+        if (localCoreSignerEnabled && acceptedSigners.size() < requiredSignatures) {
+            try {
+                String signed = bitcoinCore.walletProcessPsbt(fundedPsbt.psbt());
+                if (signed != null && !signed.isBlank()) {
+                    partialPsbts.add(signed);
+                    acceptedSigners.add(localCoreSignerId);
+                    log.info(
+                            "[KFE-PSBT] event=PSBT_LOCAL_CORE_SIGNED userRef={} signerId={}",
+                            LogSanitizer.fingerprint(String.valueOf(command.userId())),
+                            localCoreSignerId);
+                }
+            } catch (Exception ex) {
+                log.warn(
+                        "[KFE-PSBT] event=PSBT_LOCAL_CORE_SIGNER_UNAVAILABLE userRef={} error={}",
+                        LogSanitizer.fingerprint(String.valueOf(command.userId())),
+                        ex.getMessage());
+            }
+        }
+
+        // 2) Remote multiparty / HSM signers
         for (int index = 0; index < signerUrls.size(); index++) {
             if (acceptedSigners.size() >= requiredSignatures) {
                 break;
@@ -123,7 +163,8 @@ public class KfeQuorumPsbtSigningService {
 
         if (acceptedSigners.size() < requiredSignatures) {
             throw new IllegalStateException(
-                    "Quorum signing failed: " + acceptedSigners.size() + " of " + requiredSignatures + " signers responded.");
+                    "Quorum signing failed: " + acceptedSigners.size() + " of " + requiredSignatures
+                            + " signers responded (configuredSeats=" + configuredSignerCount() + ").");
         }
 
         String combinedPsbt = bitcoinCore.combinePsbt(partialPsbts);
@@ -238,14 +279,25 @@ public class KfeQuorumPsbtSigningService {
     }
 
     private void requireSignerCapacity() {
-        if (signerUrls.isEmpty()) {
-            throw new IllegalStateException("No quorum PSBT signer endpoints are configured.");
+        int seats = configuredSignerCount();
+        if (seats == 0) {
+            throw new IllegalStateException(
+                    "No quorum PSBT signer endpoints are configured. "
+                            + "Set quorum.psbt.signer-urls and/or enable quorum.psbt.local-core-signer-enabled.");
         }
-        if (signerUrls.size() < requiredSignatures) {
+        if (seats < requiredSignatures) {
             throw new IllegalStateException(
                     "Quorum signing requires " + requiredSignatures + " signers but only "
-                            + signerUrls.size() + " endpoints are configured.");
+                            + seats + " seats are configured.");
         }
+    }
+
+    private int configuredSignerCount() {
+        int remote = signerUrls.size();
+        if (localCoreSignerEnabled && bitcoinCoreRpcClient.getIfAvailable() != null) {
+            return remote + 1;
+        }
+        return remote;
     }
 
     private void validateFundedPsbt(BitcoinCoreRpcClient.FundedPsbt fundedPsbt, long maxFeeSats) {
@@ -314,6 +366,7 @@ public class KfeQuorumPsbtSigningService {
         metadata.put("acceptedSigners", acceptedSigners);
         metadata.put("acceptedSignerCount", acceptedSigners.size());
         metadata.put("requiredSignatures", requiredSignatures);
+        metadata.put("localCoreSignerEnabled", localCoreSignerEnabled);
         metadata.put("feeSats", feeSats);
         metadata.put("txid", txid);
         try {
@@ -333,6 +386,13 @@ public class KfeQuorumPsbtSigningService {
         } catch (Exception exception) {
             throw new IllegalStateException("Unable to hash PSBT metadata.", exception);
         }
+    }
+
+    private static String firstNonBlank(String value, String fallback) {
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        return fallback;
     }
 
     public record OnchainFundingPreflight(

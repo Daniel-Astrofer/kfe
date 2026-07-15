@@ -14,6 +14,8 @@ public class KfeHttpClientConfiguration {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(20);
+    /** scantxoutset over testnet4 UTXO set often exceeds 20s under load. */
+    private static final Duration BITCOIND_READ_TIMEOUT = Duration.ofSeconds(120);
 
     @Bean("custodyRestTemplate")
     public RestTemplate custodyRestTemplate(RestTemplateBuilder builder) {
@@ -27,7 +29,10 @@ public class KfeHttpClientConfiguration {
 
     @Bean("bitcoindRestTemplate")
     public RestTemplate bitcoindRestTemplate(RestTemplateBuilder builder) {
-        return externalRailTemplate(builder);
+        return builder
+                .connectTimeout(CONNECT_TIMEOUT)
+                .readTimeout(BITCOIND_READ_TIMEOUT)
+                .build();
     }
 
     @Bean("lndRestTemplate")

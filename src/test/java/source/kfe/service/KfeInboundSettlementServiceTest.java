@@ -17,6 +17,7 @@ import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfeExecutionOutboxRepository;
 import source.kfe.repository.KfeIdempotencyRepository;
 import source.kfe.repository.KfeTransactionRepository;
+import source.kfe.repository.KfeWalletRepository;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -46,6 +47,9 @@ class KfeInboundSettlementServiceTest {
     private KfeIdempotencyRepository idempotencyRepository;
 
     @Mock
+    private KfeWalletRepository walletRepository;
+
+    @Mock
     private KfeBalanceService balanceService;
 
     @Mock
@@ -70,18 +74,24 @@ class KfeInboundSettlementServiceTest {
 
     @BeforeEach
     void setUp() {
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        org.mockito.Mockito.lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
         service = new KfeInboundSettlementService(
                 transactionRepository,
                 outboxRepository,
                 movementRepository,
                 idempotencyRepository,
+                walletRepository,
                 balanceService,
                 auditLogService,
                 statementService,
                 dashboardPublisher,
                 hashService,
                 notificationPort,
-                feeSettlementService
+                feeSettlementService,
+                onchainSync
         );
     }
 

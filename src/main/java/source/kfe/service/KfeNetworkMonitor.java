@@ -63,7 +63,8 @@ public class KfeNetworkMonitor {
         this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.objectMapper = objectMapper;
         this.batchSize = Math.max(1, batchSize);
-        this.minOnchainConfirmations = Math.max(1, minOnchainConfirmations);
+        // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
+        this.minOnchainConfirmations = Math.max(0, minOnchainConfirmations);
     }
 
     @Scheduled(

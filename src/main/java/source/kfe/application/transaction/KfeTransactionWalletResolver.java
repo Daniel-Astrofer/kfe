@@ -63,23 +63,31 @@ public class KfeTransactionWalletResolver {
         }
 
         if (request.direction() == KfeDirection.OUTBOUND && request.externalReference() != null) {
-            requireNotOwnPlatformAddress(userId, request.externalReference());
+            requireNotOwnPlatformAddress(userId, request);
         }
     }
 
+    /**
+     * Blocks only the trivial loop source → same destination wallet.
+     * Moving between a user's own wallets (e.g. INTERNAL → CUSTODIAL_ONCHAIN)
+     * is a portfolio rebalance and must be allowed.
+     */
     private void requireNotInternalSelfPayment(Long userId, KfeSubmitTransactionRequest request) {
-        if (request.destinationWalletId() == null) {
+        if (request.destinationWalletId() == null || request.sourceWalletId() == null) {
             return;
         }
-        walletRepository.findById(request.destinationWalletId())
-                .filter(wallet -> wallet.getUserId().equals(userId))
-                .ifPresent(wallet -> {
-                    throw new FinancialSelfPaymentException();
-                });
+        if (request.sourceWalletId().equals(request.destinationWalletId())) {
+            throw new FinancialSelfPaymentException();
+        }
     }
 
-    private void requireNotOwnPlatformAddress(Long userId, String externalReference) {
-        String address = externalReference.trim();
+    /**
+     * Blocks on-chain sends only when the destination address belongs to the
+     * same source wallet (circular). Funding another of the user's wallets
+     * (custodial on-chain, cold/watch-only, etc.) is allowed.
+     */
+    private void requireNotOwnPlatformAddress(Long userId, KfeSubmitTransactionRequest request) {
+        String address = request.externalReference() != null ? request.externalReference().trim() : "";
         if (address.isEmpty()) {
             return;
         }
@@ -87,7 +95,11 @@ public class KfeTransactionWalletResolver {
                 .flatMap(addressEntity -> walletRepository.findById(addressEntity.getWalletId()))
                 .filter(wallet -> wallet.getUserId().equals(userId))
                 .ifPresent(wallet -> {
-                    throw new FinancialSelfPaymentException();
+                    if (request.sourceWalletId() != null
+                            && wallet.getId().equals(request.sourceWalletId())) {
+                        throw new FinancialSelfPaymentException();
+                    }
+                    // Different wallet of the same user (custodial on-chain / cold) — allow.
                 });
     }
 

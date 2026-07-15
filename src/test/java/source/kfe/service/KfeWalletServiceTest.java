@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.service.AddressDerivationService;
@@ -14,6 +15,7 @@ import source.kfe.dto.KfeWalletResponse;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
+import source.kfe.rail.BitcoinCoreRpcClient;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
@@ -69,10 +71,18 @@ class KfeWalletServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    @Mock
+    private ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+
     private KfeWalletService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(null);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
+                mock(ObjectProvider.class);
+        lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
         service = new KfeWalletService(
                 walletRepository,
                 addressRepository,
@@ -85,7 +95,9 @@ class KfeWalletServiceTest {
                 dashboardPublisher,
                 addressDerivationService,
                 receiveAddressIssuer,
-                transactionTemplate
+                transactionTemplate,
+                bitcoinCoreRpcClient,
+                onchainSync
         );
     }
 

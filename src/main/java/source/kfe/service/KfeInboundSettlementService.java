@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import source.common.financial.FinancialNotificationPort;
@@ -10,10 +11,13 @@ import source.kfe.model.KfeExecutionOutboxEntity;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
+import source.kfe.model.KfeWalletEntity;
+import source.kfe.model.KfeWalletKind;
 import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfeExecutionOutboxRepository;
 import source.kfe.repository.KfeIdempotencyRepository;
 import source.kfe.repository.KfeTransactionRepository;
+import source.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -30,6 +34,7 @@ public class KfeInboundSettlementService {
     private final KfeExecutionOutboxRepository outboxRepository;
     private final KfeBalanceMovementRepository movementRepository;
     private final KfeIdempotencyRepository idempotencyRepository;
+    private final KfeWalletRepository walletRepository;
     private final KfeBalanceService balanceService;
     private final KfeAuditLogService auditLogService;
     private final KfeStatementService statementService;
@@ -37,23 +42,27 @@ public class KfeInboundSettlementService {
     private final KfeHashService hashService;
     private final FinancialNotificationPort notificationPort;
     private final KfeFeeSettlementService feeSettlementService;
+    private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
 
     public KfeInboundSettlementService(
             KfeTransactionRepository transactionRepository,
             KfeExecutionOutboxRepository outboxRepository,
             KfeBalanceMovementRepository movementRepository,
             KfeIdempotencyRepository idempotencyRepository,
+            KfeWalletRepository walletRepository,
             KfeBalanceService balanceService,
             KfeAuditLogService auditLogService,
             KfeStatementService statementService,
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
             FinancialNotificationPort notificationPort,
-            KfeFeeSettlementService feeSettlementService) {
+            KfeFeeSettlementService feeSettlementService,
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService) {
         this.transactionRepository = transactionRepository;
         this.outboxRepository = outboxRepository;
         this.movementRepository = movementRepository;
         this.idempotencyRepository = idempotencyRepository;
+        this.walletRepository = walletRepository;
         this.balanceService = balanceService;
         this.auditLogService = auditLogService;
         this.statementService = statementService;
@@ -61,6 +70,7 @@ public class KfeInboundSettlementService {
         this.hashService = hashService;
         this.notificationPort = notificationPort;
         this.feeSettlementService = feeSettlementService;
+        this.onchainBalanceSyncService = onchainBalanceSyncService;
     }
 
     @Transactional
@@ -103,8 +113,7 @@ public class KfeInboundSettlementService {
             return false;
         }
 
-        balanceService.creditAvailable(tx.getDestinationWalletId(), ASSET_BTC, creditSats);
-        movement(tx.getId(), tx.getDestinationWalletId(), "CREDIT_INBOUND", creditSats, null, "AVAILABLE");
+        creditInbound(tx.getDestinationWalletId(), tx.getId(), creditSats);
 
         KfeTransactionStatus previous = tx.getStatus();
         tx.setProvider(trim(proof.provider(), 64));
@@ -181,6 +190,39 @@ public class KfeInboundSettlementService {
         outbox.setNextAttemptAt(null);
         clearClaim(outbox);
         outboxRepository.save(outbox);
+    }
+
+    private void creditInbound(UUID walletId, UUID transactionId, long creditSats) {
+        KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+        boolean watchOnly = wallet != null
+                && (wallet.getKind() == KfeWalletKind.WATCH_ONLY || !wallet.isSpendable());
+        if (watchOnly) {
+            long chainSats = resyncChainObserved(walletId);
+            long recorded = chainSats >= 0L ? chainSats : creditSats;
+            movement(transactionId, walletId, "CHAIN_OBSERVED_SYNC", recorded, null, "OBSERVED");
+            return;
+        }
+        balanceService.creditAvailable(walletId, ASSET_BTC, creditSats);
+        movement(transactionId, walletId, "CREDIT_INBOUND", creditSats, null, "AVAILABLE");
+        if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+            resyncChainObserved(walletId);
+        }
+    }
+
+    private long resyncChainObserved(UUID walletId) {
+        KfeOnchainBalanceSyncService sync = onchainBalanceSyncService.getIfAvailable();
+        if (sync == null) {
+            return -1L;
+        }
+        try {
+            return sync.syncWallet(walletId);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Inbound Settlement] chain balance sync failed walletId={}: {}",
+                    walletId,
+                    exception.getMessage());
+            return -1L;
+        }
     }
 
     private void movement(

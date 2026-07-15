@@ -90,6 +90,51 @@ public class KfeBalanceService {
         return saved;
     }
 
+    /**
+     * Increments observed balance. Prefer {@link #setObserved} with an absolute chain probe for
+     * WATCH_ONLY / CUSTODIAL_ONCHAIN — observed must reflect the blockchain, not a private ledger.
+     */
+    public KfeBalanceEntity creditObserved(UUID walletId, String asset, long amountSats) {
+        if (amountSats <= 0L) {
+            throw new IllegalArgumentException("observed credit amount must be positive.");
+        }
+        KfeBalanceEntity balance = requireForUpdate(walletId, asset);
+        long next = balance.getObservedSats() + amountSats;
+        balance.setObservedBalance(next);
+        sign(balance);
+        KfeBalanceEntity saved = balanceRepository.save(balance);
+        publishBalanceUpdate(walletId, saved.getObservedSats(), amountSats, "crédito observado");
+        return saved;
+    }
+
+    /**
+     * Cold wallets must never carry spendable internal buckets. Clears available/pending/locked/auto-hold
+     * if any non-zero residual leaked in (defensive).
+     */
+    public KfeBalanceEntity zeroSpendableBucketsIfNeeded(UUID walletId, String asset) {
+        KfeBalanceEntity balance = requireForUpdate(walletId, asset);
+        if (balance.getAvailableSats() == 0L
+                && balance.getPendingSats() == 0L
+                && balance.getLockedSats() == 0L
+                && balance.getAutoHoldSats() == 0L) {
+            return balance;
+        }
+        log.warn(
+                "Clearing non-zero spendable buckets on cold/watch-only walletId={} available={} pending={} locked={} autoHold={}",
+                walletId,
+                balance.getAvailableSats(),
+                balance.getPendingSats(),
+                balance.getLockedSats(),
+                balance.getAutoHoldSats());
+        balance.setAvailableSats(0L);
+        balance.setPendingSats(0L);
+        balance.setLockedSats(0L);
+        balance.setAutoHoldSats(0L);
+        balance.setNonce(balance.getNonce() + 1);
+        sign(balance);
+        return balanceRepository.save(balance);
+    }
+
     private void sign(KfeBalanceEntity balance) {
         String hash = hashService.balanceHash(balance);
         balance.setLastHash(hash);

@@ -89,6 +89,37 @@ public interface BlockchainClient {
         return total;
     }
 
+    /**
+     * Confirmed UTXO-set balance for an output descriptor (e.g. {@code wpkh(xpub/0/*)}).
+     * Uses {@code scantxoutset} — independent of wallet-internal ledger.
+     */
+    default long getConfirmedBalanceForDescriptor(String descriptor, int range) {
+        if (descriptor == null || descriptor.isBlank()) {
+            return 0L;
+        }
+        return scanDescriptorBalance(descriptor.trim(), Math.max(1, range));
+    }
+
+    /**
+     * Sum of unspent outputs for specific addresses (includes 0-conf when Core reports them).
+     * Always filter by address set — never sum the entire shared Core wallet.
+     */
+    default long getUnspentBalanceForAddresses(List<String> addresses) {
+        if (addresses == null || addresses.isEmpty()) {
+            return 0L;
+        }
+        long total = 0L;
+        for (String address : addresses) {
+            if (address == null || address.isBlank()) {
+                continue;
+            }
+            for (AddressUtxo utxo : getUnspentOutputs(address.trim())) {
+                total = Math.addExact(total, utxo.valueSats());
+            }
+        }
+        return total;
+    }
+
     default List<AddressUtxo> getUnspentOutputs(String address) {
         if (address == null || address.isBlank()) {
             return List.of();

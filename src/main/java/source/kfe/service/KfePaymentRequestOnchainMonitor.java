@@ -19,9 +19,12 @@ import source.kfe.model.KfePaymentRequestStatus;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
+import source.kfe.model.KfeWalletEntity;
+import source.kfe.model.KfeWalletKind;
 import source.kfe.rail.BlockchainClient;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
+import source.kfe.repository.KfeWalletRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -42,6 +45,7 @@ public class KfePaymentRequestOnchainMonitor {
 
     private final KfePaymentRequestRepository paymentRequestRepository;
     private final KfeTransactionRepository transactionRepository;
+    private final KfeWalletRepository walletRepository;
     private final ObjectProvider<BlockchainClient> blockchainClient;
     private final KfePricingService pricingService;
     private final KfeBalanceService balanceService;
@@ -52,12 +56,14 @@ public class KfePaymentRequestOnchainMonitor {
     private final KfeDashboardPublisher dashboardPublisher;
     private final FinancialNotificationPort notificationPort;
     private final TransactionTemplate transactionTemplate;
+    private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final int batchSize;
     private final int minConfirmations;
 
     public KfePaymentRequestOnchainMonitor(
             KfePaymentRequestRepository paymentRequestRepository,
             KfeTransactionRepository transactionRepository,
+            KfeWalletRepository walletRepository,
             ObjectProvider<BlockchainClient> blockchainClient,
             KfePricingService pricingService,
             KfeBalanceService balanceService,
@@ -68,11 +74,13 @@ public class KfePaymentRequestOnchainMonitor {
             KfeDashboardPublisher dashboardPublisher,
             FinancialNotificationPort notificationPort,
             TransactionTemplate transactionTemplate,
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             @Value("${kfe.payment-request-monitor.batch-size:50}") int batchSize,
             @Value("${kfe.payment-request-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
             int minConfirmations) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
+        this.walletRepository = walletRepository;
         this.blockchainClient = blockchainClient;
         this.pricingService = pricingService;
         this.balanceService = balanceService;
@@ -83,8 +91,10 @@ public class KfePaymentRequestOnchainMonitor {
         this.dashboardPublisher = dashboardPublisher;
         this.notificationPort = notificationPort;
         this.transactionTemplate = transactionTemplate;
+        this.onchainBalanceSyncService = onchainBalanceSyncService;
         this.batchSize = Math.max(1, batchSize);
-        this.minConfirmations = Math.max(1, minConfirmations);
+        // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
+        this.minConfirmations = Math.max(0, minConfirmations);
     }
 
     @Scheduled(
@@ -157,6 +167,7 @@ public class KfePaymentRequestOnchainMonitor {
             if (existing.getConfirmations() < payment.confirmations()) {
                 existing.setConfirmations(payment.confirmations());
                 transactionRepository.save(existing);
+                notifyDepositConfirmationProgress(request, existing, payment);
             }
             recordObservedStatementIfAbsent(request, existing, payment, existing.getReceiverAmountSats());
             return;
@@ -185,6 +196,7 @@ public class KfePaymentRequestOnchainMonitor {
         tx.setConfirmations(payment.confirmations());
         tx.setStatus(KfeTransactionStatus.VALIDATING);
         transactionRepository.save(tx);
+        notifyDepositDetected(request, tx, payment);
         recordObservedStatementIfAbsent(request, tx, payment, quote.receiverAmountSats());
 
         auditLogService.record(
@@ -243,8 +255,7 @@ public class KfePaymentRequestOnchainMonitor {
         tx.setStatus(KfeTransactionStatus.SETTLED);
         tx = transactionRepository.save(tx);
 
-        balanceService.creditAvailable(request.getWalletId(), ASSET_BTC, quote.receiverAmountSats());
-        movementRecorder.record(tx.getId(), request.getWalletId(), "CREDIT_PAYMENT_REQUEST", quote.receiverAmountSats(), null, "AVAILABLE");
+        creditInboundToWallet(request.getWalletId(), tx.getId(), quote.receiverAmountSats());
         feeSettlementService.creditKeroseneFee(tx);
         request.markPaid(tx.getId());
         paymentRequestRepository.save(request);
@@ -321,6 +332,49 @@ public class KfePaymentRequestOnchainMonitor {
         }
     }
 
+    /**
+     * Balance model by custody:
+     * <ul>
+     *   <li>WATCH_ONLY — only blockchain observed balance (absolute resync; never internal available).</li>
+     *   <li>CUSTODIAL_ONCHAIN — internal available (authorization) + chain observed resync.</li>
+     *   <li>INTERNAL — internal available only.</li>
+     * </ul>
+     */
+    private void creditInboundToWallet(UUID walletId, UUID transactionId, long amountSats) {
+        KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+        boolean watchOnly = wallet != null
+                && (wallet.getKind() == KfeWalletKind.WATCH_ONLY || !wallet.isSpendable());
+        if (watchOnly) {
+            long chainSats = resyncChainObserved(walletId);
+            long recorded = chainSats >= 0L ? chainSats : amountSats;
+            movementRecorder.record(
+                    transactionId, walletId, "CHAIN_OBSERVED_SYNC", recorded, null, "OBSERVED");
+            return;
+        }
+        balanceService.creditAvailable(walletId, ASSET_BTC, amountSats);
+        movementRecorder.record(
+                transactionId, walletId, "CREDIT_PAYMENT_REQUEST", amountSats, null, "AVAILABLE");
+        if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+            resyncChainObserved(walletId);
+        }
+    }
+
+    private long resyncChainObserved(UUID walletId) {
+        KfeOnchainBalanceSyncService sync = onchainBalanceSyncService.getIfAvailable();
+        if (sync == null) {
+            return -1L;
+        }
+        try {
+            return sync.syncWallet(walletId);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE PaymentRequest Monitor] chain balance sync failed walletId={}: {}",
+                    walletId,
+                    exception.getMessage());
+            return -1L;
+        }
+    }
+
     private boolean satisfiesRequestedAmount(KfePaymentRequestEntity request, long observedSats) {
         return request.getAmountSats() == null || observedSats >= request.getAmountSats();
     }
@@ -392,6 +446,40 @@ public class KfePaymentRequestOnchainMonitor {
     private String text(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isTextual() && !value.asText().isBlank() ? value.asText().trim() : null;
+    }
+
+    private void notifyDepositDetected(KfePaymentRequestEntity request, KfeTransactionEntity tx, ObservedPayment payment) {
+        try {
+            notificationPort.notifyDepositDetected(
+                    request.getUserId(),
+                    tx.getId(),
+                    request.getWalletId(),
+                    request.getRail().name(),
+                    tx.getReceiverAmountSats(),
+                    payment.confirmations());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "KFE deposit detected notification failed. paymentRequestId={} error={}",
+                    request.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    private void notifyDepositConfirmationProgress(KfePaymentRequestEntity request, KfeTransactionEntity tx, ObservedPayment payment) {
+        try {
+            notificationPort.notifyDepositConfirmationProgress(
+                    request.getUserId(),
+                    tx.getId(),
+                    request.getWalletId(),
+                    request.getRail().name(),
+                    tx.getReceiverAmountSats(),
+                    payment.confirmations());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "KFE deposit confirmation progress notification failed. paymentRequestId={} error={}",
+                    request.getId(),
+                    exception.getMessage());
+        }
     }
 
     public record ObservedPayment(String txid, long observedSats, int confirmations, String rawPayload) {

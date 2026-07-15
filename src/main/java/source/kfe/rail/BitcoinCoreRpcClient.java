@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -33,6 +35,7 @@ import java.util.UUID;
 @ConditionalOnProperty(prefix = "bitcoin.rpc", name = "enabled", havingValue = "true")
 public class BitcoinCoreRpcClient implements BlockchainClient {
 
+    private static final Logger log = LoggerFactory.getLogger(BitcoinCoreRpcClient.class);
     private static final BigDecimal SATOSHIS_PER_BITCOIN = new BigDecimal("100000000");
 
     private final RestTemplate restTemplate;
@@ -99,7 +102,14 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             }
             return body;
         } catch (Exception ex) {
-            throw new IllegalStateException("Bitcoin Core RPC request failed for method " + method, ex);
+            throw new IllegalStateException(
+                    "Bitcoin Core RPC request failed for method "
+                            + method
+                            + ": "
+                            + ex.getClass().getSimpleName()
+                            + ": "
+                            + ex.getMessage(),
+                    ex);
         }
     }
 
@@ -247,19 +257,182 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         return new FundedPsbt(psbt, feeSats);
     }
 
+    /**
+     * Imports a watch-only output descriptor into the configured Core wallet so
+     * {@code listunspent}/{@code listreceivedbyaddress} can see cold funds.
+     * Also attempts the matching change branch when the descriptor ends with {@code /0/*}.
+     */
     public void importWatchOnlyDescriptor(String descriptor, LocalDateTime timestamp) {
         if (descriptor == null || descriptor.isBlank()) {
             throw new IllegalArgumentException("descriptor is required");
         }
+        String receive = withDescriptorChecksum(descriptor.trim());
+        importDescriptorInternal(receive, timestamp);
+        String change = toChangeDescriptor(receive);
+        if (change != null && !change.equals(receive)) {
+            try {
+                importDescriptorInternal(withDescriptorChecksum(change), timestamp);
+            } catch (RuntimeException exception) {
+                // Receive import is enough for funding; change is best-effort for PSBT change detection.
+            }
+        }
+    }
+
+    private void importDescriptorInternal(String descriptor, LocalDateTime timestamp) {
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("desc", descriptor.trim());
-        request.put("timestamp", "now");
-        request.put("active", true);
-        request.put("watchonly", true);
+        request.put("desc", descriptor);
+        if (timestamp != null) {
+            request.put("timestamp", timestamp.toEpochSecond(java.time.ZoneOffset.UTC));
+        } else {
+            request.put("timestamp", "now");
+        }
+        // Cold watch-only: do NOT mark active (would conflict with hot wallet active
+        // receive descriptors) and never set label on ranged descs (Core error -8).
+        // Do not send "watchonly" — descriptor wallets reject / ignore it.
+        request.put("active", false);
+        request.put("internal", descriptor.contains("/1/*"));
         if (descriptor.contains("*")) {
             request.put("range", List.of(0, 1000));
         }
-        unwrapResult(executeRpc("importdescriptors", List.of(request)));
+        // importdescriptors takes a single param: array of descriptor request objects.
+        JsonNode result = unwrapResult(executeRpc("importdescriptors", List.of(request)));
+        requireImportSuccess(result, descriptor);
+    }
+
+    private static void requireImportSuccess(JsonNode result, String descriptor) {
+        if (result == null || !result.isArray() || result.isEmpty()) {
+            throw new IllegalStateException(
+                    "importdescriptors returned empty result for descriptor "
+                            + abbreviateDescriptor(descriptor));
+        }
+        for (JsonNode item : result) {
+            if (item != null && item.path("success").asBoolean(false)) {
+                return;
+            }
+        }
+        String error = result.get(0).path("error").path("message").asText("unknown error");
+        throw new IllegalStateException(
+                "importdescriptors failed for "
+                        + abbreviateDescriptor(descriptor)
+                        + ": "
+                        + error);
+    }
+
+    private static String abbreviateDescriptor(String descriptor) {
+        if (descriptor == null) {
+            return "null";
+        }
+        String bare = descriptor.trim();
+        return bare.length() <= 48 ? bare : bare.substring(0, 48) + "…";
+    }
+
+    private String withDescriptorChecksum(String descriptor) {
+        String bare = descriptor;
+        int hash = bare.indexOf('#');
+        if (hash >= 0) {
+            bare = bare.substring(0, hash);
+        }
+        // Node-level RPC — not wallet-scoped (wallet endpoint rejects / is flaky).
+        JsonNode info = unwrapResult(executeNodeRpc("getdescriptorinfo", bare));
+        String checksummed = text(info, "descriptor");
+        if (checksummed == null || checksummed.isBlank()) {
+            throw new IllegalStateException("Bitcoin Core getdescriptorinfo did not return a descriptor.");
+        }
+        return checksummed;
+    }
+
+    /**
+     * scantxoutset is a node RPC. Calling it on /wallet/... fails on many Core builds
+     * and surfaces as "RPC request failed for method scantxoutset".
+     */
+    @Override
+    public long getConfirmedBalanceForDescriptor(String descriptor, int range) {
+        if (descriptor == null || descriptor.isBlank()) {
+            return 0L;
+        }
+        int safeRange = Math.max(1, range);
+        Map<String, Object> scanObject = new LinkedHashMap<>();
+        scanObject.put("desc", descriptor.trim());
+        scanObject.put("range", safeRange);
+        JsonNode result = startScantxoutset(scanObject);
+        if (result == null || result.isNull() || result.isMissingNode()) {
+            return 0L;
+        }
+        JsonNode totalAmount = result.path("total_amount");
+        if (!totalAmount.isNumber()) {
+            return 0L;
+        }
+        return btcNodeToSats(totalAmount);
+    }
+
+    /**
+     * Core allows only one scantxoutset at a time. Serialize all starts in-process and
+     * abort + retry when another process left a scan mid-flight (code -8).
+     */
+    private JsonNode startScantxoutset(Map<String, Object> scanObject) {
+        synchronized (SCANTXOUTSET_LOCK) {
+            RuntimeException last = null;
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    return unwrapResult(executeNodeRpc("scantxoutset", "start", List.of(scanObject)));
+                } catch (RuntimeException error) {
+                    last = error;
+                    if (!isScanInProgress(error)) {
+                        throw error;
+                    }
+                    log.warn(
+                            "[BitcoinCore] scantxoutset busy (attempt {}/3); aborting prior scan",
+                            attempt);
+                    try {
+                        executeNodeRpc("scantxoutset", "abort");
+                    } catch (RuntimeException abortError) {
+                        log.debug("[BitcoinCore] scantxoutset abort: {}", abortError.getMessage());
+                    }
+                    try {
+                        Thread.sleep(250L * attempt);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw error;
+                    }
+                }
+            }
+            throw last != null ? last : new IllegalStateException("scantxoutset failed");
+        }
+    }
+
+    private static final Object SCANTXOUTSET_LOCK = new Object();
+
+    private static boolean isScanInProgress(Throwable error) {
+        String message = error == null ? null : error.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("scan already in progress") || lower.contains("\"code\":-8");
+    }
+
+    @Override
+    public long getConfirmedBalanceForAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return 0L;
+        }
+        return getConfirmedBalanceForDescriptor("addr(" + address.trim() + ")", 1);
+    }
+
+    private static String toChangeDescriptor(String receiveDescriptor) {
+        if (receiveDescriptor == null) {
+            return null;
+        }
+        // Strip checksum before path rewrite; checksum re-applied by getdescriptorinfo.
+        String bare = receiveDescriptor;
+        int hash = bare.indexOf('#');
+        if (hash >= 0) {
+            bare = bare.substring(0, hash);
+        }
+        if (!bare.contains("/0/*")) {
+            return null;
+        }
+        return bare.replace("/0/*", "/1/*");
     }
 
     public FundedPsbt createWatchOnlyPsbt(
@@ -319,6 +492,60 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         return new FinalizedPsbt(
                 text(result, "hex"),
                 result.path("complete").asBoolean(false));
+    }
+
+    /**
+     * Signs a PSBT with keys available in the loaded Core wallet ({@code walletprocesspsbt}).
+     * Used as a first-class production signer node when custody keys live in Bitcoin Core
+     * (or as one contributor in a multi-signer quorum).
+     */
+    public String walletProcessPsbt(String psbt) {
+        if (psbt == null || psbt.isBlank()) {
+            throw new IllegalArgumentException("psbt is required");
+        }
+        // Bitcoin Core 28: walletprocesspsbt "psbt" (sign sighashtype bip32derivs finalize)
+        // finalize=false — leave finalization to the quorum assembler after combinepsbt
+        JsonNode result = unwrapResult(executeRpc(
+                "walletprocesspsbt",
+                psbt.trim(),
+                true,
+                "ALL",
+                true,
+                false));
+        String processed = text(result, "psbt");
+        if (processed == null || processed.isBlank()) {
+            throw new IllegalStateException("Bitcoin Core walletprocesspsbt did not return a PSBT.");
+        }
+        return processed;
+    }
+
+    /**
+     * Confirmation count for a wallet-known or mempool/chain transaction.
+     * Empty when the transaction is not found; {@code 0} means in mempool (unconfirmed).
+     */
+    public java.util.OptionalInt findTransactionConfirmations(String txid) {
+        if (txid == null || txid.isBlank()) {
+            return java.util.OptionalInt.empty();
+        }
+        try {
+            JsonNode raw = getRawTransaction(txid.trim(), true);
+            if (raw == null || raw.isNull() || raw.isMissingNode()) {
+                return java.util.OptionalInt.empty();
+            }
+            JsonNode confirmations = raw.path("confirmations");
+            if (confirmations.isIntegralNumber()) {
+                return java.util.OptionalInt.of(Math.max(0, confirmations.asInt()));
+            }
+            // Present in mempool/wallet without a confirmations field yet.
+            return java.util.OptionalInt.of(0);
+        } catch (RuntimeException ignored) {
+            return java.util.OptionalInt.empty();
+        }
+    }
+
+    /** @return confirmation count, or {@code -1} when not found */
+    public int getTransactionConfirmations(String txid) {
+        return findTransactionConfirmations(txid).orElse(-1);
     }
 
     public JsonNode decodeRawTransaction(String rawHex) {

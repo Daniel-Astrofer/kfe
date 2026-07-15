@@ -12,6 +12,7 @@ import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -66,6 +67,21 @@ public interface KfeTransactionRepository extends JpaRepository<KfeTransactionEn
             """)
     List<KfeTransactionEntity> findByProviderReferenceForUpdate(
             @Param("providerReference") String providerReference);
+
+    @Query("""
+            select t from KfeTransactionEntity t
+            where t.rail = :rail
+              and t.direction = :direction
+              and t.status in :statuses
+              and t.blockchainTxid is not null
+              and t.blockchainTxid <> ''
+            order by t.updatedAt asc
+            """)
+    List<KfeTransactionEntity> findOutboundAwaitingConfirmation(
+            @Param("rail") KfeRail rail,
+            @Param("direction") KfeDirection direction,
+            @Param("statuses") Collection<KfeTransactionStatus> statuses,
+            Pageable pageable);
 
     List<KfeTransactionEntity> findTop25ByUserIdOrderByCreatedAtDesc(Long userId);
 

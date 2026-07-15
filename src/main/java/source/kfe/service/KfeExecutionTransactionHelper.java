@@ -151,6 +151,111 @@ public class KfeExecutionTransactionHelper {
         );
     }
 
+    /**
+     * Records a successful on-chain broadcast without unlocking the user reserve yet.
+     * Funds stay LOCKED until {@link #settleOutboundWhenConfirmed} after N confirmations.
+     */
+    @Transactional
+    public void recordOutboundBroadcast(
+            UUID outboxId,
+            UUID transactionId,
+            String provider,
+            String providerReference,
+            String blockchainTxid,
+            long feeSats,
+            UUID sourceWalletId,
+            String providerPayload) {
+        KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
+                .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
+                .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
+        if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, providerReference)) {
+            return;
+        }
+        if (blockchainTxid == null || blockchainTxid.isBlank()) {
+            throw new IllegalArgumentException("blockchainTxid is required after broadcast.");
+        }
+
+        tx.setProvider(trim(provider, 64));
+        tx.setProviderReference(firstNonBlank(providerReference, blockchainTxid));
+        tx.setBlockchainTxid(blockchainTxid.trim());
+        tx.setConfirmations(0);
+        if (!reconcileOutboundFee(outbox, tx, sourceWalletId, feeSats)) {
+            return;
+        }
+        // Keep EXECUTING — reserve remains locked until chain confirmation monitor settles.
+        transactionRepository.save(tx);
+        recordStatement(tx, sourceWalletId, providerPayload);
+        updateIdempotency(tx);
+        markOutboxDispatched(outbox, firstNonBlank(providerReference, blockchainTxid));
+        audit(tx, "KFE_PSBT_WORKFLOW_BROADCAST", tx.getStatus(), tx.getStatus(),
+                Map.of(
+                        "txidHash", hashService.sha256(blockchainTxid.trim()),
+                        "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, blockchainTxid))));
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    @Transactional
+    public void touchOutboundConfirmations(UUID transactionId, int confirmations) {
+        KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
+        if (tx == null || confirmations <= tx.getConfirmations()) {
+            return;
+        }
+        tx.setConfirmations(confirmations);
+        transactionRepository.save(tx);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    /**
+     * Unlocks/settles reserved debit after the outbound tx is monitored with enough confirmations.
+     */
+    @Transactional
+    public boolean settleOutboundWhenConfirmed(UUID transactionId, int confirmations) {
+        KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
+        if (tx == null) {
+            return false;
+        }
+        if (tx.getStatus() == KfeTransactionStatus.SETTLED) {
+            return true;
+        }
+        if (tx.getStatus() != KfeTransactionStatus.EXECUTING
+                && tx.getStatus() != KfeTransactionStatus.REQUIRES_RECONCILIATION) {
+            return false;
+        }
+        if (tx.getBlockchainTxid() == null || tx.getBlockchainTxid().isBlank()) {
+            return false;
+        }
+        if (tx.getSourceWalletId() == null) {
+            return false;
+        }
+
+        KfeExecutionOutboxEntity outbox = outboxRepository.findByTransactionId(transactionId).stream()
+                .findFirst()
+                .orElse(null);
+
+        tx.setConfirmations(Math.max(tx.getConfirmations(), confirmations));
+        String providerReference = firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid());
+        String provider = firstNonBlank(tx.getProvider(), "BITCOIN_CORE_QUORUM");
+
+        balanceService.settleReservedDebit(tx.getSourceWalletId(), ASSET_BTC, tx.getTotalDebitSats());
+        movement(tx.getId(), tx.getSourceWalletId(), "SETTLE_DEBIT", tx.getTotalDebitSats(), "LOCKED", null);
+        transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
+                Map.of(
+                        "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, "")),
+                        "confirmations", String.valueOf(confirmations),
+                        "provider", provider));
+        feeSettlementService.creditKeroseneFee(tx);
+        recordStatement(tx, tx.getSourceWalletId(), null);
+        updateIdempotency(tx);
+        if (outbox != null) {
+            KfeExecutionOutboxEntity locked = outboxRepository.findByIdForUpdate(outbox.getId()).orElse(outbox);
+            locked.setProviderReference(providerReference);
+            markOutboxDispatched(locked, providerReference);
+        }
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+        return true;
+    }
+
     @Transactional
     public void settleOutbound(
             UUID outboxId,
@@ -161,6 +266,8 @@ public class KfeExecutionTransactionHelper {
             long feeSats,
             UUID sourceWalletId,
             String providerPayload) {
+        // Immediate settle path (e.g. lightning or tests). On-chain production uses
+        // recordOutboundBroadcast + settleOutboundWhenConfirmed.
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)

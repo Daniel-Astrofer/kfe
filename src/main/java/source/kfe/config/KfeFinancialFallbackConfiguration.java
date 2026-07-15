@@ -125,6 +125,26 @@ public class KfeFinancialFallbackConfiguration {
                     String rail,
                     long creditedSats) {
             }
+
+            @Override
+            public void notifyDepositDetected(
+                    Long userId,
+                    UUID transactionId,
+                    UUID walletId,
+                    String rail,
+                    long creditedSats,
+                    int confirmations) {
+            }
+
+            @Override
+            public void notifyDepositConfirmationProgress(
+                    Long userId,
+                    UUID transactionId,
+                    UUID walletId,
+                    String rail,
+                    long creditedSats,
+                    int confirmations) {
+            }
         };
     }
 

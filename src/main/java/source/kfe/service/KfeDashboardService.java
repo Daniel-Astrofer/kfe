@@ -57,20 +57,43 @@ public class KfeDashboardService {
     }
 
     private KfeDashboardWallet toWallet(KfeDashboardWalletRow row) {
+        KfeWalletKind kind = walletKind(row.getKind());
+        // Cold/watch-only: expose chain-observed only — never internal spendable buckets.
+        if (kind == KfeWalletKind.WATCH_ONLY) {
+            return new KfeDashboardWallet(
+                    row.getWalletId(),
+                    row.getKind(),
+                    row.getStatus(),
+                    row.getLabel(),
+                    row.getLabel(),
+                    responseMapper.walletTypeDescription(kind),
+                    row.getAsset(),
+                    false,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    value(row.getObservedSats()),
+                    row.getActiveAddress(),
+                    row.getCreatedAt(),
+                    row.getUpdatedAt());
+        }
+        // INTERNAL: ledger only. CUSTODIAL_ONCHAIN: ledger (available/locked) + observed (chain).
+        long observed = kind == KfeWalletKind.INTERNAL ? 0L : value(row.getObservedSats());
         return new KfeDashboardWallet(
                 row.getWalletId(),
                 row.getKind(),
                 row.getStatus(),
                 row.getLabel(),
                 row.getLabel(),
-                responseMapper.walletTypeDescription(walletKind(row.getKind())),
+                responseMapper.walletTypeDescription(kind),
                 row.getAsset(),
                 Boolean.TRUE.equals(row.getSpendable()),
                 value(row.getAvailableSats()),
                 value(row.getPendingSats()),
                 value(row.getLockedSats()),
                 value(row.getAutoHoldSats()),
-                value(row.getObservedSats()),
+                observed,
                 row.getActiveAddress(),
                 row.getCreatedAt(),
                 row.getUpdatedAt());

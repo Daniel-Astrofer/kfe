@@ -48,6 +48,62 @@ class KfeRemoteFinancialNotificationClientTest {
     }
 
     @Test
+    void postsDepositDetectedNotificationToAuthServer() throws Exception {
+        KfeRemoteFinancialNotificationClient client = client("credential");
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        server.expect(requestTo("http://server.test/internal/kfe/notifications/deposit-detected"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-KFE-Internal-Secret", "credential"))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""
+                        {
+                          "userId":42,
+                          "transactionId":"%s",
+                          "walletId":"%s",
+                          "rail":"ONCHAIN",
+                          "creditedSats":1500,
+                          "confirmations":1
+                        }
+                        """.formatted(transactionId, walletId)))
+                .andRespond(withSuccess());
+
+        client.notifyDepositDetected(42L, transactionId, walletId, "ONCHAIN", 1500L, 1);
+
+        server.verify();
+    }
+
+    @Test
+    void postsDepositConfirmationProgressNotificationToAuthServer() throws Exception {
+        KfeRemoteFinancialNotificationClient client = client("credential");
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        server.expect(requestTo("http://server.test/internal/kfe/notifications/deposit-progress"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-KFE-Internal-Secret", "credential"))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""
+                        {
+                          "userId":42,
+                          "transactionId":"%s",
+                          "walletId":"%s",
+                          "rail":"ONCHAIN",
+                          "creditedSats":1500,
+                          "confirmations":2
+                        }
+                        """.formatted(transactionId, walletId)))
+                .andRespond(withSuccess());
+
+        client.notifyDepositConfirmationProgress(42L, transactionId, walletId, "ONCHAIN", 1500L, 2);
+
+        server.verify();
+    }
+
+    @Test
     void postsPaymentRequestDepositConfirmedNotificationToAuthServer() throws Exception {
         KfeRemoteFinancialNotificationClient client = client("credential");
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));

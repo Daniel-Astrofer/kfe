@@ -44,7 +44,8 @@ public class KfeOnchainOutboundExecutor implements KfeRailExecution {
                         prep.quorumProposalHash()));
 
         String providerReference = firstNonBlank(result.txid(), result.providerReference());
-        transactionHelper.settleOutbound(
+        // Broadcast only: reserve stays locked until the confirmation monitor settles.
+        transactionHelper.recordOutboundBroadcast(
                 outboxId,
                 prep.transactionId(),
                 onchainPaymentGateway.providerName(),

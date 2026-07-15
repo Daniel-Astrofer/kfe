@@ -11,6 +11,13 @@ public record KfeReceivingCapabilitiesResponse(
         List<String> missingRequirements,
         String receiverDisplayName,
         UUID internalWalletId,
+        /**
+         * Active on-chain receive address for the receiver (if any).
+         * Enables dual-rail send: INTERNAL ledger vs ONCHAIN to this address.
+         */
+        String onchainReceiveAddress,
+        /** Wallet that owns {@link #onchainReceiveAddress}, when known. */
+        UUID onchainWalletId,
         List<String> availableRails,
         Limits limits) {
 

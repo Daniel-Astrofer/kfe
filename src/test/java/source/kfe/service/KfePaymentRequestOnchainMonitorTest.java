@@ -19,6 +19,7 @@ import source.kfe.model.KfeTransactionStatus;
 import source.kfe.rail.BlockchainClient;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
+import source.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -38,6 +39,7 @@ class KfePaymentRequestOnchainMonitorTest {
 
     private final KfePaymentRequestRepository paymentRequestRepository = mock(KfePaymentRequestRepository.class);
     private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
+    private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
     private final BlockchainClient blockchainClient = mock(BlockchainClient.class);
     private final KfePricingService pricingService = mock(KfePricingService.class);
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
@@ -47,9 +49,11 @@ class KfePaymentRequestOnchainMonitorTest {
     private final KfeStatementService statementService = mock(KfeStatementService.class);
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final FinancialNotificationPort notificationPort = mock(FinancialNotificationPort.class);
+    private final KfeOnchainBalanceSyncService onchainBalanceSyncService = mock(KfeOnchainBalanceSyncService.class);
     private final KfePaymentRequestOnchainMonitor monitor = new KfePaymentRequestOnchainMonitor(
             paymentRequestRepository,
             transactionRepository,
+            walletRepository,
             provider(blockchainClient),
             pricingService,
             balanceService,
@@ -60,6 +64,7 @@ class KfePaymentRequestOnchainMonitorTest {
             dashboardPublisher,
             notificationPort,
             transactionTemplate(),
+            provider(onchainBalanceSyncService),
             50,
             3);
 
@@ -240,26 +245,26 @@ class KfePaymentRequestOnchainMonitorTest {
         return new ObjectMapper().readTree(json);
     }
 
-    private ObjectProvider<BlockchainClient> provider(BlockchainClient client) {
+    private <T> ObjectProvider<T> provider(T bean) {
         return new ObjectProvider<>() {
             @Override
-            public BlockchainClient getObject(Object... args) {
-                return client;
+            public T getObject(Object... args) {
+                return bean;
             }
 
             @Override
-            public BlockchainClient getIfAvailable() {
-                return client;
+            public T getIfAvailable() {
+                return bean;
             }
 
             @Override
-            public BlockchainClient getIfUnique() {
-                return client;
+            public T getIfUnique() {
+                return bean;
             }
 
             @Override
-            public BlockchainClient getObject() {
-                return client;
+            public T getObject() {
+                return bean;
             }
         };
     }

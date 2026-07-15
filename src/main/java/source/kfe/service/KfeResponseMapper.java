@@ -116,8 +116,8 @@ public class KfeResponseMapper {
         }
         return switch (kind) {
             case INTERNAL -> "Carteira assegurada pela Kerosene: saldo interno lastreado na carteira de quorum.";
-            case CUSTODIAL_ONCHAIN -> "Custodial on-chain: carteira separada monitorada pela Kerosene, com assinatura sob custódia.";
-            case WATCH_ONLY -> "Cold wallet: saldo observado por xpub/descriptor; fundos não são saldo Kerosene e não são movimentados pelo servidor.";
+            case CUSTODIAL_ONCHAIN -> "Custodial on-chain: saldo spendable no ledger interno (autoriza saques) e saldo observado na blockchain para reconciliação.";
+            case WATCH_ONLY -> "Cold wallet: saldo somente da blockchain (xpub/descriptor). Sem saldo interno spendable; o servidor nunca autoriza gastos.";
             case SYSTEM_FUNDS -> "Fundos Globais";
             case SYSTEM_PROFIT -> "Lucro Kerosene";
         };

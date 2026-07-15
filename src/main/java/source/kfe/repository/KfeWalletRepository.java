@@ -43,6 +43,10 @@ public interface KfeWalletRepository extends JpaRepository<KfeWalletEntity, UUID
 
     Optional<KfeWalletEntity> findByIdAndUserId(UUID id, Long userId);
 
+    List<KfeWalletEntity> findByKindInAndStatus(
+            Collection<KfeWalletKind> kinds,
+            KfeWalletStatus status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select w from KfeWalletEntity w where w.id = :id and w.userId = :userId")
     Optional<KfeWalletEntity> findByIdAndUserIdForUpdate(@Param("id") UUID id, @Param("userId") Long userId);

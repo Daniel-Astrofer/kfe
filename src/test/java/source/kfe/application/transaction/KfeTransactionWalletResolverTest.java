@@ -93,18 +93,32 @@ class KfeTransactionWalletResolverTest {
 
 
     @Test
-    void rejectsInternalDestinationOwnedByAuthenticatedUser() {
+    void rejectsInternalWhenSourceAndDestinationAreTheSameWallet() {
         Long userId = 123L;
+        UUID walletId = UUID.randomUUID();
+
+        assertThrows(FinancialSelfPaymentException.class, () ->
+                resolver.requireNotSelfPayment(
+                        userId,
+                        internalRequest(walletId, walletId, null)));
+    }
+
+    @Test
+    void allowsInternalTransferBetweenUsersOwnWallets() {
+        Long userId = 123L;
+        UUID sourceWalletId = UUID.randomUUID();
         UUID destinationWalletId = UUID.randomUUID();
         when(walletRepository.findById(destinationWalletId))
                 .thenReturn(Optional.of(activeWallet(userId, destinationWalletId)));
 
-        assertThrows(FinancialSelfPaymentException.class, () ->
-                resolver.requireNotSelfPayment(userId, internalRequest(destinationWalletId, null)));
+        // INTERNAL (assegurada) → CUSTODIAL_ONCHAIN of same user must be allowed.
+        resolver.requireNotSelfPayment(
+                userId,
+                internalRequest(sourceWalletId, destinationWalletId, null));
     }
 
     @Test
-    void rejectsOwnPlatformAddressOnOutboundOnchainTransaction() {
+    void rejectsOwnSourceWalletAddressOnOutboundOnchainTransaction() {
         Long userId = 123L;
         UUID walletId = UUID.randomUUID();
         KfeWalletAddressEntity address = new KfeWalletAddressEntity();
@@ -116,7 +130,27 @@ class KfeTransactionWalletResolverTest {
                 .thenReturn(Optional.of(activeWallet(userId, walletId)));
 
         assertThrows(FinancialSelfPaymentException.class, () ->
-                resolver.requireNotSelfPayment(userId, outboundRequest(address.getAddress())));
+                resolver.requireNotSelfPayment(
+                        userId,
+                        outboundRequest(walletId, address.getAddress())));
+    }
+
+    @Test
+    void allowsOutboundToOwnCustodialOnchainAddressFromAnotherWallet() {
+        Long userId = 123L;
+        UUID sourceWalletId = UUID.randomUUID();
+        UUID custodialWalletId = UUID.randomUUID();
+        KfeWalletAddressEntity address = new KfeWalletAddressEntity();
+        address.setWalletId(custodialWalletId);
+        address.setAddress("tb1qowncustodialaddress00000000000000000000");
+        when(addressRepository.findFirstByAddressIgnoreCase(address.getAddress()))
+                .thenReturn(Optional.of(address));
+        when(walletRepository.findById(custodialWalletId))
+                .thenReturn(Optional.of(custodialWallet(userId, custodialWalletId)));
+
+        resolver.requireNotSelfPayment(
+                userId,
+                outboundRequest(sourceWalletId, address.getAddress()));
     }
 
     @Test
@@ -134,12 +168,37 @@ class KfeTransactionWalletResolverTest {
         resolver.requireNotSelfPayment(userId, outboundRequest(address.getAddress()));
     }
 
+    @Test
+    void allowsOutboundToOwnWatchOnlyColdWalletAddress() {
+        Long userId = 123L;
+        UUID sourceWalletId = UUID.randomUUID();
+        UUID coldWalletId = UUID.randomUUID();
+        KfeWalletAddressEntity address = new KfeWalletAddressEntity();
+        address.setWalletId(coldWalletId);
+        address.setAddress("tb1qowncoldwalletaddress00000000000000000000");
+        when(addressRepository.findFirstByAddressIgnoreCase(address.getAddress()))
+                .thenReturn(Optional.of(address));
+        when(walletRepository.findById(coldWalletId))
+                .thenReturn(Optional.of(watchOnlyWallet(userId, coldWalletId)));
+
+        resolver.requireNotSelfPayment(
+                userId,
+                outboundRequest(sourceWalletId, address.getAddress()));
+    }
+
     private KfeSubmitTransactionRequest internalRequest(UUID destinationWalletId, String externalReference) {
+        return internalRequest(UUID.randomUUID(), destinationWalletId, externalReference);
+    }
+
+    private KfeSubmitTransactionRequest internalRequest(
+            UUID sourceWalletId,
+            UUID destinationWalletId,
+            String externalReference) {
         return new KfeSubmitTransactionRequest(
                 "idemp-key",
                 KfeRail.INTERNAL,
                 KfeDirection.INTERNAL,
-                UUID.randomUUID(),
+                sourceWalletId,
                 destinationWalletId,
                 1000L,
                 0L,
@@ -147,13 +206,16 @@ class KfeTransactionWalletResolverTest {
                 "memo");
     }
 
-
     private KfeSubmitTransactionRequest outboundRequest(String externalReference) {
+        return outboundRequest(UUID.randomUUID(), externalReference);
+    }
+
+    private KfeSubmitTransactionRequest outboundRequest(UUID sourceWalletId, String externalReference) {
         return new KfeSubmitTransactionRequest(
                 "idemp-key",
                 KfeRail.ONCHAIN,
                 KfeDirection.OUTBOUND,
-                UUID.randomUUID(),
+                sourceWalletId,
                 null,
                 1000L,
                 100L,
@@ -170,6 +232,22 @@ class KfeTransactionWalletResolverTest {
         wallet.setSpendable(true);
         wallet.setLabel("Principal");
         wallet.setQuorumPolicyHash("policy-hash");
+        return wallet;
+    }
+
+    private KfeWalletEntity watchOnlyWallet(Long userId, UUID walletId) {
+        KfeWalletEntity wallet = activeWallet(userId, walletId);
+        wallet.setKind(KfeWalletKind.WATCH_ONLY);
+        wallet.setSpendable(false);
+        wallet.setLabel("Cold");
+        return wallet;
+    }
+
+    private KfeWalletEntity custodialWallet(Long userId, UUID walletId) {
+        KfeWalletEntity wallet = activeWallet(userId, walletId);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setSpendable(true);
+        wallet.setLabel("Custodial");
         return wallet;
     }
 }
