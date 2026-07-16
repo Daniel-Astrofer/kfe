@@ -33,6 +33,16 @@ public class KfeBalanceEntity {
     @Column(name = "observed_sats", nullable = false)
     private long observedSats;
 
+    /** Last successful observed probe quality (LIVE_MEMPOOL_AWARE, OPTIMISTIC_DELTA, …). */
+    @Column(name = "observed_probe_quality", length = 32)
+    private String observedProbeQuality;
+
+    @Column(name = "observed_probe_at")
+    private LocalDateTime observedProbeAt;
+
+    @Column(name = "observed_probe_source", length = 96)
+    private String observedProbeSource;
+
     @Column(name = "nonce", nullable = false)
     private long nonce;
 
@@ -104,6 +114,36 @@ public class KfeBalanceEntity {
         }
         this.observedSats = observedSats;
         nonce++;
+    }
+
+    public void setObservedProbeMeta(String quality, LocalDateTime probedAt, String source) {
+        this.observedProbeQuality = quality;
+        this.observedProbeAt = probedAt;
+        this.observedProbeSource = source;
+    }
+
+    public String getObservedProbeQuality() {
+        return observedProbeQuality;
+    }
+
+    public void setObservedProbeQuality(String observedProbeQuality) {
+        this.observedProbeQuality = observedProbeQuality;
+    }
+
+    public LocalDateTime getObservedProbeAt() {
+        return observedProbeAt;
+    }
+
+    public void setObservedProbeAt(LocalDateTime observedProbeAt) {
+        this.observedProbeAt = observedProbeAt;
+    }
+
+    public String getObservedProbeSource() {
+        return observedProbeSource;
+    }
+
+    public void setObservedProbeSource(String observedProbeSource) {
+        this.observedProbeSource = observedProbeSource;
     }
 
     private void requirePositive(long amountSats) {

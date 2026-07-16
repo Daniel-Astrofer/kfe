@@ -6,6 +6,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import source.common.financial.FinancialNotificationPort;
+import source.kfe.application.transaction.KfeLedgerMovementTypes;
 import source.kfe.model.KfeBalanceMovementEntity;
 import source.kfe.model.KfeExecutionOutboxEntity;
 import source.kfe.model.KfeRail;
@@ -43,6 +44,7 @@ public class KfeInboundSettlementService {
     private final FinancialNotificationPort notificationPort;
     private final KfeFeeSettlementService feeSettlementService;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
+    private final ObjectProvider<KfeBalanceMetrics> balanceMetrics;
 
     public KfeInboundSettlementService(
             KfeTransactionRepository transactionRepository,
@@ -57,7 +59,8 @@ public class KfeInboundSettlementService {
             KfeHashService hashService,
             FinancialNotificationPort notificationPort,
             KfeFeeSettlementService feeSettlementService,
-            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService) {
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
+            ObjectProvider<KfeBalanceMetrics> balanceMetrics) {
         this.transactionRepository = transactionRepository;
         this.outboxRepository = outboxRepository;
         this.movementRepository = movementRepository;
@@ -71,6 +74,7 @@ public class KfeInboundSettlementService {
         this.notificationPort = notificationPort;
         this.feeSettlementService = feeSettlementService;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
+        this.balanceMetrics = balanceMetrics;
     }
 
     @Transactional
@@ -202,8 +206,39 @@ public class KfeInboundSettlementService {
             movement(transactionId, walletId, "CHAIN_OBSERVED_SYNC", recorded, null, "OBSERVED");
             return;
         }
+        // Dual path: payment-request monitor / custodial observer may have credited first.
+        if (movementRepository.existsByTransactionIdAndMovementTypeIn(
+                transactionId, KfeLedgerMovementTypes.USER_AVAILABLE_CREDIT_TYPES)) {
+            log.info(
+                    "[KFE Inbound Settlement] skip dual credit transactionId={} walletId={} amount={}",
+                    transactionId,
+                    walletId,
+                    creditSats);
+            recordDualSkip("inbound-settlement");
+            if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+                resyncChainObserved(walletId);
+            }
+            return;
+        }
+        // Insert movement under unique index first; only credit when we own the row (race-safe).
+        if (!tryMovement(
+                transactionId,
+                walletId,
+                KfeLedgerMovementTypes.CREDIT_INBOUND,
+                creditSats,
+                null,
+                "AVAILABLE")) {
+            log.info(
+                    "[KFE Inbound Settlement] credit race lost transactionId={} walletId={}",
+                    transactionId,
+                    walletId);
+            recordDualSkip("inbound-settlement-race");
+            if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+                resyncChainObserved(walletId);
+            }
+            return;
+        }
         balanceService.creditAvailable(walletId, ASSET_BTC, creditSats);
-        movement(transactionId, walletId, "CREDIT_INBOUND", creditSats, null, "AVAILABLE");
         if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
             resyncChainObserved(walletId);
         }
@@ -225,6 +260,13 @@ public class KfeInboundSettlementService {
         }
     }
 
+    private void recordDualSkip(String path) {
+        KfeBalanceMetrics metrics = balanceMetrics.getIfAvailable();
+        if (metrics != null) {
+            metrics.recordDualCreditSkip(path);
+        }
+    }
+
     private void movement(
             UUID transactionId,
             UUID walletId,
@@ -232,6 +274,21 @@ public class KfeInboundSettlementService {
             long amountSats,
             String fromBucket,
             String toBucket) {
+        tryMovement(transactionId, walletId, movementType, amountSats, fromBucket, toBucket);
+    }
+
+    private boolean tryMovement(
+            UUID transactionId,
+            UUID walletId,
+            String movementType,
+            long amountSats,
+            String fromBucket,
+            String toBucket) {
+        if (transactionId != null
+                && KfeLedgerMovementTypes.isIdempotentCreditType(movementType)
+                && movementRepository.existsByTransactionIdAndMovementType(transactionId, movementType)) {
+            return false;
+        }
         KfeBalanceMovementEntity movement = new KfeBalanceMovementEntity();
         movement.setTransactionId(transactionId);
         movement.setWalletId(walletId);
@@ -239,7 +296,15 @@ public class KfeInboundSettlementService {
         movement.setAmountSats(amountSats);
         movement.setFromBucket(fromBucket);
         movement.setToBucket(toBucket);
-        movementRepository.save(movement);
+        try {
+            movementRepository.save(movement);
+            return true;
+        } catch (org.springframework.dao.DataIntegrityViolationException exception) {
+            if (transactionId != null && KfeLedgerMovementTypes.isIdempotentCreditType(movementType)) {
+                return false;
+            }
+            throw exception;
+        }
     }
 
     private void recordStatement(KfeTransactionEntity tx, String providerPayload) {

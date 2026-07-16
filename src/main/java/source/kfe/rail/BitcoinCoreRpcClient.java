@@ -365,14 +365,76 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         return btcNodeToSats(totalAmount);
     }
 
+    @Override
+    public List<AddressUtxo> getUnspentOutputsFromScan(String descriptorOrAddr, int range) {
+        if (descriptorOrAddr == null || descriptorOrAddr.isBlank()) {
+            return List.of();
+        }
+        String desc = descriptorOrAddr.trim();
+        if (!desc.contains("(")) {
+            desc = "addr(" + desc + ")";
+        }
+        // Propagate failures: empty list must mean "no UTXOs", not "scan aborted".
+        // Callers that need soft-fail should catch RuntimeException themselves.
+        Map<String, Object> scanObject = new LinkedHashMap<>();
+        scanObject.put("desc", desc);
+        if (range > 1) {
+            scanObject.put("range", Math.max(1, range));
+        }
+        JsonNode result = startScantxoutset(scanObject);
+        return parseNodeScantxoutsetUnspents(result);
+    }
+
+    @Override
+    public long getBlockTipHeight() {
+        return getBlockCount();
+    }
+
+    private List<AddressUtxo> parseNodeScantxoutsetUnspents(JsonNode result) {
+        if (result == null || result.isNull() || result.isMissingNode()) {
+            return List.of();
+        }
+        long tipHeight = result.path("height").isIntegralNumber() ? result.path("height").asLong() : 0L;
+        JsonNode unspents = result.path("unspents");
+        if (!unspents.isArray()) {
+            return List.of();
+        }
+        java.util.ArrayList<AddressUtxo> results = new java.util.ArrayList<>();
+        for (JsonNode utxo : unspents) {
+            String txid = text(utxo, "txid");
+            JsonNode vout = utxo.path("vout");
+            long valueSats = btcNodeToSats(utxo.path("amount"));
+            if (utxo.path("value").isIntegralNumber()) {
+                valueSats = utxo.path("value").asLong();
+            }
+            if (txid == null || !vout.isIntegralNumber() || valueSats <= 0L) {
+                continue;
+            }
+            int confs = 0;
+            if (utxo.path("confirmations").isIntegralNumber()) {
+                confs = Math.max(0, utxo.path("confirmations").asInt());
+            } else if (utxo.path("height").isIntegralNumber() && tipHeight > 0L) {
+                long h = utxo.path("height").asLong();
+                if (h > 0L) {
+                    confs = (int) Math.max(0L, tipHeight - h + 1L);
+                }
+            }
+            String script = text(utxo, "scriptPubKey");
+            results.add(new AddressUtxo(txid, vout.asInt(), valueSats, script, confs, null));
+        }
+        return List.copyOf(results);
+    }
+
     /**
      * Core allows only one scantxoutset at a time. Serialize all starts in-process and
-     * abort + retry when another process left a scan mid-flight (code -8).
+     * <em>wait</em> for the prior scan to finish. Aborting mid-scan was racing cold balance
+     * probes (partial 0 vs full descriptor) and made observed_sats oscillate.
      */
     private JsonNode startScantxoutset(Map<String, Object> scanObject) {
         synchronized (SCANTXOUTSET_LOCK) {
             RuntimeException last = null;
-            for (int attempt = 1; attempt <= 3; attempt++) {
+            for (int attempt = 1; attempt <= 5; attempt++) {
+                waitForScantxoutsetIdle(90_000L);
                 try {
                     return unwrapResult(executeNodeRpc("scantxoutset", "start", List.of(scanObject)));
                 } catch (RuntimeException error) {
@@ -381,22 +443,52 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
                         throw error;
                     }
                     log.warn(
-                            "[BitcoinCore] scantxoutset busy (attempt {}/3); aborting prior scan",
+                            "[BitcoinCore] scantxoutset still busy (attempt {}/5); waiting for idle",
                             attempt);
-                    try {
-                        executeNodeRpc("scantxoutset", "abort");
-                    } catch (RuntimeException abortError) {
-                        log.debug("[BitcoinCore] scantxoutset abort: {}", abortError.getMessage());
+                    // Last resort only: if stuck past wait, abort once then retry.
+                    if (attempt >= 4) {
+                        try {
+                            executeNodeRpc("scantxoutset", "abort");
+                        } catch (RuntimeException abortError) {
+                            log.debug("[BitcoinCore] scantxoutset abort: {}", abortError.getMessage());
+                        }
                     }
-                    try {
-                        Thread.sleep(250L * attempt);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        throw error;
-                    }
+                    sleepQuiet(500L * attempt);
                 }
             }
             throw last != null ? last : new IllegalStateException("scantxoutset failed");
+        }
+    }
+
+    private void waitForScantxoutsetIdle(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(1_000L, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                JsonNode status = unwrapResult(executeNodeRpc("scantxoutset", "status"));
+                if (status == null || status.isNull() || status.isMissingNode()) {
+                    return; // idle
+                }
+                // status object with progress means a scan is running
+                if (!status.has("progress") && !status.isObject()) {
+                    return;
+                }
+                if (status.isObject() && status.path("progress").isMissingNode()
+                        && status.size() == 0) {
+                    return;
+                }
+            } catch (RuntimeException ignored) {
+                return; // treat RPC errors as idle enough to try start
+            }
+            sleepQuiet(400L);
+        }
+        log.warn("[BitcoinCore] scantxoutset still busy after {}ms wait", timeoutMs);
+    }
+
+    private static void sleepQuiet(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -441,8 +533,31 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             long amountSats,
             Integer confirmationTarget,
             Long feeRateSatsPerVbyte) {
+        return createWatchOnlyPsbt(
+                selectedInputs,
+                destinationAddress,
+                amountSats,
+                confirmationTarget,
+                feeRateSatsPerVbyte,
+                null);
+    }
+
+    /**
+     * @param changeAddress optional cold-wallet change address. When set, Core must not
+     *                      send change to the hot keypool (critical for watch-only spends).
+     */
+    public FundedPsbt createWatchOnlyPsbt(
+            List<PsbtInput> selectedInputs,
+            String destinationAddress,
+            long amountSats,
+            Integer confirmationTarget,
+            Long feeRateSatsPerVbyte,
+            String changeAddress) {
         if (selectedInputs == null || selectedInputs.isEmpty()) {
             throw new IllegalArgumentException("At least one selected input is required for watch-only PSBT creation.");
+        }
+        if (destinationAddress == null || destinationAddress.isBlank()) {
+            throw new IllegalArgumentException("destinationAddress is required for watch-only PSBT creation.");
         }
         List<Map<String, Object>> inputs = selectedInputs.stream()
                 .map(input -> Map.<String, Object>of(
@@ -451,12 +566,17 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
                 .toList();
 
         Map<String, Object> output = new LinkedHashMap<>();
-        output.put(destinationAddress, satsToBtc(amountSats));
+        output.put(destinationAddress.trim(), satsToBtc(amountSats));
 
         Map<String, Object> options = new LinkedHashMap<>();
         options.put("includeWatching", true);
         options.put("add_inputs", false);
-        options.put("change_type", "bech32");
+        if (changeAddress != null && !changeAddress.isBlank()) {
+            options.put("changeAddress", changeAddress.trim());
+        } else {
+            // Fallback only — callers should always pass cold change for WATCH_ONLY.
+            options.put("change_type", "bech32");
+        }
         boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
         if (explicitFeeRate) {
             options.put("fee_rate", satsPerVbyteToBtcPerKvbyte(feeRateSatsPerVbyte));
@@ -527,8 +647,21 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         if (txid == null || txid.isBlank()) {
             return java.util.OptionalInt.empty();
         }
+        String id = txid.trim();
+        // Prefer wallet-aware gettransaction when available (always exposes confirmations).
         try {
-            JsonNode raw = getRawTransaction(txid.trim(), true);
+            JsonNode walletTx = unwrapResult(executeRpc("gettransaction", id));
+            if (walletTx != null && !walletTx.isNull() && !walletTx.isMissingNode()) {
+                JsonNode confirmations = walletTx.path("confirmations");
+                if (confirmations.isIntegralNumber()) {
+                    return java.util.OptionalInt.of(Math.max(0, confirmations.asInt()));
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // fall through to getrawtransaction
+        }
+        try {
+            JsonNode raw = getRawTransaction(id, true);
             if (raw == null || raw.isNull() || raw.isMissingNode()) {
                 return java.util.OptionalInt.empty();
             }

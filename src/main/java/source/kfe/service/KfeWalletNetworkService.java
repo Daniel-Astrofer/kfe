@@ -1,13 +1,16 @@
 package source.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import source.common.service.AddressDerivationService;
 import source.kfe.dto.KfeColdWalletPsbtRequest;
 import source.kfe.dto.KfeColdWalletPsbtResponse;
 import source.kfe.dto.KfeReceivingCapabilitiesResponse;
 import source.kfe.dto.KfeUtxoResponse;
 import source.kfe.model.KfeWalletAddressEntity;
+import source.kfe.model.KfeWalletAddressRole;
 import source.kfe.model.KfeWalletAddressStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
@@ -21,9 +24,12 @@ import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -46,6 +52,10 @@ public class KfeWalletNetworkService {
     private final KfeAuditLogService auditLogService;
     private final KfePsbtWorkflowService psbtWorkflowService;
     private final FinancialTransactionApprovalPort transactionApprovalPort;
+    private final AddressDerivationService addressDerivationService;
+    private final BitcoinAddressValidator bitcoinAddressValidator;
+    /** Shared with cold observe / onchain sync so listUtxos sees the same gap. */
+    private final int descriptorScanRange;
 
     public KfeWalletNetworkService(
             FinancialUserDirectoryPort userDirectory,
@@ -56,7 +66,10 @@ public class KfeWalletNetworkService {
             KfeHashService hashService,
             KfeAuditLogService auditLogService,
             KfePsbtWorkflowService psbtWorkflowService,
-            FinancialTransactionApprovalPort transactionApprovalPort) {
+            FinancialTransactionApprovalPort transactionApprovalPort,
+            AddressDerivationService addressDerivationService,
+            BitcoinAddressValidator bitcoinAddressValidator,
+            @Value("${kfe.descriptor-scan-range:200}") int descriptorScanRange) {
         this.userDirectory = userDirectory;
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
@@ -66,6 +79,9 @@ public class KfeWalletNetworkService {
         this.auditLogService = auditLogService;
         this.psbtWorkflowService = psbtWorkflowService;
         this.transactionApprovalPort = transactionApprovalPort;
+        this.addressDerivationService = addressDerivationService;
+        this.bitcoinAddressValidator = bitcoinAddressValidator;
+        this.descriptorScanRange = Math.max(1, descriptorScanRange);
     }
 
     @Transactional(readOnly = true)
@@ -140,17 +156,51 @@ public class KfeWalletNetworkService {
         requireActive(wallet);
 
         BlockchainClient blockchainClient = requireBlockchainClient();
-        List<KfeUtxoResponse> responses = new ArrayList<>();
+        Map<String, KfeUtxoResponse> byOutpoint = new java.util.LinkedHashMap<>();
         for (KfeWalletAddressEntity address : activeAddresses(walletId)) {
-            blockchainClient.getUnspentOutputs(address.getAddress())
-                    .forEach(utxo -> responses.add(new KfeUtxoResponse(
-                            utxo.txid(),
-                            utxo.vout(),
-                            utxo.valueSats(),
-                            utxo.scriptPubKey(),
-                            address.getAddress())));
+            // Merge listunspent + scantxoutset so cold/watch-only works without Core import.
+            for (BlockchainClient.AddressUtxo utxo :
+                    blockchainClient.getUnspentOutputsMerged(address.getAddress())) {
+                putUtxo(byOutpoint, utxo, address.getAddress());
+            }
         }
-        return List.copyOf(responses);
+        // Descriptor gap coverage for cold wallets (same range as cold observe / onchain sync).
+        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY && hasText(wallet.getDescriptor())) {
+            try {
+                for (BlockchainClient.AddressUtxo utxo :
+                        blockchainClient.getUnspentOutputsFromScan(
+                                wallet.getDescriptor().trim(), descriptorScanRange)) {
+                    putUtxo(byOutpoint, utxo, utxo.address());
+                }
+            } catch (RuntimeException ignored) {
+                // Address list is enough for a partial view.
+            }
+        }
+        return List.copyOf(byOutpoint.values());
+    }
+
+    private static void putUtxo(
+            Map<String, KfeUtxoResponse> byOutpoint,
+            BlockchainClient.AddressUtxo utxo,
+            String fallbackAddress) {
+        if (utxo == null || utxo.txid() == null || utxo.txid().isBlank()) {
+            return;
+        }
+        String key = utxo.txid() + ":" + utxo.vout();
+        String address = utxo.address() != null && !utxo.address().isBlank()
+                ? utxo.address()
+                : (fallbackAddress != null ? fallbackAddress : "");
+        KfeUtxoResponse candidate = new KfeUtxoResponse(
+                utxo.txid(),
+                utxo.vout(),
+                utxo.valueSats(),
+                utxo.scriptPubKey(),
+                address,
+                Math.max(0, utxo.confirmations()));
+        KfeUtxoResponse existing = byOutpoint.get(key);
+        if (existing == null || candidate.confirmations() > existing.confirmations()) {
+            byOutpoint.put(key, candidate);
+        }
     }
 
     @Transactional
@@ -166,29 +216,64 @@ public class KfeWalletNetworkService {
         }
         transactionApprovalPort.approveColdWalletPsbt(userId, request.totpCode());
 
+        if (request.amountSats() <= 0L) {
+            throw new IllegalArgumentException("amountSats must be positive.");
+        }
+        String destination = request.destinationAddress() != null
+                ? request.destinationAddress().trim()
+                : "";
+        if (destination.isEmpty()) {
+            throw new IllegalArgumentException("destinationAddress is required.");
+        }
+        if (!bitcoinAddressValidator.isValidBitcoinAddressForConfiguredNetwork(destination)) {
+            throw new IllegalArgumentException(
+                    "destinationAddress is not valid for the configured Bitcoin network.");
+        }
+
         BitcoinCoreRpcClient bitcoinCore = bitcoinCoreRpcClientProvider.getIfAvailable();
         if (bitcoinCore == null) {
             throw new FinancialProviderUnavailableException("Bitcoin Core RPC is unavailable for KFE PSBT creation.");
         }
 
-        List<KfeColdWalletPsbtRequest.Input> inputs = normalizeInputs(request.inputs());
-        if (inputs.isEmpty()) {
-            inputs = listUtxos(userId, walletId).stream()
-                    .map(utxo -> new KfeColdWalletPsbtRequest.Input(utxo.txid(), utxo.vout()))
-                    .toList();
-        }
-        if (inputs.isEmpty()) {
-            throw new IllegalArgumentException("No UTXOs are available for this cold wallet.");
+        // Live UTXO set is the ownership source of truth for spendable inputs.
+        List<KfeUtxoResponse> liveUtxos = listUtxos(userId, walletId);
+        Set<String> liveOutpoints = new HashSet<>();
+        for (KfeUtxoResponse utxo : liveUtxos) {
+            if (utxo != null && hasText(utxo.txid())) {
+                liveOutpoints.add(outpointKey(utxo.txid(), utxo.vout()));
+            }
         }
 
+        List<KfeColdWalletPsbtRequest.Input> inputs = normalizeInputs(request.inputs());
+        if (inputs.isEmpty()) {
+            inputs = liveUtxos.stream()
+                    .map(utxo -> new KfeColdWalletPsbtRequest.Input(utxo.txid(), utxo.vout()))
+                    .toList();
+        } else {
+            // Reject foreign / stale outpoints — never let client pick non-wallet UTXOs.
+            List<KfeColdWalletPsbtRequest.Input> owned = new ArrayList<>();
+            for (KfeColdWalletPsbtRequest.Input input : inputs) {
+                if (liveOutpoints.contains(outpointKey(input.txid(), input.vout()))) {
+                    owned.add(input);
+                }
+            }
+            inputs = List.copyOf(owned);
+        }
+        if (inputs.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No owned UTXOs are available for this cold wallet (inputs must belong to the wallet).");
+        }
+
+        String changeAddress = resolveColdChangeAddress(wallet);
         BitcoinCoreRpcClient.FundedPsbt fundedPsbt = bitcoinCore.createWatchOnlyPsbt(
                 inputs.stream()
                         .map(input -> new BitcoinCoreRpcClient.PsbtInput(input.txid(), input.vout()))
                         .toList(),
-                request.destinationAddress().trim(),
+                destination,
                 request.amountSats(),
                 request.confirmationTarget(),
-                request.feeRateSatsPerVbyte());
+                request.feeRateSatsPerVbyte(),
+                changeAddress);
         String psbtHash = hashService.sha256(fundedPsbt.psbt());
 
         auditLogService.record(
@@ -202,7 +287,8 @@ public class KfeWalletNetworkService {
                         "psbtHash", psbtHash,
                         "amountSats", String.valueOf(request.amountSats()),
                         "feeSats", String.valueOf(fundedPsbt.feeSats()),
-                        "inputCount", String.valueOf(inputs.size())));
+                        "inputCount", String.valueOf(inputs.size()),
+                        "changeAddressPresent", String.valueOf(hasText(changeAddress))));
 
         var workflow = psbtWorkflowService.create(
                 userId,
@@ -211,7 +297,7 @@ public class KfeWalletNetworkService {
                 psbtHash,
                 fundedPsbt.feeSats(),
                 request.amountSats(),
-                request.destinationAddress().trim(),
+                destination,
                 inputs);
 
         return new KfeColdWalletPsbtResponse(
@@ -220,8 +306,52 @@ public class KfeWalletNetworkService {
                 psbtHash,
                 fundedPsbt.feeSats(),
                 request.amountSats(),
-                request.destinationAddress().trim(),
+                destination,
                 inputs);
+    }
+
+    /**
+     * Next unused change-branch address for cold PSBT change. Prefer existing CHANGE rows,
+     * otherwise derive from xpub (index 0..N) and persist as CHANGE/ACTIVE.
+     */
+    private String resolveColdChangeAddress(KfeWalletEntity wallet) {
+        if (wallet == null || !hasText(wallet.getXpub())) {
+            throw new IllegalStateException("Cold wallet is missing xpub for change derivation.");
+        }
+        List<KfeWalletAddressEntity> existing =
+                addressRepository.findByWalletIdAndStatusOrderByCreatedAtDesc(
+                        wallet.getId(), KfeWalletAddressStatus.ACTIVE);
+        int maxChangeIndex = -1;
+        for (KfeWalletAddressEntity row : existing) {
+            if (row.getAddressRole() == KfeWalletAddressRole.CHANGE) {
+                // Prefer newest unused change address if present.
+                if (hasText(row.getAddress())) {
+                    return row.getAddress().trim();
+                }
+            }
+        }
+        // Derive a fresh change address at next free index (start at 0).
+        int nextIndex = Math.max(0, maxChangeIndex + 1);
+        String xpub = wallet.getXpub().trim();
+        String address = addressDerivationService.deriveAddressFromXpub(xpub, nextIndex, true);
+        if (!hasText(address)) {
+            throw new IllegalStateException("Failed to derive cold change address.");
+        }
+        try {
+            KfeWalletAddressEntity row = new KfeWalletAddressEntity();
+            row.setWalletId(wallet.getId());
+            row.setAddress(address.trim());
+            row.setAddressRole(KfeWalletAddressRole.CHANGE);
+            row.setStatus(KfeWalletAddressStatus.ACTIVE);
+            addressRepository.save(row);
+        } catch (RuntimeException ignored) {
+            // unique race — address still usable
+        }
+        return address.trim();
+    }
+
+    private static String outpointKey(String txid, int vout) {
+        return (txid != null ? txid.trim().toLowerCase(Locale.ROOT) : "") + ":" + vout;
     }
 
     /**

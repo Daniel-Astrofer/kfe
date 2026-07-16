@@ -20,7 +20,20 @@ public interface BlockchainClient {
         }
     }
 
-    record AddressUtxo(String txid, int vout, long valueSats, String scriptPubKey) {
+    /**
+     * Unspent outpoint. {@code confirmations} is 0 for mempool / unknown height;
+     * {@code address} may be null when derived only from a descriptor scan.
+     */
+    record AddressUtxo(
+            String txid,
+            int vout,
+            long valueSats,
+            String scriptPubKey,
+            int confirmations,
+            String address) {
+        public AddressUtxo(String txid, int vout, long valueSats, String scriptPubKey) {
+            this(txid, vout, valueSats, scriptPubKey, 0, null);
+        }
     }
 
     JsonNode executeRpc(String method, Object... params);
@@ -137,17 +150,175 @@ public interface BlockchainClient {
                 JsonNode vout = utxo.path("vout");
                 long valueSats = parseUtxoValueSats(utxo);
                 if (txid != null && vout.isIntegralNumber() && valueSats > 0L) {
+                    int confs = utxo.path("confirmations").isIntegralNumber()
+                            ? Math.max(0, utxo.path("confirmations").asInt())
+                            : 0;
                     results.add(new AddressUtxo(
                             txid,
                             vout.asInt(),
                             valueSats,
-                            textField(utxo, "scriptPubKey")));
+                            textField(utxo, "scriptPubKey"),
+                            confs,
+                            address.trim()));
                 }
             }
             return results;
         } catch (RuntimeException e) {
             return List.of();
         }
+    }
+
+    /**
+     * Unspents from the UTXO set via {@code scantxoutset} — works without Core wallet import.
+     * Prefer this for watch-only / cold addresses.
+     */
+    default List<AddressUtxo> getUnspentOutputsFromScan(String descriptorOrAddr, int range) {
+        if (descriptorOrAddr == null || descriptorOrAddr.isBlank()) {
+            return List.of();
+        }
+        String desc = descriptorOrAddr.trim();
+        if (!desc.contains("(")) {
+            desc = "addr(" + desc + ")";
+        }
+        try {
+            Map<String, Object> scanObject = new LinkedHashMap<>();
+            scanObject.put("desc", desc);
+            if (range > 1) {
+                scanObject.put("range", range);
+            }
+            JsonNode result = unwrapResult(executeRpc("scantxoutset", "start", List.of(scanObject)));
+            return parseScantxoutsetUnspents(result, null);
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    default long getBlockTipHeight() {
+        try {
+            JsonNode height = unwrapResult(executeRpc("getblockcount"));
+            return height != null && height.isNumber() ? Math.max(0L, height.asLong()) : 0L;
+        } catch (RuntimeException e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * True if the outpoint is still unspent considering the <em>mempool</em>
+     * ({@code gettxout} with {@code include_mempool=true}).
+     * {@code scantxoutset} ignores mempool spends — Electrum does not.
+     *
+     * <p>Important: when spent, Core returns JSON {@code "result": null}. Some unwrap
+     * helpers return the whole RPC envelope in that case — we must treat that as spent.
+     */
+    default boolean isOutpointUnspentIncludingMempool(String txid, int vout) {
+        if (txid == null || txid.isBlank() || vout < 0) {
+            return false;
+        }
+        try {
+            JsonNode raw = executeRpc("gettxout", txid.trim(), vout, true);
+            if (raw == null || raw.isNull() || raw.isMissingNode()) {
+                return false;
+            }
+            // Full RPC envelope: { "result": null|object, "error": ... }
+            if (raw.has("result") || raw.has("error")) {
+                JsonNode result = raw.get("result");
+                if (result == null || result.isNull() || result.isMissingNode()) {
+                    return false; // spent (or unknown → treat as spent for Electrum parity)
+                }
+                return result.has("value") || result.has("confirmations") || result.has("bestblock");
+            }
+            // Already-unwrapped UTXO object
+            return raw.has("value") || raw.has("confirmations") || raw.has("bestblock");
+        } catch (RuntimeException e) {
+            return true; // fail open to avoid zeroing balance on RPC blip
+        }
+    }
+
+    /**
+     * Mempool (or chain) txid that spends the given outpoint, if known.
+     * Uses Bitcoin Core {@code gettxspendingprevout} when available.
+     */
+    default String findSpendingTxid(String txid, int vout) {
+        if (txid == null || txid.isBlank() || vout < 0) {
+            return null;
+        }
+        try {
+            Map<String, Object> outpoint = new LinkedHashMap<>();
+            outpoint.put("txid", txid.trim());
+            outpoint.put("vout", vout);
+            JsonNode result = unwrapResult(executeRpc("gettxspendingprevout", List.of(outpoint)));
+            if (result == null || !result.isArray() || result.isEmpty()) {
+                return null;
+            }
+            String spending = textField(result.get(0), "spendingtxid");
+            return spending != null && !spending.isBlank() ? spending.trim() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Merge listunspent + scantxoutset for an address (dedupe by txid:vout, keep max confs).
+     */
+    default List<AddressUtxo> getUnspentOutputsMerged(String address) {
+        if (address == null || address.isBlank()) {
+            return List.of();
+        }
+        Map<String, AddressUtxo> byOutpoint = new LinkedHashMap<>();
+        for (AddressUtxo utxo : getUnspentOutputs(address.trim())) {
+            byOutpoint.put(utxo.txid() + ":" + utxo.vout(), utxo);
+        }
+        for (AddressUtxo utxo : getUnspentOutputsFromScan(address.trim(), 1)) {
+            String key = utxo.txid() + ":" + utxo.vout();
+            AddressUtxo existing = byOutpoint.get(key);
+            if (existing == null || utxo.confirmations() > existing.confirmations()) {
+                byOutpoint.put(key, new AddressUtxo(
+                        utxo.txid(),
+                        utxo.vout(),
+                        utxo.valueSats(),
+                        utxo.scriptPubKey(),
+                        utxo.confirmations(),
+                        address.trim()));
+            }
+        }
+        return List.copyOf(byOutpoint.values());
+    }
+
+    private static List<AddressUtxo> parseScantxoutsetUnspents(JsonNode result, String fallbackAddress) {
+        if (result == null || result.isNull() || result.isMissingNode()) {
+            return List.of();
+        }
+        long tipHeight = result.path("height").isIntegralNumber() ? result.path("height").asLong() : 0L;
+        JsonNode unspents = result.path("unspents");
+        if (!unspents.isArray()) {
+            return List.of();
+        }
+        List<AddressUtxo> results = new ArrayList<>();
+        for (JsonNode utxo : unspents) {
+            String txid = textField(utxo, "txid");
+            JsonNode vout = utxo.path("vout");
+            long valueSats = parseUtxoValueSats(utxo);
+            if (txid == null || !vout.isIntegralNumber() || valueSats <= 0L) {
+                continue;
+            }
+            int confs = 0;
+            if (utxo.path("confirmations").isIntegralNumber()) {
+                confs = Math.max(0, utxo.path("confirmations").asInt());
+            } else if (utxo.path("height").isIntegralNumber() && tipHeight > 0L) {
+                long h = utxo.path("height").asLong();
+                if (h > 0L) {
+                    confs = (int) Math.max(0L, tipHeight - h + 1L);
+                }
+            }
+            results.add(new AddressUtxo(
+                    txid,
+                    vout.asInt(),
+                    valueSats,
+                    textField(utxo, "scriptPubKey"),
+                    confs,
+                    fallbackAddress));
+        }
+        return results;
     }
 
     private long estimateSmartFeeForTarget(int confirmationTarget, long fallbackSatPerVByte) {

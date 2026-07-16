@@ -124,14 +124,15 @@ public class KfeTransactionEntity {
 
     @PrePersist
     void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        // Always UTC wall clock — pods run Etc/UTC; never rely on host local TZ.
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         createdAt = now;
         updatedAt = now;
     }
 
     @PreUpdate
     void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public UUID getId() {

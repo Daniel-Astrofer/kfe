@@ -6,6 +6,7 @@ import source.kfe.model.KfeUserStatementEntity;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -16,6 +17,8 @@ public interface KfeUserStatementRepository extends JpaRepository<KfeUserStateme
             LocalDateTime now);
 
     boolean existsByTransactionId(UUID transactionId);
+
+    Optional<KfeUserStatementEntity> findByTransactionId(UUID transactionId);
 
     long deleteByExpiresAtBefore(LocalDateTime cutoff);
 }

@@ -62,11 +62,13 @@ public class KfeTransactionController {
     public ResponseEntity<ApiResponse<List<KfeTransactionResponse>>> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size,
+            @RequestParam(required = false) java.time.Instant since,
             Authentication authentication) {
         List<KfeTransactionResponse> response = financialApi.transactions(
                 KfeAuthenticationSupport.authenticatedUserId(authentication),
                 page,
-                size);
+                size,
+                since);
         return ResponseEntity.ok(ApiResponse.success("KFE transactions retrieved.", response));
     }
 }

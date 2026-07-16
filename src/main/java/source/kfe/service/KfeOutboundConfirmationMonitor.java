@@ -33,6 +33,7 @@ public class KfeOutboundConfirmationMonitor {
     private final KfeTransactionRepository transactionRepository;
     private final KfeExecutionTransactionHelper transactionHelper;
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+    private final ObjectProvider<KfeColdWalletObservationService> coldObservationService;
     private final int batchSize;
     private final int minConfirmations;
 
@@ -40,12 +41,14 @@ public class KfeOutboundConfirmationMonitor {
             KfeTransactionRepository transactionRepository,
             KfeExecutionTransactionHelper transactionHelper,
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
+            ObjectProvider<KfeColdWalletObservationService> coldObservationService,
             @Value("${kfe.network-monitor.batch-size:50}") int batchSize,
             @Value("${kfe.network-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
             int minConfirmations) {
         this.transactionRepository = transactionRepository;
         this.transactionHelper = transactionHelper;
         this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
+        this.coldObservationService = coldObservationService;
         this.batchSize = Math.max(1, batchSize);
         // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
         this.minConfirmations = Math.max(0, minConfirmations);
@@ -60,10 +63,14 @@ public class KfeOutboundConfirmationMonitor {
             return;
         }
 
+        // Include VALIDATING: cold Electrum spends and many on-chain rows never enter EXECUTING.
         List<KfeTransactionEntity> candidates = transactionRepository.findOutboundAwaitingConfirmation(
                 KfeRail.ONCHAIN,
                 KfeDirection.OUTBOUND,
-                List.of(KfeTransactionStatus.EXECUTING, KfeTransactionStatus.REQUIRES_RECONCILIATION),
+                List.of(
+                        KfeTransactionStatus.EXECUTING,
+                        KfeTransactionStatus.VALIDATING,
+                        KfeTransactionStatus.REQUIRES_RECONCILIATION),
                 PageRequest.of(0, batchSize));
 
         for (KfeTransactionEntity tx : candidates) {
@@ -75,6 +82,57 @@ public class KfeOutboundConfirmationMonitor {
                         tx.getId(),
                         exception.getMessage());
             }
+        }
+
+        // Also advance confirmation rings for inbounds (VALIDATING + recently SETTLED < 6 confs).
+        List<KfeTransactionEntity> openInbounds =
+                transactionRepository.findOutboundAwaitingConfirmation(
+                        KfeRail.ONCHAIN,
+                        KfeDirection.INBOUND,
+                        List.of(
+                                KfeTransactionStatus.VALIDATING,
+                                KfeTransactionStatus.EXECUTING,
+                                KfeTransactionStatus.SETTLED),
+                        PageRequest.of(0, batchSize));
+        for (KfeTransactionEntity tx : openInbounds) {
+            if (tx.getStatus() == KfeTransactionStatus.SETTLED && tx.getConfirmations() >= 6) {
+                continue;
+            }
+            try {
+                inspectInbound(core, tx);
+            } catch (RuntimeException exception) {
+                log.warn(
+                        "[KFE Outbound Monitor] inbound conf check failed txId={}: {}",
+                        tx.getId(),
+                        exception.getMessage());
+            }
+        }
+    }
+
+    private void inspectInbound(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
+        String txid = tx.getBlockchainTxid();
+        if (txid == null || txid.isBlank()) {
+            return;
+        }
+        java.util.OptionalInt found = core.findTransactionConfirmations(txid.trim());
+        if (found.isEmpty()) {
+            return;
+        }
+        int confirmations = found.getAsInt();
+        if (KfeColdWalletObservationService.isColdObservation(tx)) {
+            KfeColdWalletObservationService coldObs = coldObservationService.getIfAvailable();
+            if (coldObs != null) {
+                coldObs.touchColdConfirmations(tx.getId(), confirmations);
+            }
+            return;
+        }
+        if (confirmations > tx.getConfirmations()) {
+            transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
+            log.info(
+                    "[KFE Outbound Monitor] inbound confs txId={} confs={} status={}",
+                    tx.getId(),
+                    confirmations,
+                    tx.getStatus());
         }
     }
 
@@ -88,6 +146,16 @@ public class KfeOutboundConfirmationMonitor {
             return;
         }
         int confirmations = found.getAsInt();
+        // Cold PSBT / observer rows never hold a custodial LOCKED reserve.
+        if (KfeColdWalletObservationService.isColdObservation(tx)) {
+            KfeColdWalletObservationService coldObs = coldObservationService.getIfAvailable();
+            if (coldObs != null) {
+                coldObs.touchColdConfirmations(tx.getId(), confirmations);
+            } else if (confirmations > tx.getConfirmations()) {
+                transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
+            }
+            return;
+        }
         if (confirmations < minConfirmations) {
             // Persist partial progress for UI without unlocking yet.
             if (confirmations > tx.getConfirmations()) {

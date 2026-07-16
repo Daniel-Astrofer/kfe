@@ -22,6 +22,9 @@ public interface KfeTransactionRepository extends JpaRepository<KfeTransactionEn
 
     Optional<KfeTransactionEntity> findByIdempotencyKey(String idempotencyKey);
 
+    List<KfeTransactionEntity> findByDestinationWalletIdAndProvider(
+            UUID destinationWalletId, String provider);
+
     Optional<KfeTransactionEntity> findByIdAndUserId(UUID id, Long userId);
 
     @Query("""
@@ -108,5 +111,39 @@ public interface KfeTransactionRepository extends JpaRepository<KfeTransactionEn
             @Param("internalDirection") KfeDirection internalDirection,
             Pageable pageable);
 
+    @Query("""
+            select t from KfeTransactionEntity t
+            where (
+                    t.userId = :userId
+                    or (
+                        t.rail = :internalRail
+                        and t.direction = :internalDirection
+                        and t.destinationWalletId in (
+                            select destinationWallet.id from KfeWalletEntity destinationWallet
+                            where destinationWallet.userId = :userId
+                        )
+                    )
+               )
+              and t.updatedAt > :since
+            order by t.createdAt desc, t.id desc
+            """)
+    List<KfeTransactionEntity> findParticipantVisibleByUserIdSince(
+            @Param("userId") Long userId,
+            @Param("internalRail") KfeRail internalRail,
+            @Param("internalDirection") KfeDirection internalDirection,
+            @Param("since") java.time.LocalDateTime since,
+            Pageable pageable);
+
     Optional<KfeTransactionEntity> findTopByIdempotencyKeyStartingWithOrderByCreatedAtDesc(String idempotencyKeyPrefix);
+
+    List<KfeTransactionEntity> findByBlockchainTxidAndUserId(String blockchainTxid, Long userId);
+
+    @Query("""
+            select t from KfeTransactionEntity t
+            where (t.sourceWalletId = :walletId or t.destinationWalletId = :walletId)
+              and t.status in :statuses
+            """)
+    List<KfeTransactionEntity> findByWalletIdAndStatusIn(
+            @Param("walletId") UUID walletId,
+            @Param("statuses") Collection<KfeTransactionStatus> statuses);
 }

@@ -2,6 +2,9 @@ package source.kfe.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,6 +13,7 @@ import source.kfe.model.KfeExecutionOutboxEntity;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletEntity;
+import source.kfe.model.KfeWalletKind;
 import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfeExecutionOutboxRepository;
 import source.kfe.repository.KfeIdempotencyRepository;
@@ -24,6 +28,7 @@ import java.util.UUID;
 @Service
 public class KfeExecutionTransactionHelper {
 
+    private static final Logger log = LoggerFactory.getLogger(KfeExecutionTransactionHelper.class);
     private static final String ASSET_BTC = "BTC";
 
     private final KfeExecutionOutboxRepository outboxRepository;
@@ -38,6 +43,7 @@ public class KfeExecutionTransactionHelper {
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
     private final KfeFeeSettlementService feeSettlementService;
+    private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final int maxRetryAttempts;
 
     public KfeExecutionTransactionHelper(
@@ -53,6 +59,7 @@ public class KfeExecutionTransactionHelper {
             KfeHashService hashService,
             ObjectMapper objectMapper,
             KfeFeeSettlementService feeSettlementService,
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
@@ -66,6 +73,7 @@ public class KfeExecutionTransactionHelper {
         this.hashService = hashService;
         this.objectMapper = objectMapper;
         this.feeSettlementService = feeSettlementService;
+        this.onchainBalanceSyncService = onchainBalanceSyncService;
         if (maxRetryAttempts <= 0) {
             throw new IllegalArgumentException("maxRetryAttempts must be positive.");
         }
@@ -219,6 +227,7 @@ public class KfeExecutionTransactionHelper {
             return true;
         }
         if (tx.getStatus() != KfeTransactionStatus.EXECUTING
+                && tx.getStatus() != KfeTransactionStatus.VALIDATING
                 && tx.getStatus() != KfeTransactionStatus.REQUIRES_RECONCILIATION) {
             return false;
         }
@@ -252,6 +261,7 @@ public class KfeExecutionTransactionHelper {
             locked.setProviderReference(providerReference);
             markOutboxDispatched(locked, providerReference);
         }
+        resyncCustodialObserved(tx.getSourceWalletId());
         dashboardPublisher.publishAfterCommit(tx.getUserId());
         return true;
     }
@@ -291,6 +301,7 @@ public class KfeExecutionTransactionHelper {
         recordStatement(tx, sourceWalletId, providerPayload);
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);
+        resyncCustodialObserved(sourceWalletId);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
     }
 
@@ -543,6 +554,36 @@ public class KfeExecutionTransactionHelper {
         outbox.setNextAttemptAt(null);
         clearClaim(outbox);
         outboxRepository.save(outbox);
+    }
+
+    /**
+     * After custodial outbound settles, re-probe chain observed so dual-ledger drift is short-lived.
+     * Failures are non-fatal — scheduled on-chain sync remains the backstop.
+     */
+    private void resyncCustodialObserved(UUID walletId) {
+        if (walletId == null) {
+            return;
+        }
+        KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+        if (wallet == null || wallet.getKind() != KfeWalletKind.CUSTODIAL_ONCHAIN) {
+            return;
+        }
+        KfeOnchainBalanceSyncService sync = onchainBalanceSyncService.getIfAvailable();
+        if (sync == null) {
+            return;
+        }
+        try {
+            long probed = sync.syncWallet(walletId);
+            log.info(
+                    "[KFE Execution] custodial observed resync walletId={} resultSats={}",
+                    walletId,
+                    probed);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Execution] custodial observed resync failed walletId={}: {}",
+                    walletId,
+                    exception.getMessage());
+        }
     }
 
     private boolean completeTerminalOutboxIfTransactionTerminal(

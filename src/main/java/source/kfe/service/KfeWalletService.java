@@ -58,6 +58,8 @@ public class KfeWalletService {
     private final TransactionTemplate transactionTemplate;
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
+    private final ObjectProvider<KfeColdWalletObservationService> coldWalletObservationService;
+    private final ObjectProvider<KfeMonitoredChainAddressIndex> monitoredChainAddressIndex;
 
     public KfeWalletService(
             KfeWalletRepository walletRepository,
@@ -73,7 +75,9 @@ public class KfeWalletService {
             KfeReceiveAddressIssuer receiveAddressIssuer,
             TransactionTemplate transactionTemplate,
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
-            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService) {
+            ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
+            ObjectProvider<KfeColdWalletObservationService> coldWalletObservationService,
+            ObjectProvider<KfeMonitoredChainAddressIndex> monitoredChainAddressIndex) {
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
         this.balanceService = balanceService;
@@ -88,6 +92,8 @@ public class KfeWalletService {
         this.transactionTemplate = transactionTemplate;
         this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
+        this.coldWalletObservationService = coldWalletObservationService;
+        this.monitoredChainAddressIndex = monitoredChainAddressIndex;
     }
 
     public KfeWalletResponse createWallet(Long userId, KfeCreateWalletRequest request) {
@@ -242,6 +248,10 @@ public class KfeWalletService {
     /**
      * Best-effort chain hooks after wallet row is ACTIVE and committed.
      * Failures never undo wallet creation.
+     *
+     * <p>For WATCH_ONLY, monitoring starts at registration: balance probe + first history
+     * observation (UTXOs already present + later scheduled scans). Pre-registration chain
+     * history is intentionally out of scope without a full indexer.
      */
     private void runPostActivationChainHooks(UUID walletId) {
         KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
@@ -250,6 +260,7 @@ public class KfeWalletService {
         }
         importWatchOnlyIntoBitcoinCore(wallet);
         syncChainObservedBestEffort(wallet);
+        startColdHistoryMonitoringBestEffort(wallet);
     }
 
     private void syncChainObservedBestEffort(KfeWalletEntity wallet) {
@@ -271,6 +282,45 @@ public class KfeWalletService {
         } catch (Exception exception) {
             log.warn(
                     "[KFE Wallet] Initial chain balance sync failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    /**
+     * Immediately indexes post-registration cold activity (current UTXOs as inbound
+     * observations). Ongoing activity is picked up by {@link KfeColdWalletObservationService}
+     * and PSBT broadcast hooks.
+     */
+    private void startColdHistoryMonitoringBestEffort(KfeWalletEntity wallet) {
+        if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
+            return;
+        }
+        KfeColdWalletObservationService coldObs = coldWalletObservationService.getIfAvailable();
+        if (coldObs == null) {
+            return;
+        }
+        try {
+            coldObs.observeWallet(wallet.getId());
+            KfeMonitoredChainAddressIndex index = monitoredChainAddressIndex.getIfAvailable();
+            if (index != null) {
+                try {
+                    index.rebuild();
+                } catch (RuntimeException ignored) {
+                    // ZMQ filter will refresh on its own schedule
+                }
+            }
+            log.info(
+                    "[KFE Wallet] Cold history monitoring started at registration walletId={}",
+                    wallet.getId());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Wallet] Initial cold history observation failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        } catch (Exception exception) {
+            log.warn(
+                    "[KFE Wallet] Initial cold history observation failed walletId={}: {}",
                     wallet.getId(),
                     exception.getMessage());
         }

@@ -12,6 +12,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 import source.common.financial.FinancialDepositConfirmedNotificationRequest;
 import source.common.financial.FinancialNotificationPort;
+import source.common.financial.FinancialOutboundNotificationRequest;
 import source.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
 
 import java.time.Duration;
@@ -115,6 +116,45 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
                         rail,
                         creditedSats,
                         confirmations));
+    }
+
+    @Override
+    public void notifyOutboundDetected(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            int confirmations,
+            String destinationHint) {
+        post("/internal/kfe/notifications/outbound-detected",
+                new FinancialOutboundNotificationRequest(
+                        userId,
+                        transactionId,
+                        walletId,
+                        rail,
+                        amountSats,
+                        confirmations,
+                        destinationHint));
+    }
+
+    @Override
+    public void notifyOutboundConfirmed(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            int confirmations) {
+        post("/internal/kfe/notifications/outbound-confirmed",
+                new FinancialOutboundNotificationRequest(
+                        userId,
+                        transactionId,
+                        walletId,
+                        rail,
+                        amountSats,
+                        confirmations,
+                        null));
     }
 
     private void post(String path, Object request) {

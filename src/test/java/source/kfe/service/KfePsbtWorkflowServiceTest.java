@@ -26,12 +26,17 @@ class KfePsbtWorkflowServiceTest {
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
 
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeColdWalletObservationService> coldObservationProvider =
+            mock(ObjectProvider.class);
+
     private final KfePsbtWorkflowService service = new KfePsbtWorkflowService(
             workflowRepository,
             bitcoinCoreProvider,
             new ObjectMapper(),
             hashService,
-            auditLogService);
+            auditLogService,
+            coldObservationProvider);
 
     @Test
     void broadcastIsIdempotentWhenWorkflowAlreadyBroadcast() {

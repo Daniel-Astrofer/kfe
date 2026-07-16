@@ -78,6 +78,10 @@ class KfeInboundSettlementServiceTest {
         org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
                 org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
         org.mockito.Mockito.lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeBalanceMetrics> metrics =
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        org.mockito.Mockito.lenient().when(metrics.getIfAvailable()).thenReturn(null);
         service = new KfeInboundSettlementService(
                 transactionRepository,
                 outboxRepository,
@@ -91,7 +95,8 @@ class KfeInboundSettlementServiceTest {
                 hashService,
                 notificationPort,
                 feeSettlementService,
-                onchainSync
+                onchainSync,
+                metrics
         );
     }
 

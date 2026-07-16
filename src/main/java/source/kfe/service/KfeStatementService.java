@@ -38,6 +38,21 @@ public class KfeStatementService {
         recordUserStatement(userId, walletId, transaction, payload);
     }
 
+    /**
+     * Refresh frozen display payload (confirmations/status) so dashboard history stays live.
+     */
+    public void refreshTransactionDisplayPayload(KfeTransactionEntity transaction, Map<String, ?> payload) {
+        if (transaction == null || transaction.getId() == null || payload == null) {
+            return;
+        }
+        statementRepository.findByTransactionId(transaction.getId()).ifPresent(statement -> {
+            statement.setDisplayPayloadJson(toJson(payload));
+            // Keep row visible a bit longer while still confirming.
+            statement.setExpiresAt(LocalDateTime.now().plusHours(24));
+            statementRepository.save(statement);
+        });
+    }
+
     private String toJson(Map<String, ?> payload) {
         try {
             return objectMapper.writeValueAsString(payload != null ? payload : Map.of());

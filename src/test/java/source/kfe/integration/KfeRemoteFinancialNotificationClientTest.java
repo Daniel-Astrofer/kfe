@@ -141,6 +141,64 @@ class KfeRemoteFinancialNotificationClientTest {
     }
 
     @Test
+    void postsOutboundDetectedNotificationToAuthServer() throws Exception {
+        KfeRemoteFinancialNotificationClient client = client("credential");
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        server.expect(requestTo("http://server.test/internal/kfe/notifications/outbound-detected"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-KFE-Internal-Secret", "credential"))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""
+                        {
+                          "userId":42,
+                          "transactionId":"%s",
+                          "walletId":"%s",
+                          "rail":"ONCHAIN",
+                          "amountSats":99000,
+                          "confirmations":0,
+                          "destinationHint":"bc1qdest"
+                        }
+                        """.formatted(transactionId, walletId)))
+                .andRespond(withSuccess());
+
+        client.notifyOutboundDetected(
+                42L, transactionId, walletId, "ONCHAIN", 99000L, 0, "bc1qdest");
+
+        server.verify();
+    }
+
+    @Test
+    void postsOutboundConfirmedNotificationToAuthServer() throws Exception {
+        KfeRemoteFinancialNotificationClient client = client("credential");
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        UUID transactionId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        server.expect(requestTo("http://server.test/internal/kfe/notifications/outbound-confirmed"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-KFE-Internal-Secret", "credential"))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""
+                        {
+                          "userId":42,
+                          "transactionId":"%s",
+                          "walletId":"%s",
+                          "rail":"ONCHAIN",
+                          "amountSats":99000,
+                          "confirmations":6
+                        }
+                        """.formatted(transactionId, walletId)))
+                .andRespond(withSuccess());
+
+        client.notifyOutboundConfirmed(42L, transactionId, walletId, "ONCHAIN", 99000L, 6);
+
+        server.verify();
+    }
+
+    @Test
     void rejectsMissingInternalCredentialBeforeCallingAuthServer() {
         KfeRemoteFinancialNotificationClient client = client("");
 

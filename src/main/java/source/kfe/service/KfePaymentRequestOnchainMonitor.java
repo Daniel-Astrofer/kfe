@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialNotificationPort;
 import source.kfe.application.transaction.KfeBalanceMovementRecorder;
+import source.kfe.application.transaction.KfeLedgerMovementTypes;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfePaymentRequestEntity;
 import source.kfe.model.KfePaymentRequestStatus;
@@ -22,6 +23,7 @@ import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.rail.BlockchainClient;
+import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
@@ -46,6 +48,7 @@ public class KfePaymentRequestOnchainMonitor {
     private final KfePaymentRequestRepository paymentRequestRepository;
     private final KfeTransactionRepository transactionRepository;
     private final KfeWalletRepository walletRepository;
+    private final KfeBalanceMovementRepository movementRepository;
     private final ObjectProvider<BlockchainClient> blockchainClient;
     private final KfePricingService pricingService;
     private final KfeBalanceService balanceService;
@@ -57,6 +60,7 @@ public class KfePaymentRequestOnchainMonitor {
     private final FinancialNotificationPort notificationPort;
     private final TransactionTemplate transactionTemplate;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
+    private final ObjectProvider<KfeBalanceMetrics> balanceMetrics;
     private final int batchSize;
     private final int minConfirmations;
 
@@ -64,6 +68,7 @@ public class KfePaymentRequestOnchainMonitor {
             KfePaymentRequestRepository paymentRequestRepository,
             KfeTransactionRepository transactionRepository,
             KfeWalletRepository walletRepository,
+            KfeBalanceMovementRepository movementRepository,
             ObjectProvider<BlockchainClient> blockchainClient,
             KfePricingService pricingService,
             KfeBalanceService balanceService,
@@ -75,12 +80,14 @@ public class KfePaymentRequestOnchainMonitor {
             FinancialNotificationPort notificationPort,
             TransactionTemplate transactionTemplate,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
+            ObjectProvider<KfeBalanceMetrics> balanceMetrics,
             @Value("${kfe.payment-request-monitor.batch-size:50}") int batchSize,
             @Value("${kfe.payment-request-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
             int minConfirmations) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
+        this.movementRepository = movementRepository;
         this.blockchainClient = blockchainClient;
         this.pricingService = pricingService;
         this.balanceService = balanceService;
@@ -92,6 +99,7 @@ public class KfePaymentRequestOnchainMonitor {
         this.notificationPort = notificationPort;
         this.transactionTemplate = transactionTemplate;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
+        this.balanceMetrics = balanceMetrics;
         this.batchSize = Math.max(1, batchSize);
         // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
         this.minConfirmations = Math.max(0, minConfirmations);
@@ -226,6 +234,28 @@ public class KfePaymentRequestOnchainMonitor {
         }
         KfeTransactionEntity existing = findObservedOrSettledTransaction(payment.txid()).orElse(null);
         if (existing != null && existing.getStatus() == KfeTransactionStatus.SETTLED) {
+            // Deposit may already be credited by custodial observer — still close the PR.
+            if (request.getStatus() != KfePaymentRequestStatus.PAID) {
+                request.markPaid(existing.getId());
+                paymentRequestRepository.save(request);
+                statementService.recordUserStatementIfAbsent(
+                        request.getUserId(),
+                        request.getWalletId(),
+                        existing,
+                        Map.of(
+                                "paymentRequestId", request.getId().toString(),
+                                "publicId", request.getPublicId(),
+                                "txid", payment.txid(),
+                                "note", "payment-request-closed-after-external-settle"));
+                notifyPaymentRequestPaid(
+                        request, existing, Math.max(0L, existing.getReceiverAmountSats()));
+                dashboardPublisher.publishAfterCommit(request.getUserId());
+                log.info(
+                        "[KFE PR Monitor] markPaid on already-SETTLED inbound walletId={} publicId={} txid={}",
+                        request.getWalletId(),
+                        request.getPublicId(),
+                        payment.txid());
+            }
             return;
         }
 
@@ -351,9 +381,39 @@ public class KfePaymentRequestOnchainMonitor {
                     transactionId, walletId, "CHAIN_OBSERVED_SYNC", recorded, null, "OBSERVED");
             return;
         }
+        // Dual path: custodial observer / inbound settlement may have credited the same tx.
+        if (movementRepository.existsByTransactionIdAndMovementTypeIn(
+                transactionId, KfeLedgerMovementTypes.USER_AVAILABLE_CREDIT_TYPES)) {
+            log.info(
+                    "[KFE PR Monitor] skip dual credit transactionId={} walletId={} amount={}",
+                    transactionId,
+                    walletId,
+                    amountSats);
+            recordDualSkip("payment-request");
+            if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+                resyncChainObserved(walletId);
+            }
+            return;
+        }
+        boolean wrote = movementRecorder.record(
+                transactionId,
+                walletId,
+                KfeLedgerMovementTypes.CREDIT_PAYMENT_REQUEST,
+                amountSats,
+                null,
+                "AVAILABLE");
+        if (!wrote) {
+            log.info(
+                    "[KFE PR Monitor] credit race lost transactionId={} walletId={}",
+                    transactionId,
+                    walletId);
+            recordDualSkip("payment-request-race");
+            if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
+                resyncChainObserved(walletId);
+            }
+            return;
+        }
         balanceService.creditAvailable(walletId, ASSET_BTC, amountSats);
-        movementRecorder.record(
-                transactionId, walletId, "CREDIT_PAYMENT_REQUEST", amountSats, null, "AVAILABLE");
         if (wallet != null && wallet.getKind() == KfeWalletKind.CUSTODIAL_ONCHAIN) {
             resyncChainObserved(walletId);
         }
@@ -372,6 +432,13 @@ public class KfePaymentRequestOnchainMonitor {
                     walletId,
                     exception.getMessage());
             return -1L;
+        }
+    }
+
+    private void recordDualSkip(String path) {
+        KfeBalanceMetrics metrics = balanceMetrics.getIfAvailable();
+        if (metrics != null) {
+            metrics.recordDualCreditSkip(path);
         }
     }
 

@@ -5,10 +5,14 @@ import org.springframework.security.authentication.TestingAuthenticationToken;
 import source.kfe.application.financial.FinancialApi;
 import source.kfe.dto.KfeTransactionResponse;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,14 +26,14 @@ class KfeTransactionControllerTest {
     @Test
     void listsTransactionsForAuthenticatedUserWithRequestedPage() {
         KfeTransactionResponse transaction = mock(KfeTransactionResponse.class);
-        when(financialApi.transactions(42L, 2, 25)).thenReturn(List.of(transaction));
+        when(financialApi.transactions(eq(42L), eq(2), eq(25), isNull())).thenReturn(List.of(transaction));
 
-        var response = controller.list(2, 25, authentication);
+        var response = controller.list(2, 25, null, authentication);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getData()).containsExactly(transaction);
-        verify(financialApi).transactions(42L, 2, 25);
+        verify(financialApi).transactions(eq(42L), eq(2), eq(25), isNull());
     }
 
     @Test

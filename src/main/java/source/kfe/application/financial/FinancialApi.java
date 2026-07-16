@@ -111,12 +111,30 @@ public class FinancialApi {
     }
 
     public List<KfeTransactionResponse> transactions(Long userId, int page, int size) {
+        return transactions(userId, page, size, null);
+    }
+
+    /**
+     * Lists participant-visible transactions.
+     *
+     * @param since when non-null, only rows with {@code updatedAt > since} (UTC) — incremental
+     *              sync for clients that already hold a durable local projection.
+     */
+    public List<KfeTransactionResponse> transactions(
+            Long userId, int page, int size, java.time.Instant since) {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(200, Math.max(1, size));
-        return transactionRepository
-                .findParticipantVisibleByUserId(userId, KfeRail.INTERNAL, KfeDirection.INTERNAL,
-                        PageRequest.of(safePage, safeSize))
-                .stream()
+        var pageable = PageRequest.of(safePage, safeSize);
+        var rows = since == null
+                ? transactionRepository.findParticipantVisibleByUserId(
+                        userId, KfeRail.INTERNAL, KfeDirection.INTERNAL, pageable)
+                : transactionRepository.findParticipantVisibleByUserIdSince(
+                        userId,
+                        KfeRail.INTERNAL,
+                        KfeDirection.INTERNAL,
+                        java.time.LocalDateTime.ofInstant(since, java.time.ZoneOffset.UTC),
+                        pageable);
+        return rows.stream()
                 .map(transaction -> responseMapper.toTransactionResponse(transaction, userId))
                 .toList();
     }

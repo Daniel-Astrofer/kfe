@@ -6,6 +6,7 @@ import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 import source.kfe.repository.KfeWalletAddressRepository;
+import source.kfe.repository.KfeWalletRepository;
 
 import java.util.UUID;
 
@@ -14,7 +15,9 @@ import static org.mockito.Mockito.mock;
 
 class KfeResponseMapperTest {
 
-    private final KfeResponseMapper mapper = new KfeResponseMapper(mock(KfeWalletAddressRepository.class));
+    private final KfeResponseMapper mapper = new KfeResponseMapper(
+            mock(KfeWalletAddressRepository.class),
+            mock(KfeWalletRepository.class));
 
     @Test
     void mapsDurableExternalDetailsAndSenderPerspective() {
@@ -27,9 +30,12 @@ class KfeResponseMapperTest {
         assertThat(response.walletId()).isEqualTo(sourceWalletId);
         assertThat(response.externalReference()).isEqualTo("bcrt1qdestination");
         assertThat(response.memo()).isEqualTo("invoice 42");
-        assertThat(response.provider()).isEqualTo("BITCOIN_CORE");
+        // Taxonomy normalizes BITCOIN_CORE → CUSTODIAL_ONCHAIN for clients.
+        assertThat(response.provider()).isEqualTo("CUSTODIAL_ONCHAIN");
         assertThat(response.providerReference()).isEqualTo("provider-reference");
         assertThat(response.paymentHash()).isEqualTo("payment-hash");
+        assertThat(response.quorumProposalHash()).isNull();
+        assertThat(response.quorumAckCount()).isZero();
     }
 
     @Test

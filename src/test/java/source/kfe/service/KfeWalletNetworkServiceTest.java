@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import source.common.financial.FinancialTransactionApprovalPort;
 import source.common.financial.FinancialUserDirectoryPort;
+import source.common.service.AddressDerivationService;
 import source.kfe.dto.KfeColdWalletPsbtRequest;
 import source.kfe.dto.KfeColdWalletPsbtResponse;
 import source.kfe.dto.KfeReceivingCapabilitiesResponse;
@@ -25,7 +26,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -43,6 +47,8 @@ class KfeWalletNetworkServiceTest {
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
     private final KfePsbtWorkflowService psbtWorkflowService = mock(KfePsbtWorkflowService.class);
     private final FinancialTransactionApprovalPort transactionApprovalPort = mock(FinancialTransactionApprovalPort.class);
+    private final AddressDerivationService addressDerivationService = mock(AddressDerivationService.class);
+    private final BitcoinAddressValidator bitcoinAddressValidator = mock(BitcoinAddressValidator.class);
     private final KfeWalletNetworkService service = new KfeWalletNetworkService(
             userDirectory,
             walletRepository,
@@ -52,7 +58,10 @@ class KfeWalletNetworkServiceTest {
             hashService,
             auditLogService,
             psbtWorkflowService,
-            transactionApprovalPort);
+            transactionApprovalPort,
+            addressDerivationService,
+            bitcoinAddressValidator,
+            200);
 
     @Test
     void returnsKfeReceivingCapabilitiesFromActiveWallets() {
@@ -162,8 +171,8 @@ class KfeWalletNetworkServiceTest {
         when(addressRepository.findByWalletIdAndStatusOrderByCreatedAtDesc(
                 wallet.getId(),
                 KfeWalletAddressStatus.ACTIVE)).thenReturn(List.of(address));
-        when(blockchainClient.getUnspentOutputs(address.getAddress())).thenReturn(List.of(
-                new BlockchainClient.AddressUtxo("txid-1", 0, 1000L, "0014abcd")));
+        when(blockchainClient.getUnspentOutputsMerged(address.getAddress())).thenReturn(List.of(
+                new BlockchainClient.AddressUtxo("txid-1", 0, 1000L, "0014abcd", 3, address.getAddress())));
 
         List<KfeUtxoResponse> response = service.listUtxos(42L, wallet.getId());
 
@@ -172,7 +181,8 @@ class KfeWalletNetworkServiceTest {
                 0,
                 1000L,
                 "0014abcd",
-                address.getAddress()));
+                address.getAddress(),
+                3));
     }
 
     @Test
@@ -187,14 +197,29 @@ class KfeWalletNetworkServiceTest {
                 List.of(new KfeColdWalletPsbtRequest.Input("txid-1", 0)),
                 "totp-code");
 
+        wallet.setXpub("tpubDTestXpubMaterialForUnitTestsOnlyXXXXXXXXXXXXXXXXXXXX");
         when(walletRepository.findByIdAndUserId(wallet.getId(), 42L)).thenReturn(Optional.of(wallet));
         when(bitcoinCoreProvider.getIfAvailable()).thenReturn(bitcoinCore);
+        when(blockchainClientProvider.getIfAvailable()).thenReturn(mock(BlockchainClient.class));
+        when(bitcoinAddressValidator.isValidBitcoinAddressForConfiguredNetwork(anyString())).thenReturn(true);
+        when(addressDerivationService.deriveAddressFromXpub(anyString(), anyInt(), eq(true)))
+                .thenReturn("tb1qchangeaddressfortestonlyxxxxxxxxxxxx");
+        when(addressRepository.findByWalletIdAndStatusOrderByCreatedAtDesc(eq(wallet.getId()), any()))
+                .thenReturn(List.of());
+        // Live UTXO ownership for the requested input.
+        BlockchainClient chain = mock(BlockchainClient.class);
+        when(blockchainClientProvider.getIfAvailable()).thenReturn(chain);
+        when(addressRepository.findByWalletIdAndStatusOrderByCreatedAtDesc(
+                wallet.getId(), KfeWalletAddressStatus.ACTIVE)).thenReturn(List.of(address(wallet.getId())));
+        when(chain.getUnspentOutputsMerged(anyString())).thenReturn(List.of(
+                new BlockchainClient.AddressUtxo("txid-1", 0, 50_000L, "0014", 6, "tb1qinput")));
         when(bitcoinCore.createWatchOnlyPsbt(
                 anyList(),
                 eq(request.destinationAddress()),
                 eq(request.amountSats()),
                 eq(request.confirmationTarget()),
-                isNull())).thenReturn(new BitcoinCoreRpcClient.FundedPsbt("psbt-value", 250L));
+                isNull(),
+                anyString())).thenReturn(new BitcoinCoreRpcClient.FundedPsbt("psbt-value", 250L));
         KfePsbtWorkflowEntity workflow = new KfePsbtWorkflowEntity();
         when(psbtWorkflowService.create(
                 eq(42L),
@@ -204,7 +229,7 @@ class KfeWalletNetworkServiceTest {
                 eq(250L),
                 eq(request.amountSats()),
                 eq(request.destinationAddress()),
-                eq(request.inputs()))).thenReturn(workflow);
+                anyList())).thenReturn(workflow);
 
         KfeColdWalletPsbtResponse response = service.createColdWalletPsbt(42L, wallet.getId(), request);
 

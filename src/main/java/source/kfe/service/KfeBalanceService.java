@@ -4,11 +4,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import source.kfe.model.KfeBalanceEntity;
-import source.kfe.model.KfeBalanceId;
+import source.kfe.model.KfeWalletEntity;
+import source.kfe.model.KfeWalletKind;
 import source.kfe.repository.KfeBalanceRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.math.BigDecimal;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -49,7 +51,7 @@ public class KfeBalanceService {
         balance.reserve(amountSats);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getAvailableSats(), -amountSats, "reserva");
+        publishBalanceSnapshot(walletId, saved, -amountSats, "reserva", "AVAILABLE");
         return saved;
     }
 
@@ -58,7 +60,7 @@ public class KfeBalanceService {
         balance.settleReservedDebit(amountSats);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getAvailableSats(), 0L, "liquidação de débito");
+        publishBalanceSnapshot(walletId, saved, 0L, "liquidação de débito", "LOCKED");
         return saved;
     }
 
@@ -67,7 +69,7 @@ public class KfeBalanceService {
         balance.releaseReserved(amountSats);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getAvailableSats(), amountSats, "liberação de reserva");
+        publishBalanceSnapshot(walletId, saved, amountSats, "liberação de reserva", "AVAILABLE");
         return saved;
     }
 
@@ -76,17 +78,35 @@ public class KfeBalanceService {
         balance.creditAvailable(amountSats);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getAvailableSats(), amountSats, "crédito");
+        publishBalanceSnapshot(walletId, saved, amountSats, "crédito", "AVAILABLE");
         return saved;
     }
 
     public KfeBalanceEntity setObserved(UUID walletId, String asset, long observedSats) {
+        return setObserved(walletId, asset, observedSats, null, null);
+    }
+
+    /**
+     * Absolute observed write with optional probe metadata (quality / source) for monotonic policy.
+     */
+    public KfeBalanceEntity setObserved(
+            UUID walletId,
+            String asset,
+            long observedSats,
+            String probeQuality,
+            String probeSource) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         long oldObserved = balance.getObservedSats();
         balance.setObservedBalance(observedSats);
+        if (probeQuality != null && !probeQuality.isBlank()) {
+            balance.setObservedProbeMeta(
+                    probeQuality.trim(),
+                    java.time.LocalDateTime.now(),
+                    probeSource != null && !probeSource.isBlank() ? probeSource.trim() : null);
+        }
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getObservedSats(), observedSats - oldObserved, "observado");
+        publishBalanceSnapshot(walletId, saved, observedSats - oldObserved, "observado", "OBSERVED");
         return saved;
     }
 
@@ -103,7 +123,7 @@ public class KfeBalanceService {
         balance.setObservedBalance(next);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceUpdate(walletId, saved.getObservedSats(), amountSats, "crédito observado");
+        publishBalanceSnapshot(walletId, saved, amountSats, "crédito observado", "OBSERVED");
         return saved;
     }
 
@@ -141,21 +161,56 @@ public class KfeBalanceService {
         balance.setBalanceSignature(hash);
     }
 
-    private void publishBalanceUpdate(UUID walletId, long newBalanceSats, long deltaSats, String context) {
+    private void publishBalanceSnapshot(
+            UUID walletId,
+            KfeBalanceEntity balance,
+            long deltaSats,
+            String context,
+            String bucket) {
         try {
             walletRepository.findById(walletId).ifPresent(wallet -> {
-                BigDecimal newBalance = BigDecimal.valueOf(newBalanceSats).movePointLeft(8);
+                KfeWalletKind kind = wallet.getKind() != null ? wallet.getKind() : KfeWalletKind.INTERNAL;
+                long primarySats = primarySatsFor(kind, balance);
+                BigDecimal newBalance = BigDecimal.valueOf(primarySats).movePointLeft(8);
                 BigDecimal amount = BigDecimal.valueOf(deltaSats).movePointLeft(8);
-                balanceEventPublisher.publishBalanceUpdateAfterCommit(
-                        wallet.getUserId(),
+                BalanceUpdateEvent event = new BalanceUpdateEvent(
                         wallet.getId().toString(),
                         wallet.getLabel(),
+                        wallet.getUserId(),
                         newBalance,
                         amount,
-                        context);
+                        context,
+                        kind.name(),
+                        balance.getAvailableSats(),
+                        balance.getLockedSats(),
+                        balance.getPendingSats(),
+                        balance.getObservedSats(),
+                        primarySats,
+                        bucket);
+                balanceEventPublisher.publishBalanceUpdateAfterCommit(event);
             });
         } catch (Exception e) {
             log.error("Failed to publish balance update for walletId={}", walletId, e);
         }
+    }
+
+    /** Primary UI balance: cold=observed; spendable kinds=available. */
+    static long primarySatsFor(KfeWalletKind kind, KfeBalanceEntity balance) {
+        if (kind == KfeWalletKind.WATCH_ONLY) {
+            return balance.getObservedSats();
+        }
+        return balance.getAvailableSats();
+    }
+
+    static long primarySatsFor(KfeWalletEntity wallet, KfeBalanceEntity balance) {
+        KfeWalletKind kind = wallet != null && wallet.getKind() != null
+                ? wallet.getKind()
+                : KfeWalletKind.INTERNAL;
+        return primarySatsFor(kind, balance);
+    }
+
+    @SuppressWarnings("unused")
+    private static String normalizeContext(String context) {
+        return context == null ? "" : context.trim().toLowerCase(Locale.ROOT);
     }
 }

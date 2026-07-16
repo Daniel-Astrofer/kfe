@@ -83,6 +83,14 @@ class KfeWalletServiceTest {
         ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
                 mock(ObjectProvider.class);
         lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<source.kfe.service.KfeColdWalletObservationService> coldObs =
+                mock(ObjectProvider.class);
+        lenient().when(coldObs.getIfAvailable()).thenReturn(null);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<source.kfe.service.KfeMonitoredChainAddressIndex> addressIndex =
+                mock(ObjectProvider.class);
+        lenient().when(addressIndex.getIfAvailable()).thenReturn(null);
         service = new KfeWalletService(
                 walletRepository,
                 addressRepository,
@@ -97,7 +105,9 @@ class KfeWalletServiceTest {
                 receiveAddressIssuer,
                 transactionTemplate,
                 bitcoinCoreRpcClient,
-                onchainSync
+                onchainSync,
+                coldObs,
+                addressIndex
         );
     }
 

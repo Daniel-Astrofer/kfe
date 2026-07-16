@@ -3,6 +3,7 @@ package source.kfe.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import source.kfe.model.KfeBalanceMovementEntity;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeExecutionOutboxEntity;
@@ -41,6 +42,9 @@ class KfeExecutionTransactionHelperTest {
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncProvider =
+            mock(ObjectProvider.class);
 
     private final KfeExecutionTransactionHelper helper = helper(8);
 
@@ -244,6 +248,7 @@ class KfeExecutionTransactionHelperTest {
     }
 
     private KfeExecutionTransactionHelper helper(int maxRetryAttempts) {
+        when(onchainBalanceSyncProvider.getIfAvailable()).thenReturn(null);
         return new KfeExecutionTransactionHelper(
                 outboxRepository,
                 transactionRepository,
@@ -257,6 +262,7 @@ class KfeExecutionTransactionHelperTest {
                 hashService,
                 new ObjectMapper(),
                 feeSettlementService,
+                onchainBalanceSyncProvider,
                 maxRetryAttempts);
     }
 

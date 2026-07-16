@@ -17,6 +17,7 @@ import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 import source.kfe.rail.BlockchainClient;
+import source.kfe.repository.KfeBalanceMovementRepository;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
@@ -29,7 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,6 +43,7 @@ class KfePaymentRequestOnchainMonitorTest {
     private final KfePaymentRequestRepository paymentRequestRepository = mock(KfePaymentRequestRepository.class);
     private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
     private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
+    private final KfeBalanceMovementRepository movementRepository = mock(KfeBalanceMovementRepository.class);
     private final BlockchainClient blockchainClient = mock(BlockchainClient.class);
     private final KfePricingService pricingService = mock(KfePricingService.class);
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
@@ -50,10 +54,18 @@ class KfePaymentRequestOnchainMonitorTest {
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final FinancialNotificationPort notificationPort = mock(FinancialNotificationPort.class);
     private final KfeOnchainBalanceSyncService onchainBalanceSyncService = mock(KfeOnchainBalanceSyncService.class);
+
+    {
+        // record() returns boolean; default mock is false and would skip creditAvailable.
+        when(movementRecorder.record(any(), any(), anyString(), anyLong(), isNull(), anyString()))
+                .thenReturn(true);
+    }
+
     private final KfePaymentRequestOnchainMonitor monitor = new KfePaymentRequestOnchainMonitor(
             paymentRequestRepository,
             transactionRepository,
             walletRepository,
+            movementRepository,
             provider(blockchainClient),
             pricingService,
             balanceService,
@@ -65,6 +77,7 @@ class KfePaymentRequestOnchainMonitorTest {
             notificationPort,
             transactionTemplate(),
             provider(onchainBalanceSyncService),
+            provider(null),
             50,
             3);
 
