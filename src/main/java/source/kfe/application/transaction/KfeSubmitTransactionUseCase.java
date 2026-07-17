@@ -30,6 +30,7 @@ import source.kfe.service.KfeExecutionOutboxService;
 import source.kfe.service.KfeFeeSettlementService;
 import source.kfe.service.KfeHashService;
 import source.kfe.service.KfeLightningLiquidityService;
+import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeResponseMapper;
 
@@ -48,6 +49,7 @@ public class KfeSubmitTransactionUseCase {
 
     private final KfeTransactionRepository transactionRepository;
     private final KfePricingService pricingService;
+    private final KfeNetworkFeeEstimateService networkFeeEstimateService;
     private final FinancialTickerPort tickerPort;
     private final KfeBalanceService balanceService;
     private final BinarySettlementGate binarySettlementGate;
@@ -76,6 +78,7 @@ public class KfeSubmitTransactionUseCase {
     public KfeSubmitTransactionUseCase(
             KfeTransactionRepository transactionRepository,
             KfePricingService pricingService,
+            KfeNetworkFeeEstimateService networkFeeEstimateService,
             FinancialTickerPort tickerPort,
             KfeBalanceService balanceService,
             BinarySettlementGate binarySettlementGate,
@@ -102,6 +105,7 @@ public class KfeSubmitTransactionUseCase {
             PlatformTransactionManager transactionManager) {
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
+        this.networkFeeEstimateService = networkFeeEstimateService;
         this.tickerPort = tickerPort;
         this.balanceService = balanceService;
         this.binarySettlementGate = binarySettlementGate;
@@ -266,7 +270,10 @@ public class KfeSubmitTransactionUseCase {
                 Map.of("requestHash", requestHash));
         KfeWalletEntity sourceWallet = walletResolver.resolveSourceWallet(userId, request);
         KfeWalletEntity destinationWallet = walletResolver.resolveDestinationWallet(userId, request);
-        applyQuote(tx, pricingService.quote(request.rail(), request.direction(), request.amountSats(), request.networkFeeSats()));
+        // Client fee quote can lag or under-size multi-input PSBTs; never reserve below server floor
+        // or walletcreatefundedpsbt fails with PROVIDER_FINAL_FAILURE fee-cap.
+        long networkFeeSats = resolveNetworkFeeReserve(request);
+        applyQuote(tx, pricingService.quote(request.rail(), request.direction(), request.amountSats(), networkFeeSats));
 
         String proposalHash = proposalHash(tx, request);
         tx.setQuorumProposalHash(proposalHash);
@@ -282,7 +289,7 @@ public class KfeSubmitTransactionUseCase {
                         request.rail(),
                         request.direction(),
                         request.amountSats(),
-                        request.networkFeeSats(),
+                        networkFeeSats,
                         tx.getTotalDebitSats(),
                         requiresReserve,
                         proposalHash));
@@ -395,6 +402,26 @@ public class KfeSubmitTransactionUseCase {
             notificationPort.notifyInternalTransferReceived(
                     destinationWallet.getUserId(), tx.getId(), destinationWallet.getId(), tx.getReceiverAmountSats());
         }
+    }
+
+    private long resolveNetworkFeeReserve(KfeSubmitTransactionRequest request) {
+        long clientFee = Math.max(0L, request.networkFeeSats());
+        if (request.rail() != KfeRail.ONCHAIN || request.direction() != KfeDirection.OUTBOUND) {
+            return clientFee;
+        }
+        long floor = networkFeeEstimateService.reservedFeeFloorSats(
+                request.feeRateSatPerVbyte(),
+                request.feeTargetBlocks());
+        if (clientFee < floor) {
+            log.warn(
+                    "[KFE Submit] raising on-chain fee reserve clientFeeSats={} floorFeeSats={} feeRate={} targetBlocks={}",
+                    clientFee,
+                    floor,
+                    request.feeRateSatPerVbyte(),
+                    request.feeTargetBlocks());
+            return floor;
+        }
+        return clientFee;
     }
 
     private void applyQuote(KfeTransactionEntity tx, KfePricingService.Quote quote) {

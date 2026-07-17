@@ -276,7 +276,9 @@ public class KfeExecutionTransactionHelper {
         // API (including payment-requests) stopped answering.
         UUID outboundId = tx.getId();
         String destinationAddress = tx.getExternalReference();
-        runAfterCommit(() -> {
+        // Never block the submit HTTP thread: peer expose + deposit observe can take seconds
+        // (and used to hold the client on "Autorizando…" for 10–60s after broadcast).
+        runAfterCommitAsync(() -> {
             transactionRepository.findById(outboundId).ifPresent(this::exposePlatformPeerInbound);
             kickPlatformDepositObservation(destinationAddress);
         });
@@ -287,13 +289,27 @@ public class KfeExecutionTransactionHelper {
      * connection) are unbound. Using {@code afterCommit} alone is unsafe: Spring still holds the
      * session until {@code afterCompletion}, so nested {@code @Transactional} joins a dead context
      * ("no transaction is in progress") and peer inbound never lands.
+     *
+     * <p>Work is always dispatched off the calling thread so API handlers (sync-on-submit) return
+     * as soon as the ledger row + txid are committed.
      */
     private void runAfterCommit(Runnable action) {
+        runAfterCommitAsync(action);
+    }
+
+    private void runAfterCommitAsync(Runnable action) {
         if (action == null) {
             return;
         }
+        Runnable safe = () -> {
+            try {
+                action.run();
+            } catch (RuntimeException exception) {
+                log.warn("[KFE Execution] after-completion hook failed: {}", exception.getMessage());
+            }
+        };
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action.run();
+            Thread.startVirtualThread(safe);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -302,11 +318,7 @@ public class KfeExecutionTransactionHelper {
                 if (status != STATUS_COMMITTED) {
                     return;
                 }
-                try {
-                    action.run();
-                } catch (RuntimeException exception) {
-                    log.warn("[KFE Execution] after-completion hook failed: {}", exception.getMessage());
-                }
+                Thread.startVirtualThread(safe);
             }
         });
     }

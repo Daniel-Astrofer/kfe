@@ -320,7 +320,12 @@ public class KfeQuorumPsbtSigningService {
             throw new IllegalArgumentException("On-chain fee limit must be non-negative.");
         }
         if (fundedPsbt.feeSats() > maxFeeSats) {
-            throw new IllegalArgumentException("Funded PSBT fee exceeds configured on-chain fee cap.");
+            throw new IllegalArgumentException(
+                    "Funded PSBT fee exceeds configured on-chain fee cap. actualFeeSats="
+                            + fundedPsbt.feeSats()
+                            + " capFeeSats="
+                            + maxFeeSats
+                            + " (quote too low for coin selection / vsize — re-quote or raise network fee).");
         }
     }
 

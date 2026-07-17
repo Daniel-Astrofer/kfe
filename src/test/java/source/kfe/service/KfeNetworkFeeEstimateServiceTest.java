@@ -28,6 +28,7 @@ class KfeNetworkFeeEstimateServiceTest {
                 KfeDirection.OUTBOUND,
                 1L);
 
+        // rate * vbytes * safetyMargin (5 * 200 * 1.0 with test margin)
         assertThat(estimate.selectedNetworkFeeSats()).isEqualTo(1_000L);
         assertThat(estimate.selectedFeeRateSatPerVbyte()).isEqualTo(5L);
         assertThat(estimate.selectedTargetBlocks()).isEqualTo(3);
@@ -36,6 +37,26 @@ class KfeNetworkFeeEstimateServiceTest {
         assertThat(estimate.tiers())
                 .extracting(tier -> tier.priority() + ":" + tier.networkFeeSats())
                 .containsExactly("FAST:1600", "STANDARD:1000", "SLOW:400");
+    }
+
+    @Test
+    void appliesSafetyMarginToReservedFee() {
+        BitcoinCoreRpcClient bitcoinCore = mock(BitcoinCoreRpcClient.class);
+        when(bitcoinCoreProvider.getIfAvailable()).thenReturn(bitcoinCore);
+        when(bitcoinCore.estimateSmartFeeRateSatPerVbyte(2)).thenReturn(10L);
+        when(bitcoinCore.estimateSmartFeeRateSatPerVbyte(3)).thenReturn(10L);
+        when(bitcoinCore.estimateSmartFeeRateSatPerVbyte(6)).thenReturn(10L);
+        KfeNetworkFeeEstimateService service = service(200, 1.5d);
+
+        KfeNetworkFeeEstimateService.Estimate estimate = service.estimate(
+                KfeRail.ONCHAIN,
+                KfeDirection.OUTBOUND,
+                0L);
+
+        // ceil(10 * 200 * 1.5) = 3000
+        assertThat(estimate.selectedNetworkFeeSats()).isEqualTo(3_000L);
+        assertThat(service.reservedFeeFloorSats(10L, null)).isEqualTo(3_000L);
+        assertThat(service.reservedFeeFloorSats(null, 3)).isEqualTo(3_000L);
     }
 
     @Test
@@ -67,9 +88,14 @@ class KfeNetworkFeeEstimateServiceTest {
     }
 
     private KfeNetworkFeeEstimateService service() {
+        return service(200, 1.0d);
+    }
+
+    private KfeNetworkFeeEstimateService service(int estimatedVbytes, double safetyMargin) {
         return new KfeNetworkFeeEstimateService(
                 bitcoinCoreProvider,
-                200,
+                estimatedVbytes,
+                safetyMargin,
                 2,
                 3,
                 6,

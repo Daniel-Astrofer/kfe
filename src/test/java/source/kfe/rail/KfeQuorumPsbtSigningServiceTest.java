@@ -34,7 +34,9 @@ class KfeQuorumPsbtSigningServiceTest {
 
         assertThatThrownBy(() -> service.preflight(command(499L)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Funded PSBT fee exceeds configured on-chain fee cap.");
+                .hasMessageContaining("Funded PSBT fee exceeds configured on-chain fee cap.")
+                .hasMessageContaining("actualFeeSats=500")
+                .hasMessageContaining("capFeeSats=499");
     }
 
     @Test

@@ -21,6 +21,7 @@ public class KfeNetworkFeeEstimateService {
 
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider;
     private final int estimatedVbytes;
+    private final double safetyMargin;
     private final int fastTargetBlocks;
     private final int standardTargetBlocks;
     private final int slowTargetBlocks;
@@ -33,7 +34,8 @@ public class KfeNetworkFeeEstimateService {
 
     public KfeNetworkFeeEstimateService(
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider,
-            @Value("${kfe.fee-estimate.estimated-vbytes:180}") int estimatedVbytes,
+            @Value("${kfe.fee-estimate.estimated-vbytes:250}") int estimatedVbytes,
+            @Value("${kfe.fee-estimate.safety-margin:1.5}") double safetyMargin,
             @Value("${kfe.fee-estimate.fast-target-blocks:2}") int fastTargetBlocks,
             @Value("${kfe.fee-estimate.standard-target-blocks:3}") int standardTargetBlocks,
             @Value("${kfe.fee-estimate.slow-target-blocks:6}") int slowTargetBlocks,
@@ -45,6 +47,10 @@ public class KfeNetworkFeeEstimateService {
             @Value("${bitcoin.network:mainnet}") String bitcoinNetwork) {
         this.bitcoinCoreProvider = bitcoinCoreProvider;
         this.estimatedVbytes = positive(estimatedVbytes, "estimatedVbytes");
+        if (safetyMargin < 1.0d || !Double.isFinite(safetyMargin)) {
+            throw new IllegalArgumentException("safetyMargin must be >= 1.0");
+        }
+        this.safetyMargin = safetyMargin;
         this.fastTargetBlocks = positive(fastTargetBlocks, "fastTargetBlocks");
         this.standardTargetBlocks = positive(standardTargetBlocks, "standardTargetBlocks");
         this.slowTargetBlocks = positive(slowTargetBlocks, "slowTargetBlocks");
@@ -100,6 +106,24 @@ public class KfeNetworkFeeEstimateService {
                 List.of(fastTier, standardTier, slowTier));
     }
 
+    /**
+     * Minimum network fee to reserve so {@code walletcreatefundedpsbt} is unlikely to exceed the
+     * PSBT fee cap. Prefer the client's selected rate when present.
+     */
+    public long reservedFeeFloorSats(Long feeRateSatPerVbyte, Integer targetBlocks) {
+        long rate;
+        if (feeRateSatPerVbyte != null && feeRateSatPerVbyte > 0L) {
+            rate = feeRateSatPerVbyte;
+        } else {
+            int blocks = targetBlocks != null && targetBlocks > 0 ? targetBlocks : standardTargetBlocks;
+            long fallback = blocks <= fastTargetBlocks
+                    ? fallbackFastRate
+                    : blocks >= slowTargetBlocks ? fallbackSlowRate : fallbackStandardRate;
+            rate = rate(blocks, fallback).satPerVbyte();
+        }
+        return feeSatsForRate(rate);
+    }
+
     private Rate rate(int targetBlocks, long fallbackRate) {
         BitcoinCoreRpcClient bitcoinCore = bitcoinCoreProvider.getIfAvailable();
         if (bitcoinCore == null) {
@@ -113,7 +137,7 @@ public class KfeNetworkFeeEstimateService {
     }
 
     private KfeFeeTierResponse tier(String priority, long rate, int targetBlocks, String source) {
-        long networkFeeSats = Math.multiplyExact(rate, estimatedVbytes);
+        long networkFeeSats = feeSatsForRate(rate);
         // Testnet/regtest block times are irregular — use a more conservative block interval
         // so the UI does not promise mainnet-like ~10 min blocks.
         long blockSeconds = isNonMainnet(bitcoinNetwork)
@@ -127,6 +151,20 @@ public class KfeNetworkFeeEstimateService {
                 targetBlocks,
                 estimatedSeconds,
                 source);
+    }
+
+    private long feeSatsForRate(long rateSatPerVbyte) {
+        long safeRate = Math.max(1L, rateSatPerVbyte);
+        long base = Math.multiplyExact(safeRate, estimatedVbytes);
+        if (safetyMargin <= 1.0d) {
+            return base;
+        }
+        // ceil(base * margin) without floating overflow for large values
+        double scaled = base * safetyMargin;
+        if (scaled >= Long.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        return Math.max(base, (long) Math.ceil(scaled));
     }
 
     private static boolean isNonMainnet(String network) {

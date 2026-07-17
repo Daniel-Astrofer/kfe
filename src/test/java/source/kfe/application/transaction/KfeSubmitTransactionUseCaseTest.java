@@ -23,6 +23,7 @@ import source.kfe.service.KfeExecutionOutboxService;
 import source.kfe.service.KfeFeeSettlementService;
 import source.kfe.service.KfeHashService;
 import source.kfe.service.KfeLightningLiquidityService;
+import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeResponseMapper;
 
@@ -45,6 +46,7 @@ class KfeSubmitTransactionUseCaseTest {
 
     private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
     private final KfePricingService pricingService = mock(KfePricingService.class);
+    private final KfeNetworkFeeEstimateService networkFeeEstimateService = mock(KfeNetworkFeeEstimateService.class);
     private final FinancialTickerPort tickerPort = mock(FinancialTickerPort.class);
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
     private final BinarySettlementGate binarySettlementGate = mock(BinarySettlementGate.class);
@@ -89,6 +91,7 @@ class KfeSubmitTransactionUseCaseTest {
     private final KfeSubmitTransactionUseCase useCase = new KfeSubmitTransactionUseCase(
             transactionRepository,
             pricingService,
+            networkFeeEstimateService,
             tickerPort,
             balanceService,
             binarySettlementGate,
