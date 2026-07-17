@@ -52,4 +52,20 @@ public interface KfePaymentRequestRepository extends JpaRepository<KfePaymentReq
     Optional<KfePaymentRequestEntity> findFirstByPaymentHashIgnoreCase(String paymentHash);
 
     Optional<KfePaymentRequestEntity> findFirstByPaymentRequestIgnoreCase(String paymentRequest);
+
+    /**
+     * Open on-chain receive requests for a concrete deposit address (QR / payment-request flow).
+     * Used to close the request immediately when a platform peer pays that address.
+     */
+    @Query("""
+            select p from KfePaymentRequestEntity p
+            where p.status = :status
+              and p.rail = :rail
+              and lower(p.address) = lower(:address)
+            order by p.createdAt asc
+            """)
+    List<KfePaymentRequestEntity> findOpenByAddressAndRail(
+            @Param("address") String address,
+            @Param("status") KfePaymentRequestStatus status,
+            @Param("rail") KfeRail rail);
 }

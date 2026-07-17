@@ -12,11 +12,14 @@ import source.kfe.application.transaction.KfeBalanceMovementRecorder;
 import source.kfe.application.transaction.KfeLedgerMovementTypes;
 import source.kfe.application.transaction.KfePlatformOnchainDestinationRouter;
 import source.kfe.model.KfeDirection;
+import source.kfe.model.KfePaymentRequestEntity;
+import source.kfe.model.KfePaymentRequestStatus;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
 import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.repository.KfeBalanceMovementRepository;
+import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
 
@@ -46,6 +49,7 @@ public class KfePlatformPeerInboundService {
     private final KfeWalletRepository walletRepository;
     private final KfeTransactionRepository transactionRepository;
     private final KfeBalanceMovementRepository movementRepository;
+    private final KfePaymentRequestRepository paymentRequestRepository;
     private final KfeBalanceService balanceService;
     private final KfeBalanceMovementRecorder movementRecorder;
     private final KfePricingService pricingService;
@@ -62,6 +66,7 @@ public class KfePlatformPeerInboundService {
             KfeWalletRepository walletRepository,
             KfeTransactionRepository transactionRepository,
             KfeBalanceMovementRepository movementRepository,
+            KfePaymentRequestRepository paymentRequestRepository,
             KfeBalanceService balanceService,
             KfeBalanceMovementRecorder movementRecorder,
             KfePricingService pricingService,
@@ -78,6 +83,7 @@ public class KfePlatformPeerInboundService {
         this.walletRepository = walletRepository;
         this.transactionRepository = transactionRepository;
         this.movementRepository = movementRepository;
+        this.paymentRequestRepository = paymentRequestRepository;
         this.balanceService = balanceService;
         this.movementRecorder = movementRecorder;
         this.pricingService = pricingService;
@@ -149,6 +155,8 @@ public class KfePlatformPeerInboundService {
             if (row.getDirection() == KfeDirection.INBOUND
                     && sink.getId().equals(row.getDestinationWalletId())) {
                 refreshExisting(row, sink, amountSats, outbound.getConfirmations());
+                // Still close any open QR/payment-request for this address (recipient UI polls that).
+                closeMatchingPaymentRequests(address, amountSats, row);
                 return;
             }
         }
@@ -234,6 +242,9 @@ public class KfePlatformPeerInboundService {
                     auditFailure.getMessage());
         }
 
+        // Close open receive QR / payment-request so the recipient screen leaves "Pendente".
+        closeMatchingPaymentRequests(address, amountSats, inbound);
+
         log.info(
                 "[KFE Peer Inbound] exposed recipientUserId={} sinkWalletId={} outboundId={} txid={} amount={} status={}",
                 sink.getUserId(),
@@ -242,6 +253,53 @@ public class KfePlatformPeerInboundService {
                 txid,
                 quote.receiverAmountSats(),
                 status);
+    }
+
+    /**
+     * Marks OPEN on-chain payment requests for {@code address} as PAID when a peer inbound lands.
+     * Without this, funds credit via PLATFORM_PEER_ONCHAIN but the QR screen keeps polling OPEN
+     * until the slower chain UTXO monitor catches up (often minutes / never in fee-edge cases).
+     */
+    private void closeMatchingPaymentRequests(
+            String address, long observedSats, KfeTransactionEntity inbound) {
+        if (address == null || address.isBlank() || inbound == null || inbound.getId() == null) {
+            return;
+        }
+        List<KfePaymentRequestEntity> open = paymentRequestRepository.findOpenByAddressAndRail(
+                address.trim(),
+                KfePaymentRequestStatus.OPEN,
+                KfeRail.ONCHAIN);
+        if (open.isEmpty()) {
+            return;
+        }
+        for (KfePaymentRequestEntity request : open) {
+            if (request.getUserId() != null
+                    && inbound.getUserId() != null
+                    && !request.getUserId().equals(inbound.getUserId())) {
+                continue;
+            }
+            // Amount optional; when set, require observed >= requested (same as PR monitor).
+            Long requested = request.getAmountSats();
+            if (requested != null && requested > 0L && observedSats < requested) {
+                // Peer path uses outbound receiver amount after fees; allow small shortfall
+                // up to kerosene fee (~1%) so exact QR amounts still match.
+                long floor = requested - Math.max(requested / 100L, 500L);
+                if (observedSats < Math.max(0L, floor)) {
+                    continue;
+                }
+            }
+            request.markPaid(inbound.getId());
+            paymentRequestRepository.save(request);
+            log.info(
+                    "[KFE Peer Inbound] closed payment request publicId={} address={} inboundId={} observedSats={}",
+                    request.getPublicId(),
+                    address,
+                    inbound.getId(),
+                    observedSats);
+        }
+        if (inbound.getUserId() != null) {
+            dashboardPublisher.publishAfterCommit(inbound.getUserId());
+        }
     }
 
     private void refreshExisting(
