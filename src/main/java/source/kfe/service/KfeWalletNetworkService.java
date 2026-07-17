@@ -17,11 +17,13 @@ import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
 import source.kfe.rail.BitcoinCoreRpcClient;
 import source.kfe.rail.BlockchainClient;
+import source.kfe.rail.LightningInvoiceGateway;
 import source.common.exception.FinancialProviderUnavailableException;
 import source.common.financial.FinancialTransactionApprovalPort;
 import source.common.financial.FinancialUserDirectoryPort;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -54,6 +56,7 @@ public class KfeWalletNetworkService {
     private final FinancialTransactionApprovalPort transactionApprovalPort;
     private final AddressDerivationService addressDerivationService;
     private final BitcoinAddressValidator bitcoinAddressValidator;
+    private final LightningInvoiceGateway lightningInvoiceGateway;
     /** Shared with cold observe / onchain sync so listUtxos sees the same gap. */
     private final int descriptorScanRange;
 
@@ -69,6 +72,8 @@ public class KfeWalletNetworkService {
             FinancialTransactionApprovalPort transactionApprovalPort,
             AddressDerivationService addressDerivationService,
             BitcoinAddressValidator bitcoinAddressValidator,
+            @Qualifier("kfeExternalLightningInvoiceGateway")
+            LightningInvoiceGateway lightningInvoiceGateway,
             @Value("${kfe.descriptor-scan-range:200}") int descriptorScanRange) {
         this.userDirectory = userDirectory;
         this.walletRepository = walletRepository;
@@ -81,6 +86,7 @@ public class KfeWalletNetworkService {
         this.transactionApprovalPort = transactionApprovalPort;
         this.addressDerivationService = addressDerivationService;
         this.bitcoinAddressValidator = bitcoinAddressValidator;
+        this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.descriptorScanRange = Math.max(1, descriptorScanRange);
     }
 
@@ -113,7 +119,7 @@ public class KfeWalletNetworkService {
                     .findFirst();
         }
         boolean internal = internalWallet.isPresent();
-        boolean lightning = false;
+        boolean lightning = internal && lightningInvoiceGateway.isLive();
 
         Optional<OnchainReceiveTarget> onchainTarget = resolveOnchainReceiveTarget(
                 activeWallets,
@@ -129,7 +135,11 @@ public class KfeWalletNetworkService {
             missing.add("KFE_INTERNAL_WALLET_NOT_FOUND");
         }
         if (!lightning) {
-            missing.add("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+            if (!internal) {
+                missing.add("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+            } else if (!lightningInvoiceGateway.isLive()) {
+                missing.add("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+            }
         }
         if (!onchain) {
             missing.add("KFE_ONCHAIN_ADDRESS_NOT_FOUND");

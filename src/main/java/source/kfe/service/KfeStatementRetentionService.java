@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import source.kfe.repository.KfeUserStatementRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 @Service
 public class KfeStatementRetentionService {
@@ -19,6 +20,6 @@ public class KfeStatementRetentionService {
     @Scheduled(fixedDelayString = "${kfe.statement.cleanup-delay-ms:3600000}")
     @Transactional
     public void purgeExpiredStatements() {
-        statementRepository.deleteByExpiresAtBefore(LocalDateTime.now());
+        statementRepository.deleteByExpiresAtBefore(LocalDateTime.now(java.time.ZoneOffset.UTC));
     }
 }

@@ -58,6 +58,20 @@ public class KfeTransactionController {
         return ResponseEntity.ok(ApiResponse.success("KFE transaction retrieved.", response));
     }
 
+    /**
+     * Cancel open invoice / payment link / abandonable pending transaction from transaction details.
+     * Body empty. Response includes updated status ({@code FAILED} + {@code USER_CANCELLED}).
+     */
+    @PostMapping("/{transactionId}/cancel")
+    public ResponseEntity<ApiResponse<KfeTransactionResponse>> cancel(
+            @PathVariable UUID transactionId,
+            Authentication authentication) {
+        KfeTransactionResponse response = financialApi.cancelTransaction(
+                KfeAuthenticationSupport.authenticatedUserId(authentication),
+                transactionId);
+        return ResponseEntity.ok(ApiResponse.success("KFE transaction cancelled.", response));
+    }
+
     @GetMapping
     public ResponseEntity<ApiResponse<List<KfeTransactionResponse>>> list(
             @RequestParam(defaultValue = "0") int page,

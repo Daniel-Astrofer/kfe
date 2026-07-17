@@ -75,7 +75,7 @@ class KfeInternalPaymentRequestSettlementUseCaseTest {
     }
 
     @Test
-    void rejectsPaymentRequestFromAnotherRail() {
+    void rejectsPaymentRequestFromOnchainRail() {
         UUID destinationWalletId = UUID.randomUUID();
         KfePaymentRequestEntity paymentRequest = paymentRequest(destinationWalletId, 10_000L);
         paymentRequest.setRail(KfeRail.ONCHAIN);
@@ -83,6 +83,20 @@ class KfeInternalPaymentRequestSettlementUseCaseTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> useCase.lockAndValidate(request("public-id", destinationWalletId, 10_000L)));
+    }
+
+    @Test
+    void allowsPlatformLightningPaymentRequestViaInternalLedger() {
+        UUID destinationWalletId = UUID.randomUUID();
+        KfePaymentRequestEntity paymentRequest = paymentRequest(destinationWalletId, 10_000L);
+        paymentRequest.setRail(KfeRail.LIGHTNING);
+        paymentRequest.setPaymentRequest("lntb10u1ptest");
+        when(repository.findByPublicIdForUpdate("public-id")).thenReturn(Optional.of(paymentRequest));
+
+        KfePaymentRequestEntity result =
+                useCase.lockAndValidate(request("public-id", destinationWalletId, 10_000L));
+
+        assertSame(paymentRequest, result);
     }
 
     @Test

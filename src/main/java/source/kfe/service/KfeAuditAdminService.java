@@ -11,6 +11,7 @@ import source.kfe.repository.KfeAuditHashRow;
 import source.kfe.repository.KfeAuditLogRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -79,7 +80,7 @@ public class KfeAuditAdminService {
         }
 
         if (level.isEmpty()) {
-            return new KfeAuditRootResponse(EMPTY_ROOT, 0L, null, null, LocalDateTime.now());
+            return new KfeAuditRootResponse(EMPTY_ROOT, 0L, null, null, LocalDateTime.now(java.time.ZoneOffset.UTC));
         }
 
         while (level.size() > 1) {
@@ -90,7 +91,7 @@ public class KfeAuditAdminService {
                 eventCount,
                 fromSequence,
                 toSequence,
-                LocalDateTime.now());
+                LocalDateTime.now(java.time.ZoneOffset.UTC));
     }
 
     private List<String> nextLevel(List<String> level) {

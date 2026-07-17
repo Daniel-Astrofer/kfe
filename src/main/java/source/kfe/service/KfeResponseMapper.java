@@ -1,5 +1,6 @@
 package source.kfe.service;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import source.kfe.dto.KfeAddressResponse;
 import source.kfe.dto.KfeTransactionResponse;
@@ -7,12 +8,14 @@ import source.kfe.dto.KfeWalletResponse;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
+import source.kfe.model.KfeTransactionStatus;
 import source.kfe.model.KfeWalletAddressEntity;
 import source.kfe.model.KfeWalletAddressStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
+import source.kfe.time.Utc;
 
 import java.util.UUID;
 
@@ -21,12 +24,15 @@ public class KfeResponseMapper {
 
     private final KfeWalletAddressRepository addressRepository;
     private final KfeWalletRepository walletRepository;
+    private final ObjectProvider<KfeTransactionCancellationService> cancellationService;
 
     public KfeResponseMapper(
             KfeWalletAddressRepository addressRepository,
-            KfeWalletRepository walletRepository) {
+            KfeWalletRepository walletRepository,
+            ObjectProvider<KfeTransactionCancellationService> cancellationService) {
         this.addressRepository = addressRepository;
         this.walletRepository = walletRepository;
+        this.cancellationService = cancellationService;
     }
 
     public KfeWalletResponse toWalletResponse(KfeWalletEntity wallet) {
@@ -46,8 +52,8 @@ public class KfeResponseMapper {
                 hasText(wallet.getXpub()),
                 hasText(wallet.getMpcPublicKey()),
                 activeAddress,
-                wallet.getCreatedAt(),
-                wallet.getUpdatedAt());
+                Utc.toInstant(wallet.getCreatedAt()),
+                Utc.toInstant(wallet.getUpdatedAt()));
     }
 
     public KfeAddressResponse toAddressResponse(KfeWalletAddressEntity address) {
@@ -60,8 +66,8 @@ public class KfeResponseMapper {
                 address.getDerivationPath(),
                 address.getDerivationIndex(),
                 address.getProviderReference(),
-                address.getCreatedAt(),
-                address.getRetiredAt());
+                Utc.toInstant(address.getCreatedAt()),
+                Utc.toInstant(address.getRetiredAt()));
     }
 
     public KfeTransactionResponse toTransactionResponse(KfeTransactionEntity tx) {
@@ -77,10 +83,12 @@ public class KfeResponseMapper {
             perspectiveLabel = hasText(sourceLabel) ? sourceLabel : destLabel;
         }
         String counterparty = counterpartyLabel(tx, requestingUserId, sourceLabel, destLabel);
+        KfeTransactionCancellationService.CancellationHints cancelHints = cancelHints(tx, requestingUserId);
 
         return new KfeTransactionResponse(
                 tx.getId(),
                 tx.getStatus(),
+                KfeTransactionStatus.displayStatusOf(tx.getStatus()),
                 tx.getRail(),
                 tx.getDirection(),
                 perspectiveId,
@@ -110,11 +118,94 @@ public class KfeResponseMapper {
                 tx.getMemo(),
                 tx.getBlockchainTxid(),
                 tx.getPaymentHash(),
-                tx.getConfirmations(),
+                displayConfirmations(tx),
                 tx.getFailureCode(),
                 sanitizeFailureMessage(tx.getFailureCode(), tx.getFailureMessage()),
                 toUtcInstant(tx.getCreatedAt()),
-                toUtcInstant(tx.getUpdatedAt()));
+                toUtcInstant(tx.getUpdatedAt()),
+                cancelHints.cancellable(),
+                cancelHints.cancelTarget(),
+                cancelHints.paymentRequestId(),
+                cancelHints.paymentRequestPublicId(),
+                cancelHints.paymentRequestStatus());
+    }
+
+    private KfeTransactionCancellationService.CancellationHints cancelHints(
+            KfeTransactionEntity tx, Long requestingUserId) {
+        KfeTransactionCancellationService service = cancellationService.getIfAvailable();
+        if (service == null) {
+            return KfeTransactionCancellationService.CancellationHints.none();
+        }
+        try {
+            return service.hintsFor(tx, requestingUserId);
+        } catch (RuntimeException ignored) {
+            return KfeTransactionCancellationService.CancellationHints.none();
+        }
+    }
+
+    /**
+     * Canonical home/extrato display payload. Every statement writer should use this so
+     * frozen rows stay complete (rail, amounts, labels, refs) — incomplete maps were the
+     * root cause of sparse Lightning history on the client.
+     */
+    public java.util.Map<String, Object> buildDisplayPayload(KfeTransactionEntity tx, Long requestingUserId) {
+        Long uid = requestingUserId != null ? requestingUserId : tx.getUserId();
+        UUID perspectiveId = perspectiveWalletId(tx, uid);
+        String sourceLabel = walletLabel(tx.getSourceWalletId());
+        String destLabel = walletLabel(tx.getDestinationWalletId());
+        String perspectiveLabel = walletLabel(perspectiveId);
+        if (!hasText(perspectiveLabel)) {
+            perspectiveLabel = hasText(sourceLabel) ? sourceLabel : destLabel;
+        }
+        String counterparty = counterpartyLabel(tx, uid, sourceLabel, destLabel);
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("transactionId", tx.getId() != null ? tx.getId().toString() : null);
+        // Same as transactionId — client list key for in-place merge (never recreate on update).
+        payload.put("id", tx.getId() != null ? tx.getId().toString() : null);
+        payload.put("status", tx.getStatus() != null ? tx.getStatus().name() : null);
+        payload.put("displayStatus", KfeTransactionStatus.displayStatusOf(tx.getStatus()));
+        payload.put("rail", tx.getRail() != null ? tx.getRail().name() : null);
+        payload.put("direction", tx.getDirection() != null ? tx.getDirection().name() : null);
+        payload.put("walletId", perspectiveId != null ? perspectiveId.toString() : null);
+        payload.put("sourceWalletId", uuidString(tx.getSourceWalletId()));
+        payload.put("destinationWalletId", uuidString(tx.getDestinationWalletId()));
+        payload.put("walletLabel", emptyToNull(perspectiveLabel));
+        payload.put("sourceWalletLabel", emptyToNull(sourceLabel));
+        payload.put("destinationWalletLabel", emptyToNull(destLabel));
+        payload.put("counterpartyLabel", emptyToNull(counterparty));
+        payload.put("grossAmountSats", tx.getGrossAmountSats());
+        payload.put("receiverAmountSats", tx.getReceiverAmountSats());
+        payload.put("networkFeeSats", tx.getNetworkFeeSats());
+        payload.put("keroseneFeeSats", tx.getKeroseneFeeSats());
+        payload.put("totalDebitSats", tx.getTotalDebitSats());
+        payload.put("displayBtcUsd", tx.getDisplayBtcUsd());
+        payload.put("displayBtcEur", tx.getDisplayBtcEur());
+        payload.put("displayBtcBrl", tx.getDisplayBtcBrl());
+        payload.put("displayAmountUsd", tx.getDisplayAmountUsd());
+        payload.put("displayAmountEur", tx.getDisplayAmountEur());
+        payload.put("displayAmountBrl", tx.getDisplayAmountBrl());
+        payload.put("provider", normalizeProvider(tx.getProvider()));
+        payload.put("externalReference", tx.getExternalReference());
+        payload.put("memo", tx.getMemo());
+        payload.put("blockchainTxid", tx.getBlockchainTxid());
+        payload.put("paymentHash", tx.getPaymentHash());
+        payload.put("confirmations", displayConfirmations(tx));
+        payload.put("failureCode", tx.getFailureCode());
+        payload.put("createdAt", toUtcInstant(tx.getCreatedAt()));
+        payload.put("updatedAt", toUtcInstant(tx.getUpdatedAt()));
+        return payload;
+    }
+
+    private static int displayConfirmations(KfeTransactionEntity tx) {
+        if (tx.getRail() == KfeRail.LIGHTNING || tx.getRail() == KfeRail.INTERNAL) {
+            return 0;
+        }
+        return tx.getConfirmations();
+    }
+
+    private static String uuidString(UUID id) {
+        return id != null ? id.toString() : null;
     }
 
     private String walletLabel(UUID walletId) {
@@ -144,6 +235,20 @@ public class KfeResponseMapper {
             return hasText(destLabel) ? destLabel : "Kerosene";
         }
 
+        if (tx.getRail() == KfeRail.LIGHTNING) {
+            if (inbound) {
+                return "Lightning Network";
+            }
+            String ph = tx.getPaymentHash();
+            if (hasText(ph) && ph.length() >= 12) {
+                return "LN " + shorten(ph.trim(), 8, 6);
+            }
+            String inv = tx.getExternalReference();
+            if (hasText(inv) && inv.toLowerCase().startsWith("ln")) {
+                return "Fatura Lightning";
+            }
+            return "Lightning Network";
+        }
         String provider = tx.getProvider() != null ? tx.getProvider().toUpperCase() : "";
         boolean cold = provider.contains("COLD") || provider.contains("WATCH_ONLY");
         if (inbound) {
@@ -152,6 +257,10 @@ public class KfeResponseMapper {
         // Outbound: prefer destination address / external reference, shortened.
         String ext = tx.getExternalReference();
         if (hasText(ext)) {
+            // Never dump full bolt11 into counterparty for non-LN rails.
+            if (ext.toLowerCase().startsWith("ln")) {
+                return "Fatura Lightning";
+            }
             return shorten(ext.trim(), 10, 8);
         }
         if (hasText(destLabel)) {
@@ -221,14 +330,11 @@ public class KfeResponseMapper {
     }
 
     /**
-     * KFE stores {@code LocalDateTime} in the JVM clock (UTC in containers). Emit Instant with
-     * explicit UTC so Flutter never treats wall-clock UTC as local time.
+     * KFE stores UTC wall-clock in {@code LocalDateTime} columns. Emit Instant with explicit
+     * {@code Z} so Flutter converts to the device timezone (e.g. America/Sao_Paulo).
      */
     private static java.time.Instant toUtcInstant(java.time.LocalDateTime value) {
-        if (value == null) {
-            return null;
-        }
-        return value.atZone(java.time.ZoneOffset.UTC).toInstant();
+        return Utc.toInstant(value);
     }
 
     private UUID perspectiveWalletId(KfeTransactionEntity tx, Long requestingUserId) {
@@ -246,10 +352,32 @@ public class KfeResponseMapper {
     }
 
     /**
-     * Consumer clients must not receive stack traces or internal paths.
-     * Prefer empty when code is unknown; FE maps codes to localized copy.
+     * Consumer clients must not receive stack traces, LND JSON, or internal paths.
+     * Map known codes + safe substrings of the raw provider message to short copy;
+     * FE can still localize from {@code failureCode}.
      */
     static String sanitizeFailureMessage(String failureCode, String failureMessage) {
+        String raw = failureMessage != null ? failureMessage.toLowerCase(java.util.Locale.ROOT) : "";
+        // Prefer provider-hinted reasons even when code is generic (PROVIDER_FINAL_FAILURE).
+        if (raw.contains("invoice expired")) {
+            return "Lightning invoice expired.";
+        }
+        if (raw.contains("amount must not be specified")) {
+            return "Invalid Lightning invoice amount.";
+        }
+        if (raw.contains("self-payment") || raw.contains("self payment")) {
+            return "Self-pay is not allowed.";
+        }
+        if (raw.contains("no route") || raw.contains("unable to find a path") || raw.contains("destination unknown")) {
+            return "No Lightning route to destination.";
+        }
+        if (raw.contains("lnurl") && (raw.contains("failed") || raw.contains("invalid"))) {
+            return "Could not resolve LNURL / Lightning Address.";
+        }
+        if (raw.contains("keysend")) {
+            return "Lightning keysend payment failed.";
+        }
+
         if (failureCode == null || failureCode.isBlank()) {
             return null;
         }
@@ -261,7 +389,10 @@ public class KfeResponseMapper {
             case "EXPIRED", "LINK_EXPIRED" -> "Payment request expired.";
             case "CANCELLED", "CANCELED" -> "Cancelled.";
             case "NETWORK", "BROADCAST_FAILED", "RPC_ERROR" -> "Network broadcast failed.";
-            case "REQUIRES_RECONCILIATION" -> "Needs review.";
+            case "REQUIRES_RECONCILIATION", "PROVIDER_RESULT_UNKNOWN" -> "Needs review.";
+            case "PROVIDER_FINAL_FAILURE", "PROVIDER_RETRY_EXHAUSTED" ->
+                    "Lightning payment failed.";
+            case "PROVIDER_RETRYABLE_FAILURE" -> "Lightning payment temporarily failed.";
             default -> null;
         };
     }

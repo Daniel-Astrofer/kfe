@@ -11,6 +11,8 @@ import java.util.UUID;
 public record KfeTransactionResponse(
         UUID id,
         KfeTransactionStatus status,
+        /** Coarse UI badge: PENDING | CONFIRMED | FAILED — stable identity stays {@code id}. */
+        String displayStatus,
         KfeRail rail,
         KfeDirection direction,
         UUID walletId,
@@ -51,5 +53,18 @@ public record KfeTransactionResponse(
         String failureMessage,
         // Instant serializes as ISO-8601 with Z so clients convert timezone correctly.
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        /**
+         * When true the client may show Cancel on transaction details
+         * ({@code POST /kfe/transactions/{id}/cancel}).
+         */
+        boolean cancellable,
+        /**
+         * What cancel will target: {@code PAYMENT_REQUEST}, {@code TRANSACTION}, or null.
+         */
+        String cancelTarget,
+        /** Linked invoice / payment link when known. */
+        UUID paymentRequestId,
+        String paymentRequestPublicId,
+        String paymentRequestStatus) {
 }

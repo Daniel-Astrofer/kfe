@@ -114,7 +114,8 @@ class KfeColdWalletObservationServiceTest {
         service.observeWallet(walletId);
 
         verify(transactionRepository).save(any(KfeTransactionEntity.class));
-        verify(statementService).recordUserStatementIfAbsent(eq(9L), eq(walletId), any(), any());
+        verify(statementService).recordUserStatement(eq(9L), eq(walletId), any(), any());
+        // first observe may still use IfAbsent; cohesion upsert is covered by StatementServiceTest
         verify(dashboardPublisher).publishAfterCommit(9L);
     }
 
@@ -174,7 +175,7 @@ class KfeColdWalletObservationServiceTest {
         assertThat(tx.getProvider()).isEqualTo(KfeColdWalletObservationService.PROVIDER_COLD_PSBT);
         assertThat(tx.getSourceWalletId()).isEqualTo(walletId);
         assertThat(tx.getTotalDebitSats()).isEqualTo(10_250L);
-        verify(statementService).recordUserStatementIfAbsent(eq(7L), eq(walletId), any(), any());
+        verify(statementService).recordUserStatement(eq(7L), eq(walletId), any(), any());
     }
 
     @Test

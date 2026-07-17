@@ -1,6 +1,7 @@
 package source.kfe.service;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionEntity;
@@ -12,12 +13,22 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class KfeResponseMapperTest {
 
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeTransactionCancellationService> cancellation =
+            mock(ObjectProvider.class);
+
+    {
+        when(cancellation.getIfAvailable()).thenReturn(null);
+    }
+
     private final KfeResponseMapper mapper = new KfeResponseMapper(
             mock(KfeWalletAddressRepository.class),
-            mock(KfeWalletRepository.class));
+            mock(KfeWalletRepository.class),
+            cancellation);
 
     @Test
     void mapsDurableExternalDetailsAndSenderPerspective() {

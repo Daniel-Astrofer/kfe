@@ -16,8 +16,21 @@ public interface KfeUserStatementRepository extends JpaRepository<KfeUserStateme
             Long userId,
             LocalDateTime now);
 
+    boolean existsByUserIdAndTransactionId(Long userId, UUID transactionId);
+
+    Optional<KfeUserStatementEntity> findByUserIdAndTransactionId(Long userId, UUID transactionId);
+
+    /**
+     * @deprecated Prefer {@link #existsByUserIdAndTransactionId} — same tx can appear for two users
+     * (internal transfer). Kept for temporary call-site compatibility during refresh paths.
+     */
+    @Deprecated
     boolean existsByTransactionId(UUID transactionId);
 
+    /**
+     * @deprecated Prefer {@link #findByUserIdAndTransactionId}.
+     */
+    @Deprecated
     Optional<KfeUserStatementEntity> findByTransactionId(UUID transactionId);
 
     long deleteByExpiresAtBefore(LocalDateTime cutoff);

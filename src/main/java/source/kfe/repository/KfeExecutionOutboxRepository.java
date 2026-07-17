@@ -76,4 +76,23 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
             @Param("now") LocalDateTime now,
             @Param("staleClaimBefore") LocalDateTime staleClaimBefore,
             @Param("workerId") String workerId);
+
+    /**
+     * Claim a specific outbox row for immediate (sync-on-submit) processing.
+     * Only transitions from PENDING / FAILED_RETRYABLE so async workers remain safe.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update KfeExecutionOutboxEntity o
+            set o.status = 'PROCESSING',
+                o.claimedBy = :workerId,
+                o.claimedAt = :now
+            where o.id = :id
+              and o.status in ('PENDING', 'FAILED_RETRYABLE')
+              and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
+            """)
+    int claimImmediate(
+            @Param("id") UUID id,
+            @Param("now") LocalDateTime now,
+            @Param("workerId") String workerId);
 }

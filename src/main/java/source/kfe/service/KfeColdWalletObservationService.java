@@ -1,5 +1,8 @@
 package source.kfe.service;
 
+import java.time.ZoneOffset;
+
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -324,7 +327,7 @@ public class KfeColdWalletObservationService {
                             tx.setConfirmations(0);
                             tx.setStatus(KfeTransactionStatus.VALIDATING);
                             tx = transactionRepository.save(tx);
-                            statementService.recordUserStatementIfAbsent(
+                            statementService.recordUserStatement(
                                     wallet.getUserId(), wallet.getId(), tx, statementPayload(tx));
                             notifyColdOutboundSafe(wallet, tx);
                             changed = true;
@@ -644,7 +647,7 @@ public class KfeColdWalletObservationService {
             tx.setConfirmations(0);
             tx.setStatus(KfeTransactionStatus.EXECUTING);
             tx = transactionRepository.save(tx);
-            statementService.recordUserStatementIfAbsent(
+            statementService.recordUserStatement(
                     userId,
                     walletId,
                     tx,
@@ -673,7 +676,8 @@ public class KfeColdWalletObservationService {
                 && tx.getStatus() != KfeTransactionStatus.FAILED) {
             tx.setStatus(KfeTransactionStatus.SETTLED);
             statusChange = true;
-            statementService.recordUserStatementIfAbsent(
+            // Upsert: same transactionId, displayStatus → CONFIRMED; createdAt unchanged.
+            statementService.recordUserStatement(
                     tx.getUserId(),
                     firstWallet(tx),
                     tx,
@@ -1113,7 +1117,7 @@ public class KfeColdWalletObservationService {
             }
             if (changed) {
                 transactionRepository.save(existing);
-                statementService.recordUserStatementIfAbsent(
+                statementService.recordUserStatement(
                         wallet.getUserId(), wallet.getId(), existing, statementPayload(existing));
             }
             return changed;
@@ -1145,7 +1149,7 @@ public class KfeColdWalletObservationService {
         tx.setConfirmations(confs);
         tx.setStatus(status);
         tx = transactionRepository.save(tx);
-        statementService.recordUserStatementIfAbsent(
+        statementService.recordUserStatement(
                 wallet.getUserId(), wallet.getId(), tx, statementPayload(tx));
         notifyColdInboundSafe(wallet, tx);
         return true;
@@ -1286,7 +1290,7 @@ public class KfeColdWalletObservationService {
         // Never SETTLED at 0 confs — FE would show fake "Confirmado 6/6".
         tx.setStatus(KfeTransactionStatus.VALIDATING);
         transactionRepository.save(tx);
-        statementService.recordUserStatementIfAbsent(
+        statementService.recordUserStatement(
                 wallet.getUserId(), wallet.getId(), tx, statementPayload(tx));
         log.info(
                 "[KFE Cold Observation] external spend from balance drop walletId={} spentSats={} {}->{}",
@@ -1515,7 +1519,7 @@ public class KfeColdWalletObservationService {
                         ? KfeTransactionStatus.SETTLED
                         : KfeTransactionStatus.VALIDATING);
         tx = transactionRepository.save(tx);
-        statementService.recordUserStatementIfAbsent(
+        statementService.recordUserStatement(
                 wallet.getUserId(), wallet.getId(), tx, statementPayload(tx));
         notifyColdOutboundSafe(wallet, tx);
         log.info(
@@ -1637,6 +1641,7 @@ public class KfeColdWalletObservationService {
         payload.put("transactionId", tx.getId().toString());
         payload.put("id", tx.getId().toString());
         payload.put("status", tx.getStatus().name());
+        payload.put("displayStatus", KfeTransactionStatus.displayStatusOf(tx.getStatus()));
         payload.put("rail", tx.getRail().name());
         payload.put("direction", tx.getDirection().name());
         payload.put("grossAmountSats", tx.getGrossAmountSats());
@@ -1647,6 +1652,12 @@ public class KfeColdWalletObservationService {
         payload.put("blockchainTxid", tx.getBlockchainTxid());
         payload.put("memo", tx.getMemo());
         payload.put("externalReference", tx.getExternalReference());
+        if (tx.getCreatedAt() != null) {
+            payload.put("createdAt", tx.getCreatedAt().atZone(java.time.ZoneOffset.UTC).toInstant());
+        }
+        if (tx.getUpdatedAt() != null) {
+            payload.put("updatedAt", tx.getUpdatedAt().atZone(java.time.ZoneOffset.UTC).toInstant());
+        }
         // Wallet ids so FE can filter cold history without relying on dashboard only.
         if (tx.getSourceWalletId() != null) {
             payload.put("sourceWalletId", tx.getSourceWalletId().toString());

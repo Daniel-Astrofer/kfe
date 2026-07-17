@@ -9,8 +9,10 @@ import source.kfe.repository.KfeExecutionOutboxRepository;
 import source.kfe.service.KfeHashService;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class KfeTransactionOutboxUseCase {
@@ -28,15 +30,19 @@ public class KfeTransactionOutboxUseCase {
         this.objectMapper = objectMapper;
     }
 
-    public void enqueueExternal(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {
+    /**
+     * Enqueues external rail work and returns the outbox id (for optional sync drain).
+     */
+    public UUID enqueueExternal(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {
         String payloadJson = outboxPayload(tx, request);
         KfeExecutionOutboxEntity outbox = new KfeExecutionOutboxEntity();
         outbox.setTransactionId(tx.getId());
         outbox.setOperation(tx.getRail().name() + "_" + tx.getDirection().name());
         outbox.setPayloadJson(payloadJson);
         outbox.setPayloadHash(hashService.sha256(payloadJson));
-        outbox.setNextAttemptAt(LocalDateTime.now());
+        outbox.setNextAttemptAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         outboxRepository.save(outbox);
+        return outbox.getId();
     }
 
     private String outboxPayload(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {

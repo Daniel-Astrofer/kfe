@@ -17,13 +17,17 @@ import source.kfe.model.KfeWalletAddressStatus;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
+import source.kfe.rail.CustodyGateway;
+import source.kfe.rail.LightningInvoiceGateway;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -32,6 +36,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 @Service
 public class KfePaymentRequestService {
@@ -51,6 +56,8 @@ public class KfePaymentRequestService {
     private final KfeReceiveAddressIssuer receiveAddressIssuer;
     private final KfeAuditLogService auditLogService;
     private final KfeDashboardPublisher dashboardPublisher;
+    private final LightningInvoiceGateway lightningInvoiceGateway;
+    private final KfeTransactionCancellationService transactionCancellationService;
 
     public KfePaymentRequestService(
             KfePaymentRequestRepository paymentRequestRepository,
@@ -61,7 +68,10 @@ public class KfePaymentRequestService {
             AddressDerivationService addressDerivationService,
             KfeReceiveAddressIssuer receiveAddressIssuer,
             KfeAuditLogService auditLogService,
-            KfeDashboardPublisher dashboardPublisher) {
+            KfeDashboardPublisher dashboardPublisher,
+            @Qualifier("kfeExternalLightningInvoiceGateway")
+            LightningInvoiceGateway lightningInvoiceGateway,
+            KfeTransactionCancellationService transactionCancellationService) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -71,6 +81,8 @@ public class KfePaymentRequestService {
         this.receiveAddressIssuer = receiveAddressIssuer;
         this.auditLogService = auditLogService;
         this.dashboardPublisher = dashboardPublisher;
+        this.lightningInvoiceGateway = lightningInvoiceGateway;
+        this.transactionCancellationService = transactionCancellationService;
     }
 
     @Transactional
@@ -84,19 +96,35 @@ public class KfePaymentRequestService {
         KfeWalletAddressEntity address = rail == KfeRail.ONCHAIN
                 ? resolveReceivingAddress(userId, wallet, request)
                 : null;
+        CustodyGateway.GeneratedLightningInvoice lightningInvoice =
+                rail == KfeRail.LIGHTNING ? issueLightningInvoice(userId, wallet, request) : null;
+
         KfePaymentRequestEntity paymentRequest = new KfePaymentRequestEntity();
         paymentRequest.setPublicId(generatePublicId());
         paymentRequest.setUserId(userId);
         paymentRequest.setWalletId(wallet.getId());
         paymentRequest.setAddressId(address == null ? null : address.getId());
-        paymentRequest.setAddress(address == null ? internalWalletReference(wallet) : address.getAddress());
+        if (lightningInvoice != null) {
+            String hash = lightningInvoice.paymentHash();
+            paymentRequest.setAddress(shortLightningAddress(hash));
+            paymentRequest.setPaymentRequest(lightningInvoice.paymentRequest());
+            paymentRequest.setPaymentHash(hash);
+            paymentRequest.setProviderReference(lightningInvoice.providerReference());
+            if (request.expiresAt() == null && lightningInvoice.expiresAt() != null) {
+                paymentRequest.setExpiresAt(lightningInvoice.expiresAt());
+            }
+        } else {
+            paymentRequest.setAddress(address == null ? internalWalletReference(wallet) : address.getAddress());
+        }
         paymentRequest.setRail(rail);
         paymentRequest.setStatus(KfePaymentRequestStatus.OPEN);
         paymentRequest.setAmountSats(request.amountSats());
         paymentRequest.setDescription(clean(request.description()));
         paymentRequest.setMemo(clean(request.memo()));
         paymentRequest.setPayerHint(clean(request.payerHint()));
-        paymentRequest.setExpiresAt(request.expiresAt());
+        if (paymentRequest.getExpiresAt() == null) {
+            paymentRequest.setExpiresAt(request.expiresAt());
+        }
         paymentRequest = paymentRequestRepository.save(paymentRequest);
 
         auditLogService.record(
@@ -161,14 +189,8 @@ public class KfePaymentRequestService {
 
     @Transactional
     public KfePaymentRequestResponse cancel(Long userId, UUID id) {
-        KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByIdAndUserId(id, userId)
-                .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
-        if (paymentRequest.getStatus() == KfePaymentRequestStatus.OPEN) {
-            paymentRequest.cancel();
-            paymentRequest = paymentRequestRepository.save(paymentRequest);
-            auditStatusChange(paymentRequest, "KFE_PAYMENT_REQUEST_CANCELLED");
-        }
-        return toResponse(paymentRequest);
+        // Full cancel: LN invoice best-effort, fail related pending txs, dashboard refresh.
+        return toResponse(transactionCancellationService.cancelPaymentRequest(userId, id));
     }
 
     private KfeWalletAddressEntity resolveReceivingAddress(
@@ -246,6 +268,16 @@ public class KfePaymentRequestService {
         if (rail == KfeRail.INTERNAL) {
             return;
         }
+        if (rail == KfeRail.LIGHTNING) {
+            if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
+                throw new IllegalArgumentException(
+                        "WATCH_ONLY wallets cannot create Lightning payment requests (pooled LN credits spendable wallets).");
+            }
+            if (!wallet.isSpendable()) {
+                throw new IllegalStateException("Wallet is not spendable for Lightning receiving.");
+            }
+            return;
+        }
         if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
             return;
         }
@@ -272,13 +304,19 @@ public class KfePaymentRequestService {
         if (request.amountSats() != null && request.amountSats() <= 0) {
             throw new IllegalArgumentException("KFE payment request amount must be positive when provided.");
         }
-        if (request.expiresAt() != null && request.expiresAt().isBefore(LocalDateTime.now())) {
+        if (request.expiresAt() != null && request.expiresAt().isBefore(LocalDateTime.now(java.time.ZoneOffset.UTC))) {
             throw new IllegalArgumentException("KFE payment request expiration must be in the future.");
         }
         if (request.rail() != null
                 && request.rail() != KfeRail.ONCHAIN
-                && request.rail() != KfeRail.INTERNAL) {
-            throw new IllegalArgumentException("KFE payment requests support INTERNAL and ONCHAIN receiving only.");
+                && request.rail() != KfeRail.INTERNAL
+                && request.rail() != KfeRail.LIGHTNING) {
+            throw new IllegalArgumentException(
+                    "KFE payment requests support INTERNAL, ONCHAIN and LIGHTNING receiving.");
+        }
+        if (request.rail() == KfeRail.LIGHTNING
+                && (request.amountSats() == null || request.amountSats() <= 0L)) {
+            throw new IllegalArgumentException("LIGHTNING payment requests require a positive amountSats.");
         }
     }
 
@@ -286,12 +324,63 @@ public class KfePaymentRequestService {
         return requested == null ? KfeRail.ONCHAIN : requested;
     }
 
+    private CustodyGateway.GeneratedLightningInvoice issueLightningInvoice(
+            Long userId,
+            KfeWalletEntity wallet,
+            KfeCreatePaymentRequest request) {
+        if (!lightningInvoiceGateway.isLive()) {
+            throw new IllegalStateException("Lightning invoice gateway is not live.");
+        }
+        int expiresInSeconds = 3600;
+        if (request.expiresAt() != null) {
+            long seconds = Duration.between(LocalDateTime.now(java.time.ZoneOffset.UTC), request.expiresAt()).getSeconds();
+            expiresInSeconds = (int) Math.max(60L, Math.min(seconds, 86_400L));
+        }
+        CustodyGateway.GeneratedLightningInvoice invoice = lightningInvoiceGateway.createLightningInvoice(
+                new CustodyGateway.LightningInvoiceCommand(
+                        userId,
+                        null,
+                        wallet.getLabel(),
+                        request.amountSats(),
+                        firstNonBlank(request.memo(), request.description(), "KFE payment request"),
+                        expiresInSeconds));
+        if (invoice == null
+                || invoice.paymentRequest() == null
+                || invoice.paymentRequest().isBlank()) {
+            throw new IllegalStateException("Lightning invoice gateway returned an empty payment request.");
+        }
+        return invoice;
+    }
+
+    private static String shortLightningAddress(String paymentHash) {
+        if (paymentHash == null || paymentHash.isBlank()) {
+            return "lightning:invoice";
+        }
+        String hash = paymentHash.trim();
+        if (hash.length() > 100) {
+            hash = hash.substring(0, 100);
+        }
+        return "ln:" + hash;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
     private String internalWalletReference(KfeWalletEntity wallet) {
         return "kerosene:wallet:" + wallet.getId();
     }
 
     private KfePaymentRequestEntity expireIfDue(KfePaymentRequestEntity paymentRequest) {
-        if (paymentRequest.isExpired(LocalDateTime.now()) && findSettlementTransaction(paymentRequest).isEmpty()) {
+        if (paymentRequest.isExpired(LocalDateTime.now(java.time.ZoneOffset.UTC)) && findSettlementTransaction(paymentRequest).isEmpty()) {
             paymentRequest.expire();
             return paymentRequestRepository.save(paymentRequest);
         }
@@ -320,6 +409,8 @@ public class KfePaymentRequestService {
                 entity.getWalletId(),
                 entity.getAddressId(),
                 entity.getAddress(),
+                entity.getPaymentRequest(),
+                entity.getPaymentHash(),
                 entity.getRail(),
                 entity.getStatus(),
                 entity.getAmountSats(),
@@ -333,9 +424,9 @@ public class KfePaymentRequestService {
                 settlementTx == null ? 0 : settlementTx.getConfirmations(),
                 settlementTx == null ? null : settlementTx.getGrossAmountSats(),
                 settlementTx == null ? null : settlementTx.getReceiverAmountSats(),
-                entity.getExpiresAt(),
-                entity.getCreatedAt(),
-                entity.getUpdatedAt());
+                source.kfe.time.Utc.toInstant(entity.getExpiresAt()),
+                source.kfe.time.Utc.toInstant(entity.getCreatedAt()),
+                source.kfe.time.Utc.toInstant(entity.getUpdatedAt()));
     }
 
     private Optional<KfeTransactionEntity> findSettlementTransaction(KfePaymentRequestEntity entity) {

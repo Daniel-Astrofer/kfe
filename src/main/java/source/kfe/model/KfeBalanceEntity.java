@@ -9,6 +9,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
@@ -70,7 +71,7 @@ public class KfeBalanceEntity {
     @PrePersist
     @PreUpdate
     void onWrite() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public void reserve(long amountSats) {

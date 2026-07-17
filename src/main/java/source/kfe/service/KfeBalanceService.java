@@ -1,5 +1,8 @@
 package source.kfe.service;
 
+import java.time.ZoneOffset;
+
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -101,7 +104,7 @@ public class KfeBalanceService {
         if (probeQuality != null && !probeQuality.isBlank()) {
             balance.setObservedProbeMeta(
                     probeQuality.trim(),
-                    java.time.LocalDateTime.now(),
+                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC),
                     probeSource != null && !probeSource.isBlank() ? probeSource.trim() : null);
         }
         sign(balance);

@@ -122,7 +122,7 @@ class KfeWalletServiceTest {
         when(responseMapper.toWalletResponse(wallet)).thenReturn(new KfeWalletResponse(
                 wallet.getId(), KfeWalletKind.CUSTODIAL_ONCHAIN, KfeWalletStatus.ACTIVE, "label", "label",
                 "Carteira Onchain", "BTC",
-                true, true, true, "xpub", java.time.LocalDateTime.now(), java.time.LocalDateTime.now()
+                true, true, true, "xpub", java.time.Instant.now(), java.time.Instant.now()
         ));
 
         List<KfeWalletResponse> responses = service.listWallets(1L);
@@ -167,8 +167,8 @@ class KfeWalletServiceTest {
                             false,
                             true,
                             null,
-                            java.time.LocalDateTime.now(),
-                            java.time.LocalDateTime.now());
+                            java.time.Instant.now(),
+                            java.time.Instant.now());
                 });
 
         KfeWalletResponse response = service.createWallet(
@@ -226,8 +226,8 @@ class KfeWalletServiceTest {
                             false,
                             true,
                             null,
-                            java.time.LocalDateTime.now(),
-                            java.time.LocalDateTime.now());
+                            java.time.Instant.now(),
+                            java.time.Instant.now());
                 });
 
         KfeWalletResponse response = service.createWallet(

@@ -21,6 +21,7 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -39,6 +40,7 @@ public class KfeInboundSettlementService {
     private final KfeBalanceService balanceService;
     private final KfeAuditLogService auditLogService;
     private final KfeStatementService statementService;
+    private final KfeResponseMapper responseMapper;
     private final KfeDashboardPublisher dashboardPublisher;
     private final KfeHashService hashService;
     private final FinancialNotificationPort notificationPort;
@@ -55,6 +57,7 @@ public class KfeInboundSettlementService {
             KfeBalanceService balanceService,
             KfeAuditLogService auditLogService,
             KfeStatementService statementService,
+            KfeResponseMapper responseMapper,
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
             FinancialNotificationPort notificationPort,
@@ -69,6 +72,7 @@ public class KfeInboundSettlementService {
         this.balanceService = balanceService;
         this.auditLogService = auditLogService;
         this.statementService = statementService;
+        this.responseMapper = responseMapper;
         this.dashboardPublisher = dashboardPublisher;
         this.hashService = hashService;
         this.notificationPort = notificationPort;
@@ -189,7 +193,7 @@ public class KfeInboundSettlementService {
     private void markOutboxDispatched(KfeExecutionOutboxEntity outbox, String providerReference) {
         outbox.setStatus("DISPATCHED");
         outbox.setProviderReference(trim(providerReference, 255));
-        outbox.setDispatchedAt(LocalDateTime.now());
+        outbox.setDispatchedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         outbox.setLastError(null);
         outbox.setNextAttemptAt(null);
         clearClaim(outbox);
@@ -308,22 +312,12 @@ public class KfeInboundSettlementService {
     }
 
     private void recordStatement(KfeTransactionEntity tx, String providerPayload) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("transactionId", tx.getId().toString());
-        payload.put("status", tx.getStatus().name());
-        payload.put("rail", tx.getRail().name());
-        payload.put("direction", tx.getDirection().name());
-        payload.put("grossAmountSats", tx.getGrossAmountSats());
-        payload.put("receiverAmountSats", tx.getReceiverAmountSats());
-        payload.put("networkFeeSats", tx.getNetworkFeeSats());
-        payload.put("keroseneFeeSats", tx.getKeroseneFeeSats());
-        payload.put("provider", tx.getProvider());
+        Map<String, Object> payload = new LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, tx.getUserId()));
         payload.put("providerReferenceHash", hashService.sha256(firstNonBlank(tx.getProviderReference(), "")));
-        payload.put("blockchainTxid", tx.getBlockchainTxid());
-        payload.put("paymentHash", tx.getPaymentHash());
         if (providerPayload != null && !providerPayload.isBlank()) {
             payload.put("providerPayloadHash", hashService.sha256(providerPayload));
         }
+        // Upsert same (user, tx) row — status/confs update in place; createdAt stays fixed.
         statementService.recordUserStatement(tx.getUserId(), tx.getDestinationWalletId(), tx, payload);
     }
 

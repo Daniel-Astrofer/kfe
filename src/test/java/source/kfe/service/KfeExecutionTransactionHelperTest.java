@@ -39,11 +39,15 @@ class KfeExecutionTransactionHelperTest {
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
     private final KfeStatementService statementService = mock(KfeStatementService.class);
+    private final KfeResponseMapper responseMapper = mock(KfeResponseMapper.class);
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncProvider =
+            mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityProvider =
             mock(ObjectProvider.class);
 
     private final KfeExecutionTransactionHelper helper = helper(8);
@@ -249,6 +253,9 @@ class KfeExecutionTransactionHelperTest {
 
     private KfeExecutionTransactionHelper helper(int maxRetryAttempts) {
         when(onchainBalanceSyncProvider.getIfAvailable()).thenReturn(null);
+        when(lightningLiquidityProvider.getIfAvailable()).thenReturn(null);
+        when(responseMapper.buildDisplayPayload(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new java.util.LinkedHashMap<>());
         return new KfeExecutionTransactionHelper(
                 outboxRepository,
                 transactionRepository,
@@ -258,11 +265,13 @@ class KfeExecutionTransactionHelperTest {
                 balanceService,
                 auditLogService,
                 statementService,
+                responseMapper,
                 dashboardPublisher,
                 hashService,
                 new ObjectMapper(),
                 feeSettlementService,
                 onchainBalanceSyncProvider,
+                lightningLiquidityProvider,
                 maxRetryAttempts);
     }
 

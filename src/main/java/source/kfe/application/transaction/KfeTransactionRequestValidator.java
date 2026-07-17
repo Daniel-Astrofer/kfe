@@ -5,6 +5,7 @@ import source.kfe.dto.KfeSubmitTransactionRequest;
 import source.kfe.model.KfeDirection;
 import source.kfe.model.KfeRail;
 import source.kfe.service.BitcoinAddressValidator;
+import source.kfe.service.KfePlatformLightningPolicy;
 
 @Component
 public class KfeTransactionRequestValidator {
@@ -12,9 +13,13 @@ public class KfeTransactionRequestValidator {
     private static final long MAX_SATOSHIS = 2_100_000_000_000_000L;
 
     private final BitcoinAddressValidator bitcoinAddressValidator;
+    private final KfePlatformLightningPolicy platformLightningPolicy;
 
-    public KfeTransactionRequestValidator(BitcoinAddressValidator bitcoinAddressValidator) {
+    public KfeTransactionRequestValidator(
+            BitcoinAddressValidator bitcoinAddressValidator,
+            KfePlatformLightningPolicy platformLightningPolicy) {
         this.bitcoinAddressValidator = bitcoinAddressValidator;
+        this.platformLightningPolicy = platformLightningPolicy;
     }
 
     public void validate(KfeSubmitTransactionRequest request) {
@@ -59,10 +64,15 @@ public class KfeTransactionRequestValidator {
             return;
         }
         if (request.rail() == KfeRail.LIGHTNING) {
-            String lowerRef = ref.toLowerCase();
-            if (!lowerRef.startsWith("lnbc") && !lowerRef.startsWith("lntb") && !lowerRef.startsWith("lnbcrt")) {
-                throw new IllegalArgumentException("Invalid Lightning invoice format for externalReference.");
+            // Accept BOLT11, LNURL1…, Lightning Address (user@domain), or keysend node pubkey.
+            if (!source.kfe.rail.LightningDestinationClassifier.isValidLightningOutboundReference(ref)) {
+                throw new IllegalArgumentException(
+                        "Invalid Lightning destination for externalReference. "
+                                + "Use a BOLT11 invoice (ln…), LNURL1…, Lightning Address (user@domain), "
+                                + "or 66-char node pubkey (keysend).");
             }
+            // Same-node platform invoices must settle via INTERNAL ledger, not LND.
+            platformLightningPolicy.rejectLightningOutboundIfPlatformOwned(ref);
         }
     }
 }

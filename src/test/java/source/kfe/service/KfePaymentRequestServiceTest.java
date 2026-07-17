@@ -12,6 +12,7 @@ import source.kfe.model.KfeWalletAddressEntity;
 import source.kfe.model.KfeWalletEntity;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
+import source.kfe.rail.LightningInvoiceGateway;
 import source.kfe.repository.KfePaymentRequestRepository;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletAddressRepository;
@@ -42,6 +43,9 @@ class KfePaymentRequestServiceTest {
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
 
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
+    private final LightningInvoiceGateway lightningInvoiceGateway = mock(LightningInvoiceGateway.class);
+    private final KfeTransactionCancellationService transactionCancellationService =
+            mock(KfeTransactionCancellationService.class);
 
     private final KfePaymentRequestService service = new KfePaymentRequestService(
             paymentRequestRepository,
@@ -52,7 +56,9 @@ class KfePaymentRequestServiceTest {
             addressDerivationService,
             receiveAddressIssuer,
             auditLogService,
-            dashboardPublisher);
+            dashboardPublisher,
+            lightningInvoiceGateway,
+            transactionCancellationService);
 
     @Test
     void publicGetExpiresOverdueOpenRequestBeforeReturningIt() {
@@ -179,23 +185,16 @@ class KfePaymentRequestServiceTest {
     }
 
     @Test
-    void cancelDoesNotRegressExpiredPaymentRequest() {
+    void cancelDelegatesToCancellationService() {
         UUID id = UUID.randomUUID();
         KfePaymentRequestEntity paymentRequest = paymentRequest();
-        paymentRequest.setStatus(KfePaymentRequestStatus.EXPIRED);
-        when(paymentRequestRepository.findByIdAndUserId(id, 7L)).thenReturn(Optional.of(paymentRequest));
+        paymentRequest.setStatus(KfePaymentRequestStatus.CANCELLED);
+        when(transactionCancellationService.cancelPaymentRequest(7L, id)).thenReturn(paymentRequest);
 
         var response = service.cancel(7L, id);
 
-        assertThat(response.status()).isEqualTo(KfePaymentRequestStatus.EXPIRED);
-        verify(paymentRequestRepository, never()).save(paymentRequest);
-        verify(auditLogService, never()).record(
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anyMap());
+        assertThat(response.status()).isEqualTo(KfePaymentRequestStatus.CANCELLED);
+        verify(transactionCancellationService).cancelPaymentRequest(7L, id);
     }
 
     @Test

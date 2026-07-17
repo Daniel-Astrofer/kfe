@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import source.kfe.rail.CustodyGateway;
 import source.kfe.rail.KfeOnchainPaymentGateway;
 import source.kfe.rail.LightningPaymentGateway;
+import source.kfe.rail.LightningPaymentInFlightException;
 
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +56,13 @@ public class KfeExecutionOutboxProcessor {
             executor.execute(outboxId, prep);
         } catch (KfeOnchainPaymentGateway.ProviderExecutionAmbiguous ambiguous) {
             transactionHelper.markUnknown(outboxId, prep.transactionId(), ambiguous.providerReference(), ambiguous.rawPayload(), ambiguous.getMessage());
+        } catch (LightningPaymentInFlightException inFlight) {
+            transactionHelper.markUnknown(
+                    outboxId,
+                    prep.transactionId(),
+                    inFlight.providerReference(),
+                    inFlight.rawPayload(),
+                    inFlight.getMessage());
         } catch (RuntimeException exception) {
             boolean retryable = isRetryable(exception);
             if (retryable) {
@@ -66,8 +74,28 @@ public class KfeExecutionOutboxProcessor {
     }
 
     private boolean isRetryable(RuntimeException exception) {
-        return !(exception instanceof IllegalArgumentException)
-                && !(exception instanceof UnsupportedOperationException);
+        if (exception instanceof IllegalArgumentException
+                || exception instanceof UnsupportedOperationException) {
+            return false;
+        }
+        // LND permanent payment/invoice errors often arrive as IllegalStateException
+        // wrappers; classify by message so txs do not spin EXECUTING forever.
+        String message = safeMessage(exception);
+        if (source.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(message)) {
+            return false;
+        }
+        Throwable cause = exception.getCause();
+        while (cause != null) {
+            String causeMessage = cause.getMessage();
+            if (source.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(causeMessage)) {
+                return false;
+            }
+            if (cause instanceof IllegalArgumentException || cause instanceof UnsupportedOperationException) {
+                return false;
+            }
+            cause = cause.getCause();
+        }
+        return true;
     }
 
     private String safeMessage(Throwable exception) {

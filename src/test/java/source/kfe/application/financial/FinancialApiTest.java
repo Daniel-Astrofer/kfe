@@ -13,6 +13,7 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfeResponseMapper;
+import source.kfe.service.KfeTransactionCancellationService;
 import source.kfe.service.KfeTransactionEngine;
 import source.kfe.service.KfeWalletNetworkService;
 import source.kfe.service.KfeWalletService;
@@ -42,7 +43,8 @@ class FinancialApiTest {
             pricingService,
             networkFeeEstimateService,
             mock(KfeWalletService.class),
-            mock(KfeWalletNetworkService.class));
+            mock(KfeWalletNetworkService.class),
+            mock(KfeTransactionCancellationService.class));
 
     @Test
     void calculatesOnchainQuoteFromServerFeeInsteadOfClientValue() {

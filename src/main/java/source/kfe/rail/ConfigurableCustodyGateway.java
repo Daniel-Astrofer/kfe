@@ -13,6 +13,7 @@ import org.springframework.web.client.RestTemplate;
 import source.common.exception.FinancialProviderUnavailableException;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -287,7 +288,7 @@ public class ConfigurableCustodyGateway implements CustodyGateway {
             } catch (Exception ignored) {
             }
         }
-        return LocalDateTime.now().plusMinutes(15);
+        return LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(15);
     }
 
     private LocalDateTime parseOptionalDateTime(JsonNode node, String... fieldNames) {

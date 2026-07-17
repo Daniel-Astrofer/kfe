@@ -11,6 +11,7 @@ import source.kfe.model.KfeTransactionStatus;
 import source.kfe.repository.KfePaymentRequestRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 @Service
 public class KfeInternalPaymentRequestSettlementUseCase {
@@ -33,13 +34,18 @@ public class KfeInternalPaymentRequestSettlementUseCase {
 
         KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByPublicIdForUpdate(publicId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
-        if (paymentRequest.getRail() != KfeRail.INTERNAL) {
-            throw new IllegalArgumentException("KFE payment request rail does not match the transaction rail.");
+        // INTERNAL rail PRs and platform LIGHTNING PRs (in-app loopback) settle on the ledger.
+        // Pure on-chain PRs still require on-chain detection — not this path.
+        if (paymentRequest.getRail() != KfeRail.INTERNAL
+                && paymentRequest.getRail() != KfeRail.LIGHTNING) {
+            throw new IllegalArgumentException(
+                    "KFE payment request rail does not support INTERNAL ledger settlement. "
+                            + "Use INTERNAL or LIGHTNING payment requests for in-app payments.");
         }
         if (paymentRequest.getStatus() != KfePaymentRequestStatus.OPEN) {
             throw new IllegalStateException("KFE payment request is no longer open.");
         }
-        if (paymentRequest.isExpired(LocalDateTime.now())) {
+        if (paymentRequest.isExpired(LocalDateTime.now(java.time.ZoneOffset.UTC))) {
             throw new IllegalStateException("KFE payment request has expired.");
         }
         if (request.destinationWalletId() == null

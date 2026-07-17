@@ -3,7 +3,7 @@ package source.kfe.dto;
 import source.kfe.model.KfeWalletAddressRole;
 import source.kfe.model.KfeWalletAddressStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record KfeAddressResponse(
@@ -15,6 +15,6 @@ public record KfeAddressResponse(
         String derivationPath,
         Integer derivationIndex,
         String providerReference,
-        LocalDateTime createdAt,
-        LocalDateTime retiredAt) {
+        Instant createdAt,
+        Instant retiredAt) {
 }

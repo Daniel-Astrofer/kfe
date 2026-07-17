@@ -59,6 +59,9 @@ class KfeInboundSettlementServiceTest {
     private KfeStatementService statementService;
 
     @Mock
+    private KfeResponseMapper responseMapper;
+
+    @Mock
     private KfeDashboardPublisher dashboardPublisher;
 
     @Mock
@@ -82,6 +85,9 @@ class KfeInboundSettlementServiceTest {
         org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeBalanceMetrics> metrics =
                 org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
         org.mockito.Mockito.lenient().when(metrics.getIfAvailable()).thenReturn(null);
+        org.mockito.Mockito.lenient()
+                .when(responseMapper.buildDisplayPayload(any(), anyLong()))
+                .thenReturn(java.util.Map.of("status", "SETTLED"));
         service = new KfeInboundSettlementService(
                 transactionRepository,
                 outboxRepository,
@@ -91,6 +97,7 @@ class KfeInboundSettlementServiceTest {
                 balanceService,
                 auditLogService,
                 statementService,
+                responseMapper,
                 dashboardPublisher,
                 hashService,
                 notificationPort,

@@ -27,6 +27,8 @@ public interface KfePaymentRequestRepository extends JpaRepository<KfePaymentReq
 
     Optional<KfePaymentRequestEntity> findByPublicId(String publicId);
 
+    Optional<KfePaymentRequestEntity> findByPaidTransactionIdAndUserId(UUID paidTransactionId, Long userId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from KfePaymentRequestEntity p where p.publicId = :publicId")
     Optional<KfePaymentRequestEntity> findByPublicIdForUpdate(@Param("publicId") String publicId);
@@ -46,4 +48,8 @@ public interface KfePaymentRequestRepository extends JpaRepository<KfePaymentReq
             List<KfePaymentRequestStatus> statuses,
             KfeRail rail,
             Pageable pageable);
+
+    Optional<KfePaymentRequestEntity> findFirstByPaymentHashIgnoreCase(String paymentHash);
+
+    Optional<KfePaymentRequestEntity> findFirstByPaymentRequestIgnoreCase(String paymentRequest);
 }

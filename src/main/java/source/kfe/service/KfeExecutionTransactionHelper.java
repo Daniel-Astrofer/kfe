@@ -21,6 +21,7 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -39,11 +40,13 @@ public class KfeExecutionTransactionHelper {
     private final KfeBalanceService balanceService;
     private final KfeAuditLogService auditLogService;
     private final KfeStatementService statementService;
+    private final KfeResponseMapper responseMapper;
     private final KfeDashboardPublisher dashboardPublisher;
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
     private final KfeFeeSettlementService feeSettlementService;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
+    private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService;
     private final int maxRetryAttempts;
 
     public KfeExecutionTransactionHelper(
@@ -55,11 +58,13 @@ public class KfeExecutionTransactionHelper {
             KfeBalanceService balanceService,
             KfeAuditLogService auditLogService,
             KfeStatementService statementService,
+            KfeResponseMapper responseMapper,
             KfeDashboardPublisher dashboardPublisher,
             KfeHashService hashService,
             ObjectMapper objectMapper,
             KfeFeeSettlementService feeSettlementService,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
+            ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService,
             @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
@@ -69,11 +74,13 @@ public class KfeExecutionTransactionHelper {
         this.balanceService = balanceService;
         this.auditLogService = auditLogService;
         this.statementService = statementService;
+        this.responseMapper = responseMapper;
         this.dashboardPublisher = dashboardPublisher;
         this.hashService = hashService;
         this.objectMapper = objectMapper;
         this.feeSettlementService = feeSettlementService;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
+        this.lightningLiquidityService = lightningLiquidityService;
         if (maxRetryAttempts <= 0) {
             throw new IllegalArgumentException("maxRetryAttempts must be positive.");
         }
@@ -334,6 +341,7 @@ public class KfeExecutionTransactionHelper {
 
         balanceService.settleReservedDebit(sourceWalletId, ASSET_BTC, tx.getTotalDebitSats());
         movement(tx.getId(), sourceWalletId, "SETTLE_DEBIT", tx.getTotalDebitSats(), "LOCKED", null);
+        consumeLightningLiquidity(tx.getId());
         transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
                 Map.of("providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, ""))));
         feeSettlementService.creditKeroseneFee(tx);
@@ -341,6 +349,20 @@ public class KfeExecutionTransactionHelper {
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void consumeLightningLiquidity(UUID transactionId) {
+        KfeLightningLiquidityService liquidity = lightningLiquidityService.getIfAvailable();
+        if (liquidity != null) {
+            liquidity.consumeForTransaction(transactionId);
+        }
+    }
+
+    private void releaseLightningLiquidity(UUID transactionId) {
+        KfeLightningLiquidityService liquidity = lightningLiquidityService.getIfAvailable();
+        if (liquidity != null) {
+            liquidity.releaseForTransaction(transactionId);
+        }
     }
 
     private boolean reconcileOutboundFee(
@@ -459,7 +481,7 @@ public class KfeExecutionTransactionHelper {
         outbox.setAttempts(outbox.getAttempts() + 1);
         outbox.setStatus("FAILED_RETRYABLE");
         outbox.setLastError(trim(code + ": " + message, 1000));
-        outbox.setNextAttemptAt(LocalDateTime.now().plusMinutes(Math.min(60, 1L << Math.min(outbox.getAttempts(), 5))));
+        outbox.setNextAttemptAt(LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(Math.min(60, 1L << Math.min(outbox.getAttempts(), 5))));
         clearClaim(outbox);
         outboxRepository.save(outbox);
         audit(tx, "KFE_EXECUTION_RETRYABLE_FAILURE", tx.getStatus(), tx.getStatus(),
@@ -492,6 +514,7 @@ public class KfeExecutionTransactionHelper {
             balanceService.releaseReserved(tx.getSourceWalletId(), ASSET_BTC, tx.getTotalDebitSats());
             movement(tx.getId(), tx.getSourceWalletId(), "RELEASE_RESERVE", tx.getTotalDebitSats(), "LOCKED", "AVAILABLE");
         }
+        releaseLightningLiquidity(tx.getId());
         tx.setFailureCode(trim(code, 64));
         tx.setFailureMessage(trim(message, 255));
         transition(tx, KfeTransactionStatus.FAILED, "KFE_TRANSACTION_FAILED",
@@ -549,7 +572,7 @@ public class KfeExecutionTransactionHelper {
     private void markOutboxDispatched(KfeExecutionOutboxEntity outbox, String providerReference) {
         outbox.setStatus("DISPATCHED");
         outbox.setProviderReference(providerReference);
-        outbox.setDispatchedAt(LocalDateTime.now());
+        outbox.setDispatchedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         outbox.setLastError(null);
         outbox.setNextAttemptAt(null);
         clearClaim(outbox);
@@ -615,7 +638,7 @@ public class KfeExecutionTransactionHelper {
         String finalMsg = message != null && !message.isBlank() ? message : "KFE provider execution failed.";
         outbox.setLastError(trim(code + ": " + finalMsg, 1000));
         outbox.setNextAttemptAt(retryable
-                ? LocalDateTime.now().plusMinutes(Math.min(60, 1L << Math.min(outbox.getAttempts(), 5)))
+                ? LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(Math.min(60, 1L << Math.min(outbox.getAttempts(), 5)))
                 : null);
         clearClaim(outbox);
         outboxRepository.save(outbox);
@@ -675,22 +698,7 @@ public class KfeExecutionTransactionHelper {
     }
 
     private void recordStatement(KfeTransactionEntity tx, UUID walletId, String providerPayload) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("transactionId", tx.getId().toString());
-        payload.put("status", tx.getStatus().name());
-        payload.put("rail", tx.getRail().name());
-        payload.put("direction", tx.getDirection().name());
-        payload.put("grossAmountSats", tx.getGrossAmountSats());
-        payload.put("receiverAmountSats", tx.getReceiverAmountSats());
-        payload.put("networkFeeSats", tx.getNetworkFeeSats());
-        payload.put("keroseneFeeSats", tx.getKeroseneFeeSats());
-        payload.put("totalDebitSats", tx.getTotalDebitSats());
-        payload.put("provider", tx.getProvider());
-        payload.put("providerReferenceHash", hashService.sha256(firstNonBlank(tx.getProviderReference(), "")));
-        payload.put("externalReference", tx.getExternalReference());
-        payload.put("memo", tx.getMemo());
-        payload.put("blockchainTxid", tx.getBlockchainTxid());
-        payload.put("paymentHash", tx.getPaymentHash());
+        Map<String, Object> payload = new LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, tx.getUserId()));
         if (providerPayload != null && !providerPayload.isBlank()) {
             payload.put("providerPayloadHash", hashService.sha256(providerPayload));
         }

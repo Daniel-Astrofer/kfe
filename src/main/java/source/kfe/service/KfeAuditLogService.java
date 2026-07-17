@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import source.common.audit.AuditEventPayloadSanitizer;
 import source.common.audit.AuditEventType;
@@ -34,8 +35,47 @@ public class KfeAuditLogService {
         this.auditLogger = auditLogger;
     }
 
+    /**
+     * Append-only audit event in the caller's transaction.
+     *
+     * <p>Must join the outer submit TX when {@code transactionId} points at a row that is not
+     * committed yet — {@link Propagation#REQUIRES_NEW} would violate
+     * {@code financial_audit_log_transaction_id_fkey} and surface as a generic client error
+     * ("não conseguimos concluir essa solicitação").
+     *
+     * <p>The global audit appender lock is xact-scoped; callers must not call
+     * {@link #recordInNewTransaction} while this lock is held (see settlement-gate path).
+     */
     @Transactional
     public KfeAuditLogEntity record(
+            String eventType,
+            UUID transactionId,
+            UUID walletId,
+            KfeTransactionStatus fromStatus,
+            KfeTransactionStatus toStatus,
+            Map<String, ?> redactedPayload) {
+        return persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload);
+    }
+
+    /**
+     * Forensic audit in a <strong>new</strong> transaction (survives outer rollback).
+     *
+     * <p>Only safe when the outer transaction does <em>not</em> already hold
+     * {@code GLOBAL_AUDIT_APPENDER}. Prefer {@link #record} from inside submit, or schedule this
+     * after the outer TX has released its locks.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public KfeAuditLogEntity recordInNewTransaction(
+            String eventType,
+            UUID transactionId,
+            UUID walletId,
+            KfeTransactionStatus fromStatus,
+            KfeTransactionStatus toStatus,
+            Map<String, ?> redactedPayload) {
+        return persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload);
+    }
+
+    private KfeAuditLogEntity persist(
             String eventType,
             UUID transactionId,
             UUID walletId,

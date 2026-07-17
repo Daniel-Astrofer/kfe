@@ -1,5 +1,7 @@
 package source.kfe.integration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -23,6 +25,7 @@ import java.util.UUID;
 @ConditionalOnProperty(name = "kfe.remote.notifications.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeRemoteFinancialNotificationClient implements FinancialNotificationPort {
 
+    private static final Logger log = LoggerFactory.getLogger(KfeRemoteFinancialNotificationClient.class);
     private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
     private static final String DEFAULT_BASE_URL = "http://server:8080";
 
@@ -157,14 +160,73 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
                         null));
     }
 
+    @Override
+    public void notifyInternalTransferReceived(
+            Long receiverUserId,
+            UUID transactionId,
+            UUID walletId,
+            long amountSats) {
+        post("/internal/kfe/notifications/internal-transfer-received",
+                new source.common.financial.FinancialInternalTransferNotificationRequest(
+                        receiverUserId,
+                        transactionId,
+                        walletId,
+                        amountSats));
+    }
+
+    @Override
+    public void notifyInternalTransferSent(
+            Long senderUserId,
+            UUID transactionId,
+            UUID walletId,
+            long amountSats) {
+        post("/internal/kfe/notifications/internal-transfer-sent",
+                new source.common.financial.FinancialInternalTransferNotificationRequest(
+                        senderUserId,
+                        transactionId,
+                        walletId,
+                        amountSats));
+    }
+
+    @Override
+    public void notifyExternalPaymentSent(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats) {
+        post("/internal/kfe/notifications/external-payment-sent",
+                new source.common.financial.FinancialExternalPaymentNotificationRequest(
+                        userId,
+                        transactionId,
+                        walletId,
+                        rail,
+                        amountSats));
+    }
+
+    /**
+     * Best-effort push to the auth/server notification API.
+     *
+     * <p>Must never abort ledger settlement: a missing route (404 on older server images),
+     * auth glitch, or down server is not a payment failure. Mobile was seeing
+     * "operation rejected" because submit rolled back when this threw.
+     */
     private void post(String path, Object request) {
+        // Missing secret is a deploy misconfiguration — still fail fast so ops notice.
+        HttpEntity<Object> entity = internalJsonEntity(request);
         try {
-            restTemplate.postForEntity(baseUrl + path, internalJsonEntity(request), Void.class);
+            restTemplate.postForEntity(baseUrl + path, entity, Void.class);
         } catch (RestClientResponseException exception) {
-            throw new IllegalStateException(
-                    "KFE financial notification was rejected by auth server: "
-                            + exception.getStatusCode().value(),
-                    exception);
+            log.warn(
+                    "[KFE Notify] auth server rejected {} with HTTP {} — continuing without push",
+                    path,
+                    exception.getStatusCode().value());
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Notify] failed to POST {} ({}): {} — continuing without push",
+                    path,
+                    exception.getClass().getSimpleName(),
+                    exception.getMessage());
         }
     }
 

@@ -18,6 +18,7 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -148,7 +149,7 @@ public class KfeBalanceReconciliationJob {
 
     @Transactional(readOnly = true)
     protected void checkLockedStuck() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(lockedStuckMinutes);
+        LocalDateTime cutoff = LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(lockedStuckMinutes);
         List<KfeWalletEntity> wallets = walletRepository.findByKindInAndStatus(
                 List.of(KfeWalletKind.INTERNAL, KfeWalletKind.CUSTODIAL_ONCHAIN),
                 KfeWalletStatus.ACTIVE);

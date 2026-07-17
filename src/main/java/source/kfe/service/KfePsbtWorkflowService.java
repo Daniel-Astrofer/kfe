@@ -18,6 +18,7 @@ import source.kfe.repository.KfePsbtWorkflowRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -121,7 +122,7 @@ public class KfePsbtWorkflowService {
         BitcoinCoreRpcClient.FinalizedPsbt finalized = bitcoinCore.finalizePsbt(signed);
         workflow.setSignedPsbt(signed);
         workflow.setSignedPsbtHash(hashService.sha256(signed));
-        workflow.setSignedAt(LocalDateTime.now());
+        workflow.setSignedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         if (finalized.complete() && finalized.hex() != null && !finalized.hex().isBlank()) {
             workflow.setRawTxHex(finalized.hex());
             workflow.setRawTxHash(hashService.sha256(finalized.hex()));
@@ -285,7 +286,7 @@ public class KfePsbtWorkflowService {
         try {
             String txid = requireBitcoinCore().sendRawTransaction(workflow.getRawTxHex());
             workflow.setBroadcastTxid(txid);
-            workflow.setBroadcastAt(LocalDateTime.now());
+            workflow.setBroadcastAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             workflow.setStatus(KfePsbtWorkflowStatus.BROADCAST);
             workflow = workflowRepository.save(workflow);
             // History row + confirmation tracking (no custodial reserve for cold).

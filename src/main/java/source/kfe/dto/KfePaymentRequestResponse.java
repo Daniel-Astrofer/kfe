@@ -4,7 +4,7 @@ import source.kfe.model.KfePaymentRequestStatus;
 import source.kfe.model.KfeRail;
 import source.kfe.model.KfeTransactionStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record KfePaymentRequestResponse(
@@ -14,6 +14,9 @@ public record KfePaymentRequestResponse(
         UUID walletId,
         UUID addressId,
         String address,
+        /** BOLT11 invoice when rail is LIGHTNING. */
+        String paymentRequest,
+        String paymentHash,
         KfeRail rail,
         KfePaymentRequestStatus status,
         Long amountSats,
@@ -27,7 +30,7 @@ public record KfePaymentRequestResponse(
         Integer confirmations,
         Long grossAmountSats,
         Long receiverAmountSats,
-        LocalDateTime expiresAt,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        Instant expiresAt,
+        Instant createdAt,
+        Instant updatedAt) {
 }

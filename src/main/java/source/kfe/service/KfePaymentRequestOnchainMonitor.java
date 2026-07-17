@@ -56,6 +56,7 @@ public class KfePaymentRequestOnchainMonitor {
     private final KfeFeeSettlementService feeSettlementService;
     private final KfeAuditLogService auditLogService;
     private final KfeStatementService statementService;
+    private final KfeResponseMapper responseMapper;
     private final KfeDashboardPublisher dashboardPublisher;
     private final FinancialNotificationPort notificationPort;
     private final TransactionTemplate transactionTemplate;
@@ -76,6 +77,7 @@ public class KfePaymentRequestOnchainMonitor {
             KfeFeeSettlementService feeSettlementService,
             KfeAuditLogService auditLogService,
             KfeStatementService statementService,
+            KfeResponseMapper responseMapper,
             KfeDashboardPublisher dashboardPublisher,
             FinancialNotificationPort notificationPort,
             TransactionTemplate transactionTemplate,
@@ -95,6 +97,7 @@ public class KfePaymentRequestOnchainMonitor {
         this.feeSettlementService = feeSettlementService;
         this.auditLogService = auditLogService;
         this.statementService = statementService;
+        this.responseMapper = responseMapper;
         this.dashboardPublisher = dashboardPublisher;
         this.notificationPort = notificationPort;
         this.transactionTemplate = transactionTemplate;
@@ -238,15 +241,11 @@ public class KfePaymentRequestOnchainMonitor {
             if (request.getStatus() != KfePaymentRequestStatus.PAID) {
                 request.markPaid(existing.getId());
                 paymentRequestRepository.save(request);
-                statementService.recordUserStatementIfAbsent(
-                        request.getUserId(),
-                        request.getWalletId(),
+                recordPaymentRequestStatement(
+                        request,
                         existing,
-                        Map.of(
-                                "paymentRequestId", request.getId().toString(),
-                                "publicId", request.getPublicId(),
-                                "txid", payment.txid(),
-                                "note", "payment-request-closed-after-external-settle"));
+                        payment,
+                        Math.max(0L, existing.getReceiverAmountSats()));
                 notifyPaymentRequestPaid(
                         request, existing, Math.max(0L, existing.getReceiverAmountSats()));
                 dashboardPublisher.publishAfterCommit(request.getUserId());
@@ -303,13 +302,7 @@ public class KfePaymentRequestOnchainMonitor {
                         "observedSats", payment.observedSats(),
                         "creditedSats", quote.receiverAmountSats(),
                         "confirmations", payment.confirmations()));
-        statementService.recordUserStatement(request.getUserId(), request.getWalletId(), tx, Map.of(
-                "paymentRequestId", request.getId().toString(),
-                "publicId", request.getPublicId(),
-                "txid", payment.txid(),
-                "observedSats", payment.observedSats(),
-                "creditedSats", quote.receiverAmountSats(),
-                "rawPaymentHash", Integer.toHexString(payment.rawPayload().hashCode())));
+        recordPaymentRequestStatement(request, tx, payment, quote.receiverAmountSats());
         notifyPaymentRequestPaid(request, tx, quote.receiverAmountSats());
         dashboardPublisher.publishAfterCommit(request.getUserId());
     }
@@ -331,17 +324,26 @@ public class KfePaymentRequestOnchainMonitor {
             KfeTransactionEntity tx,
             ObservedPayment payment,
             long creditedSats) {
-        statementService.recordUserStatementIfAbsent(request.getUserId(), request.getWalletId(), tx, Map.of(
-                "paymentRequestId", request.getId().toString(),
-                "publicId", request.getPublicId(),
-                "txid", payment.txid(),
-                "status", tx.getStatus().name(),
-                "rail", tx.getRail().name(),
-                "direction", tx.getDirection().name(),
-                "observedSats", payment.observedSats(),
-                "creditedSats", creditedSats,
-                "confirmations", payment.confirmations(),
-                "rawPaymentHash", Integer.toHexString(payment.rawPayload().hashCode())));
+        // Upsert canonical payload so conf/status advance in place (same transactionId).
+        recordPaymentRequestStatement(request, tx, payment, creditedSats);
+    }
+
+    private void recordPaymentRequestStatement(
+            KfePaymentRequestEntity request,
+            KfeTransactionEntity tx,
+            ObservedPayment payment,
+            long creditedSats) {
+        java.util.Map<String, Object> payload =
+                new java.util.LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, request.getUserId()));
+        payload.put("paymentRequestId", request.getId().toString());
+        payload.put("publicId", request.getPublicId());
+        payload.put("txid", payment.txid());
+        payload.put("observedSats", payment.observedSats());
+        payload.put("creditedSats", creditedSats);
+        payload.put(
+                "rawPaymentHash",
+                Integer.toHexString(payment.rawPayload() != null ? payment.rawPayload().hashCode() : 0));
+        statementService.recordUserStatement(request.getUserId(), request.getWalletId(), tx, payload);
     }
 
     private void notifyPaymentRequestPaid(KfePaymentRequestEntity request, KfeTransactionEntity tx, long creditedSats) {

@@ -7,6 +7,7 @@ import source.kfe.repository.KfeExecutionOutboxRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -27,7 +28,7 @@ public class KfeExecutionOutboxService {
     @Transactional
     public List<KfeExecutionOutboxEntity> claimDue(String workerId) {
         String normalizedWorkerId = normalizeWorkerId(workerId);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         LocalDateTime staleClaimBefore = now.minus(STALE_CLAIM_AFTER);
         return repository.findTop100ClaimCandidates(DUE_STATUSES, now, staleClaimBefore)
                 .stream()
@@ -47,6 +48,20 @@ public class KfeExecutionOutboxService {
             return Optional.empty();
         }
         return repository.findById(outboxId);
+    }
+
+    /**
+     * Claim one outbox item right after submit so Lightning can settle in the request path.
+     * Returns true when this caller owns the claim and should call the processor.
+     */
+    @Transactional
+    public boolean claimImmediate(UUID outboxId, String workerId) {
+        if (outboxId == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        int updated = repository.claimImmediate(outboxId, now, normalizeWorkerId(workerId));
+        return updated > 0;
     }
 
     private String normalizeWorkerId(String workerId) {

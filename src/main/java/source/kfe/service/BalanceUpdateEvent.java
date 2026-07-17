@@ -2,6 +2,7 @@ package source.kfe.service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Realtime balance snapshot. Legacy clients only read {@code newBalance}/{@code amount}/{@code context}.
@@ -35,7 +36,7 @@ public class BalanceUpdateEvent {
         this.newBalance = newBalance;
         this.amount = amount;
         this.context = context;
-        this.timestamp = LocalDateTime.now();
+        this.timestamp = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public BalanceUpdateEvent(

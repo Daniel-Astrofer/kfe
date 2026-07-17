@@ -287,7 +287,7 @@ public class BtcPayServerCustodyGateway implements CustodyGateway {
                 continue;
             }
             try {
-                return OffsetDateTime.parse(value).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+                return OffsetDateTime.parse(value).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
             } catch (Exception ignored) {
             }
             try {

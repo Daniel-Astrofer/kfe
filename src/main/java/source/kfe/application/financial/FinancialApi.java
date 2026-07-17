@@ -1,5 +1,8 @@
 package source.kfe.application.financial;
 
+import java.time.ZoneOffset;
+
+
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.PageRequest;
 import source.kfe.dto.KfeAddressResponse;
@@ -21,6 +24,7 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeResponseMapper;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeNetworkFeeEstimateService;
+import source.kfe.service.KfeTransactionCancellationService;
 import source.kfe.service.KfeTransactionEngine;
 import source.kfe.service.KfeWalletNetworkService;
 import source.kfe.service.KfeWalletService;
@@ -38,6 +42,7 @@ public class FinancialApi {
     private final KfeNetworkFeeEstimateService networkFeeEstimateService;
     private final KfeWalletService walletService;
     private final KfeWalletNetworkService walletNetworkService;
+    private final KfeTransactionCancellationService transactionCancellationService;
 
     public FinancialApi(
             KfeTransactionEngine transactionEngine,
@@ -46,7 +51,8 @@ public class FinancialApi {
             KfePricingService pricingService,
             KfeNetworkFeeEstimateService networkFeeEstimateService,
             KfeWalletService walletService,
-            KfeWalletNetworkService walletNetworkService) {
+            KfeWalletNetworkService walletNetworkService,
+            KfeTransactionCancellationService transactionCancellationService) {
         this.transactionEngine = transactionEngine;
         this.transactionRepository = transactionRepository;
         this.responseMapper = responseMapper;
@@ -54,6 +60,7 @@ public class FinancialApi {
         this.networkFeeEstimateService = networkFeeEstimateService;
         this.walletService = walletService;
         this.walletNetworkService = walletNetworkService;
+        this.transactionCancellationService = transactionCancellationService;
     }
 
     public KfeTransactionResponse submitTransaction(Long userId, KfeSubmitTransactionRequest request) {
@@ -108,6 +115,14 @@ public class FinancialApi {
                 .findParticipantVisibleById(transactionId, userId, KfeRail.INTERNAL, KfeDirection.INTERNAL)
                 .map(transaction -> responseMapper.toTransactionResponse(transaction, userId))
                 .orElseThrow(() -> new IllegalArgumentException("KFE transaction not found."));
+    }
+
+    /**
+     * Cancels a pending invoice/payment-link or abandonable pre-settlement transaction so it
+     * stops hanging as PENDING in history ({@code displayStatus=FAILED}, failureCode USER_CANCELLED).
+     */
+    public KfeTransactionResponse cancelTransaction(Long userId, UUID transactionId) {
+        return transactionCancellationService.cancelTransaction(userId, transactionId);
     }
 
     public List<KfeTransactionResponse> transactions(Long userId, int page, int size) {

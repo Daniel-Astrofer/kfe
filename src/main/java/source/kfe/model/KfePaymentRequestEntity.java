@@ -11,6 +11,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
@@ -39,6 +40,16 @@ public class KfePaymentRequestEntity {
 
     @Column(name = "address", nullable = false, length = 128)
     private String address;
+
+    /** BOLT11 payment request for LIGHTNING rail (may exceed address column length). */
+    @Column(name = "payment_request", columnDefinition = "TEXT")
+    private String paymentRequest;
+
+    @Column(name = "payment_hash", length = 128)
+    private String paymentHash;
+
+    @Column(name = "provider_reference", length = 128)
+    private String providerReference;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "rail", nullable = false, length = 32)
@@ -80,14 +91,14 @@ public class KfePaymentRequestEntity {
 
     @PrePersist
     void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         createdAt = now;
         updatedAt = now;
     }
 
     @PreUpdate
     void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public boolean isExpired(LocalDateTime now) {
@@ -100,12 +111,12 @@ public class KfePaymentRequestEntity {
 
     public void hide() {
         status = KfePaymentRequestStatus.HIDDEN;
-        hiddenAt = LocalDateTime.now();
+        hiddenAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public void cancel() {
         status = KfePaymentRequestStatus.CANCELLED;
-        cancelledAt = LocalDateTime.now();
+        cancelledAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public void markPaid(UUID transactionId) {
@@ -155,6 +166,30 @@ public class KfePaymentRequestEntity {
 
     public void setAddress(String address) {
         this.address = address;
+    }
+
+    public String getPaymentRequest() {
+        return paymentRequest;
+    }
+
+    public void setPaymentRequest(String paymentRequest) {
+        this.paymentRequest = paymentRequest;
+    }
+
+    public String getPaymentHash() {
+        return paymentHash;
+    }
+
+    public void setPaymentHash(String paymentHash) {
+        this.paymentHash = paymentHash;
+    }
+
+    public String getProviderReference() {
+        return providerReference;
+    }
+
+    public void setProviderReference(String providerReference) {
+        this.providerReference = providerReference;
     }
 
     public KfeRail getRail() {

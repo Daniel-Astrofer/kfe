@@ -51,6 +51,7 @@ class KfePaymentRequestOnchainMonitorTest {
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
     private final KfeStatementService statementService = mock(KfeStatementService.class);
+    private final KfeResponseMapper responseMapper = mock(KfeResponseMapper.class);
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final FinancialNotificationPort notificationPort = mock(FinancialNotificationPort.class);
     private final KfeOnchainBalanceSyncService onchainBalanceSyncService = mock(KfeOnchainBalanceSyncService.class);
@@ -59,6 +60,7 @@ class KfePaymentRequestOnchainMonitorTest {
         // record() returns boolean; default mock is false and would skip creditAvailable.
         when(movementRecorder.record(any(), any(), anyString(), anyLong(), isNull(), anyString()))
                 .thenReturn(true);
+        when(responseMapper.buildDisplayPayload(any(), anyLong())).thenReturn(java.util.Map.of("status", "VALIDATING"));
     }
 
     private final KfePaymentRequestOnchainMonitor monitor = new KfePaymentRequestOnchainMonitor(
@@ -73,6 +75,7 @@ class KfePaymentRequestOnchainMonitorTest {
             feeSettlementService,
             auditLogService,
             statementService,
+            responseMapper,
             dashboardPublisher,
             notificationPort,
             transactionTemplate(),
@@ -105,7 +108,7 @@ class KfePaymentRequestOnchainMonitorTest {
         assertThat(request.getStatus()).isEqualTo(KfePaymentRequestStatus.OPEN);
         verify(balanceService, never()).creditAvailable(any(), any(), anyLong());
         verify(transactionRepository).save(any(KfeTransactionEntity.class));
-        verify(statementService).recordUserStatementIfAbsent(
+        verify(statementService).recordUserStatement(
                 eq(request.getUserId()),
                 eq(request.getWalletId()),
                 any(KfeTransactionEntity.class),
@@ -147,7 +150,7 @@ class KfePaymentRequestOnchainMonitorTest {
         monitor.reconcileOpenOnchainPaymentRequests();
 
         verify(transactionRepository).save(any(KfeTransactionEntity.class));
-        verify(statementService).recordUserStatementIfAbsent(
+        verify(statementService).recordUserStatement(
                 eq(validRequest.getUserId()),
                 eq(validRequest.getWalletId()),
                 any(KfeTransactionEntity.class),

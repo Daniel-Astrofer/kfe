@@ -1,6 +1,6 @@
 package source.kfe.dto;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record KfeDashboardWallet(
@@ -18,6 +18,6 @@ public record KfeDashboardWallet(
         long autoHoldSats,
         long observedSats,
         String activeAddress,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        Instant createdAt,
+        Instant updatedAt) {
 }

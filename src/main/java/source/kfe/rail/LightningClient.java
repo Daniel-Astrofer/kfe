@@ -29,4 +29,19 @@ public interface LightningClient {
      * Latency to the Liquidity Service Provider (LSP) node in milliseconds.
      */
     long getLspLatency();
+
+    /**
+     * Total in-flight HTLCs across active channels, or {@code -1} if not probeable.
+     */
+    default int pendingHtlcCount() {
+        return -1;
+    }
+
+    /**
+     * Remote pubkeys of peers that currently have at least one pending HTLC.
+     * Empty when none or not probeable.
+     */
+    default java.util.Set<String> peersWithPendingHtlcs() {
+        return java.util.Set.of();
+    }
 }

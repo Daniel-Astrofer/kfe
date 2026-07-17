@@ -5,16 +5,27 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
-@Table(name = "user_statement_24h", schema = "financial", indexes = {
-        @Index(name = "idx_user_statement_24h_user_created", columnList = "user_id, created_at"),
-        @Index(name = "idx_user_statement_24h_expiry", columnList = "expires_at")
-})
+@Table(
+        name = "user_statement_24h",
+        schema = "financial",
+        indexes = {
+                @Index(name = "idx_user_statement_24h_user_created", columnList = "user_id, created_at"),
+                @Index(name = "idx_user_statement_24h_expiry", columnList = "expires_at")
+        },
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uq_user_statement_24h_user_tx",
+                        columnNames = {"user_id", "transaction_id"})
+        })
 public class KfeUserStatementEntity {
 
     @Id
@@ -36,12 +47,28 @@ public class KfeUserStatementEntity {
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 
+    /**
+     * Fixed order key — set once from the ledger {@code transactions_master.created_at}
+     * (or first insert time). Never updated on status refresh.
+     */
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+
     @PrePersist
     void onCreate() {
-        createdAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        if (createdAt == null) {
+            createdAt = now;
+        }
+        updatedAt = now;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public UUID getId() {
@@ -90,5 +117,17 @@ public class KfeUserStatementEntity {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

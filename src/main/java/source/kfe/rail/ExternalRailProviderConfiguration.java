@@ -19,12 +19,14 @@ public class ExternalRailProviderConfiguration {
     @ConditionalOnMissingBean(name = "kfeExternalLightningInvoiceGateway")
     public LightningInvoiceGateway kfeExternalLightningInvoiceGateway(
             Environment environment,
+            @Qualifier("kfeLndRestLightningClient") ObjectProvider<LndRestLightningClient> lndRestGateway,
             @Qualifier("kfeBtcpayCustodyGateway") ObjectProvider<BtcPayServerCustodyGateway> btcpayGateway,
             @Qualifier("kfeConfigurableCustodyGateway") ObjectProvider<ConfigurableCustodyGateway> configurableGateway) {
         return chooseProvider(
                 environment.getProperty(INVOICE_PROVIDER_PROPERTY, "auto"),
                 "Lightning invoice",
                 List.of(
+                        candidate("lnd", lndRestGateway.getIfAvailable()),
                         candidate("btcpay", btcpayGateway.getIfAvailable()),
                         candidate("configurable", configurableGateway.getIfAvailable())));
     }

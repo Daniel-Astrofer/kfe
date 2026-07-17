@@ -3,7 +3,7 @@ package source.kfe.dto;
 import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record KfeWalletResponse(
@@ -18,6 +18,6 @@ public record KfeWalletResponse(
         boolean xpubConfigured,
         boolean mpcKeyConfigured,
         String activeAddress,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        Instant createdAt,
+        Instant updatedAt) {
 }

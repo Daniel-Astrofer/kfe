@@ -17,6 +17,7 @@ import source.kfe.model.KfeWalletKind;
 import source.kfe.model.KfeWalletStatus;
 import source.kfe.rail.BitcoinCoreRpcClient;
 import source.kfe.rail.BlockchainClient;
+import source.kfe.rail.LightningInvoiceGateway;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
@@ -49,6 +50,7 @@ class KfeWalletNetworkServiceTest {
     private final FinancialTransactionApprovalPort transactionApprovalPort = mock(FinancialTransactionApprovalPort.class);
     private final AddressDerivationService addressDerivationService = mock(AddressDerivationService.class);
     private final BitcoinAddressValidator bitcoinAddressValidator = mock(BitcoinAddressValidator.class);
+    private final LightningInvoiceGateway lightningInvoiceGateway = mock(LightningInvoiceGateway.class);
     private final KfeWalletNetworkService service = new KfeWalletNetworkService(
             userDirectory,
             walletRepository,
@@ -61,6 +63,7 @@ class KfeWalletNetworkServiceTest {
             transactionApprovalPort,
             addressDerivationService,
             bitcoinAddressValidator,
+            lightningInvoiceGateway,
             200);
 
     @Test
@@ -76,6 +79,7 @@ class KfeWalletNetworkServiceTest {
         when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
                 wallet.getId(),
                 KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.of(address));
+        when(lightningInvoiceGateway.isLive()).thenReturn(false);
 
         KfeReceivingCapabilitiesResponse response = service.receivingCapabilities("@alice");
 
@@ -89,6 +93,27 @@ class KfeWalletNetworkServiceTest {
         assertThat(response.onchainWalletId()).isEqualTo(wallet.getId());
         assertThat(response.availableRails()).containsExactly("INTERNAL", "ONCHAIN");
         assertThat(response.missingRequirements()).containsExactly("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+    }
+
+    @Test
+    void receivingCapabilitiesEnablesLightningWhenInvoiceGatewayLive() {
+        FinancialUserDirectoryPort.FinancialUserHandle user =
+                new FinancialUserDirectoryPort.FinancialUserHandle(42L, "alice", true);
+        KfeWalletEntity wallet = wallet(KfeWalletKind.INTERNAL);
+        KfeWalletAddressEntity address = address(wallet.getId());
+
+        when(userDirectory.findByUsername("alice")).thenReturn(Optional.of(user));
+        when(walletRepository.findByUserIdOrderByCreatedAtDesc(42L)).thenReturn(List.of(wallet));
+        when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                wallet.getId(),
+                KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.of(address));
+        when(lightningInvoiceGateway.isLive()).thenReturn(true);
+
+        KfeReceivingCapabilitiesResponse response = service.receivingCapabilities("@alice");
+
+        assertThat(response.canReceiveLightning()).isTrue();
+        assertThat(response.availableRails()).contains("LIGHTNING");
+        assertThat(response.missingRequirements()).doesNotContain("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
     }
 
     @Test

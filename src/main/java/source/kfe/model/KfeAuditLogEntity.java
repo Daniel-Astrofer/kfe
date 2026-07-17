@@ -10,6 +10,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
@@ -56,7 +57,7 @@ public class KfeAuditLogEntity {
 
     @PrePersist
     void onCreate() {
-        createdAt = LocalDateTime.now();
+        createdAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public Long getSequenceNumber() {

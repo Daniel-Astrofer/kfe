@@ -60,6 +60,7 @@ public class KfeCustodialDepositObservationService {
     private final KfePricingService pricingService;
     private final KfeFeeSettlementService feeSettlementService;
     private final KfeStatementService statementService;
+    private final KfeResponseMapper responseMapper;
     private final KfeDashboardPublisher dashboardPublisher;
     private final KfeAuditLogService auditLogService;
     private final ObjectProvider<FinancialNotificationPort> notificationPort;
@@ -79,6 +80,7 @@ public class KfeCustodialDepositObservationService {
             KfePricingService pricingService,
             KfeFeeSettlementService feeSettlementService,
             KfeStatementService statementService,
+            KfeResponseMapper responseMapper,
             KfeDashboardPublisher dashboardPublisher,
             KfeAuditLogService auditLogService,
             ObjectProvider<FinancialNotificationPort> notificationPort,
@@ -98,6 +100,7 @@ public class KfeCustodialDepositObservationService {
         this.pricingService = pricingService;
         this.feeSettlementService = feeSettlementService;
         this.statementService = statementService;
+        this.responseMapper = responseMapper;
         this.dashboardPublisher = dashboardPublisher;
         this.auditLogService = auditLogService;
         this.notificationPort = notificationPort;
@@ -269,6 +272,12 @@ public class KfeCustodialDepositObservationService {
             }
             if (patched) {
                 transactionRepository.save(existing);
+                // Keep history row identity; only status/confs/updatedAt change.
+                statementService.recordUserStatement(
+                        wallet.getUserId(),
+                        wallet.getId(),
+                        existing,
+                        new LinkedHashMap<>(responseMapper.buildDisplayPayload(existing, wallet.getUserId())));
                 return true;
             }
             return false;
@@ -328,23 +337,10 @@ public class KfeCustodialDepositObservationService {
             notifyDetected(wallet, tx, quote.receiverAmountSats(), confs);
         }
 
-        Map<String, Object> statement = new LinkedHashMap<>();
-        statement.put("transactionId", tx.getId().toString());
-        statement.put("status", tx.getStatus().name());
-        statement.put("rail", "ONCHAIN");
-        statement.put("direction", "INBOUND");
-        statement.put("grossAmountSats", quote.grossAmountSats());
-        statement.put("receiverAmountSats", quote.receiverAmountSats());
-        statement.put("confirmations", confs);
-        statement.put("provider", PROVIDER_CUSTODIAL_OBSERVER);
-        statement.put("blockchainTxid", txid);
-        statement.put(
-                "externalReference",
-                deposit.sampleAddress == null ? "" : deposit.sampleAddress);
-        statement.put("walletId", wallet.getId().toString());
-        statement.put("destinationWalletId", wallet.getId().toString());
-        statementService.recordUserStatementIfAbsent(
-                wallet.getUserId(), wallet.getId(), tx, statement);
+        Map<String, Object> statement =
+                new LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, wallet.getUserId()));
+        // Upsert: first sight creates row; conf/status later refresh same transactionId.
+        statementService.recordUserStatement(wallet.getUserId(), wallet.getId(), tx, statement);
 
         Map<String, Object> audit = new LinkedHashMap<>();
         audit.put("txid", txid);

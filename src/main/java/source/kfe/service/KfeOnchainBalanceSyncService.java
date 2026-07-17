@@ -19,6 +19,7 @@ import source.kfe.repository.KfeWalletRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -262,7 +263,7 @@ public class KfeOnchainBalanceSyncService {
                 && previousQuality == ProbeQuality.LIVE_MEMPOOL_AWARE
                 && previousProbeAt != null
                 && optimisticLiveTtlSeconds > 0L) {
-            long ageSec = Duration.between(previousProbeAt, LocalDateTime.now()).getSeconds();
+            long ageSec = Duration.between(previousProbeAt, LocalDateTime.now(java.time.ZoneOffset.UTC)).getSeconds();
             if (ageSec >= 0L && ageSec < optimisticLiveTtlSeconds) {
                 return Decision.defer("optimistic-will-not-clobber-fresh-live");
             }

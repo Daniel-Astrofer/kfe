@@ -29,7 +29,12 @@ public class KfeLightningOutboundExecutor implements KfeRailExecution {
     @Override
     public void execute(UUID outboxId, KfeExecutionTransactionHelper.PreparationResult prep) {
         if (prep.externalReference() == null || prep.externalReference().isBlank()) {
-            throw new IllegalArgumentException("externalReference must contain the Lightning payment request.");
+            throw new IllegalArgumentException(
+                    "externalReference must contain a Lightning destination (invoice / LNURL / address / pubkey).");
+        }
+        if (!lightningPaymentGateway.isLive()) {
+            throw new IllegalStateException(
+                    "Lightning payment gateway is not live (" + lightningPaymentGateway.providerName() + ").");
         }
 
         CustodyGateway.PaymentResult result = lightningPaymentGateway.payLightning(
@@ -44,6 +49,7 @@ public class KfeLightningOutboundExecutor implements KfeRailExecution {
                         prep.idempotencyKey(),
                         prep.quorumProposalHash()));
 
+        // Only terminal SUCCEEDED reaches here (gateway throws on fail / in-flight).
         String paymentReference = firstNonBlank(result.paymentHash(), result.providerReference(), result.txid());
         transactionHelper.settleOutboundLightning(
                 outboxId,

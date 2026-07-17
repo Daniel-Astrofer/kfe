@@ -1,10 +1,18 @@
 package source.kfe.application.transaction;
 
 import org.hibernate.exception.ConstraintViolationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialTickerPort;
+import source.common.financial.FinancialNotificationPort;
+import source.kfe.application.settlement.BinarySettlementGate;
+import source.kfe.application.settlement.SettlementGateCommand;
+import source.kfe.application.settlement.SettlementGateResult;
 import source.kfe.dto.KfeSubmitTransactionRequest;
 import source.kfe.dto.KfeTransactionResponse;
 import source.kfe.model.KfeDirection;
@@ -17,10 +25,12 @@ import source.kfe.model.KfeWalletEntity;
 import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.service.KfeBalanceService;
 import source.kfe.service.KfeDashboardPublisher;
+import source.kfe.service.KfeExecutionOutboxProcessor;
+import source.kfe.service.KfeExecutionOutboxService;
 import source.kfe.service.KfeFeeSettlementService;
 import source.kfe.service.KfeHashService;
+import source.kfe.service.KfeLightningLiquidityService;
 import source.kfe.service.KfePricingService;
-import source.kfe.service.KfeQuorumGateway;
 import source.kfe.service.KfeResponseMapper;
 
 import java.math.BigDecimal;
@@ -31,14 +41,16 @@ import java.util.UUID;
 @Service
 public class KfeSubmitTransactionUseCase {
 
+    private static final Logger log = LoggerFactory.getLogger(KfeSubmitTransactionUseCase.class);
     private static final String ASSET_BTC = "BTC";
     private static final BigDecimal SATS_PER_BTC = new BigDecimal("100000000");
+    private static final String SYNC_WORKER_ID = "kfe-submit-sync-lightning";
 
     private final KfeTransactionRepository transactionRepository;
     private final KfePricingService pricingService;
     private final FinancialTickerPort tickerPort;
     private final KfeBalanceService balanceService;
-    private final KfeQuorumGateway quorumGateway;
+    private final BinarySettlementGate binarySettlementGate;
     private final KfeHashService hashService;
     private final KfeResponseMapper responseMapper;
     private final KfeDashboardPublisher dashboardPublisher;
@@ -52,13 +64,19 @@ public class KfeSubmitTransactionUseCase {
     private final KfeTransactionStatementRecorder statementRecorder;
     private final KfeFeeSettlementService feeSettlementService;
     private final KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase;
+    private final KfeLightningLiquidityService lightningLiquidityService;
+    private final FinancialNotificationPort notificationPort;
+    private final KfeExecutionOutboxService outboxService;
+    private final KfeExecutionOutboxProcessor outboxProcessor;
+    private final boolean lightningSyncOnSubmit;
+    private final TransactionTemplate transactionTemplate;
 
     public KfeSubmitTransactionUseCase(
             KfeTransactionRepository transactionRepository,
             KfePricingService pricingService,
             FinancialTickerPort tickerPort,
             KfeBalanceService balanceService,
-            KfeQuorumGateway quorumGateway,
+            BinarySettlementGate binarySettlementGate,
             KfeHashService hashService,
             KfeResponseMapper responseMapper,
             KfeDashboardPublisher dashboardPublisher,
@@ -71,12 +89,18 @@ public class KfeSubmitTransactionUseCase {
             KfeTransactionOutboxUseCase outboxUseCase,
             KfeTransactionStatementRecorder statementRecorder,
             KfeFeeSettlementService feeSettlementService,
-            KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase) {
+            KfeInternalPaymentRequestSettlementUseCase paymentRequestSettlementUseCase,
+            KfeLightningLiquidityService lightningLiquidityService,
+            FinancialNotificationPort notificationPort,
+            KfeExecutionOutboxService outboxService,
+            KfeExecutionOutboxProcessor outboxProcessor,
+            @Value("${kfe.execution.lightning.sync-on-submit:true}") boolean lightningSyncOnSubmit,
+            PlatformTransactionManager transactionManager) {
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
         this.tickerPort = tickerPort;
         this.balanceService = balanceService;
-        this.quorumGateway = quorumGateway;
+        this.binarySettlementGate = binarySettlementGate;
         this.hashService = hashService;
         this.responseMapper = responseMapper;
         this.dashboardPublisher = dashboardPublisher;
@@ -90,58 +114,125 @@ public class KfeSubmitTransactionUseCase {
         this.statementRecorder = statementRecorder;
         this.feeSettlementService = feeSettlementService;
         this.paymentRequestSettlementUseCase = paymentRequestSettlementUseCase;
+        this.lightningLiquidityService = lightningLiquidityService;
+        this.notificationPort = notificationPort;
+        this.outboxService = outboxService;
+        this.outboxProcessor = outboxProcessor;
+        this.lightningSyncOnSubmit = lightningSyncOnSubmit;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     /**
-     * Submits a KFE-only transaction inside one database transaction.
+     * Submits a KFE-only transaction.
      *
-     * The idempotency reservation must happen before the transaction intent is created: if reservation fails,
+     * <p>Transactional authorization (remote HTTP to auth server for Device Key / passkey step-up)
+     * runs <strong>outside</strong> the DB transaction so Hikari connections are not held during
+     * network I/O — holding them was a root cause of multi-minute hangs and pool exhaustion under load.
+     *
+     * <p>Idempotency reservation and ledger mutation stay in one DB transaction: if reservation fails,
      * no transaction row, balance movement, outbox item, statement, or dashboard side effect should be emitted.
+     *
+     * <p>Lightning outbound: after commit, the outbox item is claimed and processed <strong>in the
+     * request path</strong> (sync-on-submit) so the API returns SETTLED/FAILED instead of leaving
+     * the client spinning on EXECUTING. Async worker remains the safety net if sync is disabled
+     * or claim races. On-chain stays fully async.
      */
-    @Transactional
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request) {
         return submit(userId, request, null);
     }
 
-    @Transactional
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         request = walletResolver.resolveInternalDestinationReference(request);
-        SubmissionAttempt attempt = validateAndReserve(userId, request, deviceHash);
-        if (attempt.existingResponse() != null) {
-            return attempt.existingResponse();
+        validator.validate(request);
+
+        String requestHash = idempotencyUseCase.requestHash(userId, request);
+        KfeIdempotencyEntity existingIdempotency = idempotencyUseCase.find(userId, request.idempotencyKey());
+        if (existingIdempotency != null) {
+            return idempotencyUseCase.existingResponse(existingIdempotency, requestHash);
         }
+
+        walletResolver.requireNotSelfPayment(userId, request);
+        // Remote step-up / TOTP verification — no open EntityManager / pool connection here.
+        authorizationUseCase.authorize(userId, request, deviceHash);
+
+        final KfeSubmitTransactionRequest authorizedRequest = request;
+        SubmissionOutcome outcome = transactionTemplate.execute(
+                status -> submitAuthorized(userId, authorizedRequest, requestHash));
+        if (outcome == null || outcome.response() == null) {
+            throw new IllegalStateException("KFE transaction submission returned no response.");
+        }
+
+        if (outcome.lightningOutboxId() != null && lightningSyncOnSubmit) {
+            return drainLightningOutboxSync(outcome);
+        }
+        return outcome.response();
+    }
+
+    private SubmissionOutcome submitAuthorized(
+            Long userId,
+            KfeSubmitTransactionRequest request,
+            String requestHash) {
+        KfeIdempotencyEntity idempotency;
+        try {
+            idempotency = idempotencyUseCase.reserve(userId, request, requestHash);
+        } catch (DataIntegrityViolationException | ConstraintViolationException ex) {
+            KfeTransactionResponse existing =
+                    idempotencyUseCase.getExistingByIdempotency(userId, request.idempotencyKey(), requestHash);
+            return new SubmissionOutcome(existing, null, null);
+        }
+
         KfePaymentRequestEntity paymentRequest = paymentRequestSettlementUseCase.lockAndValidate(request);
 
         KfeTransactionEntity tx = createIntent(userId, request);
         stateMachine.audit(tx, "KFE_TRANSACTION_INTENT", null, tx.getStatus(), null);
 
-        PreparedTransaction prepared = validateQuoteAndQuorum(userId, tx, request, attempt.requestHash());
+        PreparedTransaction prepared = validateQuoteAndQuorum(userId, tx, request, requestHash);
         WalletLock lock = reserveAndLock(request, prepared);
-        routeLockedTransaction(userId, request, prepared, lock);
+        UUID lightningOutboxId = routeLockedTransaction(userId, request, prepared, lock);
         paymentRequestSettlementUseCase.markPaid(paymentRequest, prepared.tx());
 
-        return completePublishAndRespond(userId, attempt.idempotency(), prepared.tx(), lock.destinationWallet());
+        KfeTransactionResponse response =
+                completePublishAndRespond(userId, idempotency, prepared.tx(), lock.destinationWallet());
+        return new SubmissionOutcome(response, prepared.tx().getId(), lightningOutboxId);
     }
 
-    private SubmissionAttempt validateAndReserve(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
-        validator.validate(request);
-        String requestHash = idempotencyUseCase.requestHash(userId, request);
-        KfeIdempotencyEntity existingIdempotency = idempotencyUseCase.find(userId, request.idempotencyKey());
-        if (existingIdempotency != null) {
-            return SubmissionAttempt.existing(requestHash, idempotencyUseCase.existingResponse(existingIdempotency, requestHash));
-        }
-
-        walletResolver.requireNotSelfPayment(userId, request);
-        authorizationUseCase.authorize(userId, request, deviceHash);
-
-        KfeIdempotencyEntity idempotency;
+    /**
+     * After the ledger TX commits: claim the LIGHTNING_OUTBOUND outbox item and run LND pay now.
+     * Reloads the transaction so the HTTP response reflects SETTLED / FAILED / still EXECUTING.
+     */
+    private KfeTransactionResponse drainLightningOutboxSync(SubmissionOutcome outcome) {
+        UUID outboxId = outcome.lightningOutboxId();
+        UUID transactionId = outcome.transactionId();
         try {
-            idempotency = idempotencyUseCase.reserve(userId, request, requestHash);
-        } catch (DataIntegrityViolationException | ConstraintViolationException ex) {
-            return SubmissionAttempt.existing(requestHash,
-                    idempotencyUseCase.getExistingByIdempotency(userId, request.idempotencyKey(), requestHash));
+            boolean claimed = outboxService.claimImmediate(outboxId, SYNC_WORKER_ID);
+            if (!claimed) {
+                log.info(
+                        "[KFE Submit] Lightning outbox already claimed (async worker) outboxId={} txId={}",
+                        outboxId,
+                        transactionId);
+            } else {
+                log.info(
+                        "[KFE Submit] Lightning sync-on-submit drain starting outboxId={} txId={}",
+                        outboxId,
+                        transactionId);
+                outboxProcessor.process(outboxId);
+            }
+        } catch (RuntimeException exception) {
+            // Processor already marks retryable/final failure in most paths; never fail the HTTP
+            // envelope if the intent was recorded — client can poll history.
+            log.warn(
+                    "[KFE Submit] Lightning sync drain error outboxId={} txId={}: {}",
+                    outboxId,
+                    transactionId,
+                    exception.getMessage());
         }
-        return SubmissionAttempt.reserved(requestHash, idempotency);
+
+        if (transactionId == null) {
+            return outcome.response();
+        }
+        return transactionRepository.findById(transactionId)
+                .map(responseMapper::toTransactionResponse)
+                .orElse(outcome.response());
     }
 
     private PreparedTransaction validateQuoteAndQuorum(
@@ -157,11 +248,31 @@ public class KfeSubmitTransactionUseCase {
 
         String proposalHash = proposalHash(tx, request);
         tx.setQuorumProposalHash(proposalHash);
+
+        boolean requiresReserve = walletResolver.requiresSourceReserve(request);
+        SettlementGateResult gate = binarySettlementGate.evaluateAndRequirePass(
+                new SettlementGateCommand(
+                        userId,
+                        tx.getId(),
+                        sourceWallet != null ? sourceWallet.getId() : request.sourceWalletId(),
+                        request.idempotencyKey(),
+                        true,
+                        request.rail(),
+                        request.direction(),
+                        request.amountSats(),
+                        request.networkFeeSats(),
+                        tx.getTotalDebitSats(),
+                        requiresReserve,
+                        proposalHash));
+
         stateMachine.transition(tx, KfeTransactionStatus.QUORUM_SYNC, "KFE_TRANSACTION_QUORUM_SYNC",
-                Map.of("proposalHash", proposalHash));
-        KfeQuorumGateway.Result quorum = quorumGateway.requireHealthyUnanimousConsensus(proposalHash);
-        tx.setQuorumAckCount(quorum.acceptedNodes());
-        return new PreparedTransaction(tx, sourceWallet, destinationWallet, proposalHash, quorum.acceptedNodes());
+                Map.of(
+                        "proposalHash", proposalHash,
+                        "settlementGatePassed", 1,
+                        "quorumAckCount", gate.quorumAckCount()));
+        tx.setQuorumAckCount(gate.quorumAckCount());
+        return new PreparedTransaction(
+                tx, sourceWallet, destinationWallet, proposalHash, gate.quorumAckCount());
     }
 
     private WalletLock reserveAndLock(KfeSubmitTransactionRequest request, PreparedTransaction prepared) {
@@ -171,12 +282,19 @@ public class KfeSubmitTransactionUseCase {
             balanceService.reserve(sourceWallet.getId(), ASSET_BTC, tx.getTotalDebitSats());
             movementRecorder.record(tx.getId(), sourceWallet.getId(), "RESERVE", tx.getTotalDebitSats(), "AVAILABLE", "LOCKED");
         }
+        // V_LIQUIDEZ: hold platform LN capacity until HTLC resolves (same TX as user reserve).
+        if (request.rail() == KfeRail.LIGHTNING && request.direction() == KfeDirection.OUTBOUND) {
+            lightningLiquidityService.reserveForTransaction(tx.getId(), tx.getTotalDebitSats());
+        }
         stateMachine.transition(tx, KfeTransactionStatus.LOCKED, "KFE_TRANSACTION_LOCKED",
                 Map.of("proposalHash", prepared.proposalHash(), "quorumAckCount", prepared.quorumAckCount()));
         return new WalletLock(sourceWallet, prepared.destinationWallet());
     }
 
-    private void routeLockedTransaction(
+    /**
+     * @return outbox id when Lightning outbound was enqueued (for sync-on-submit); null otherwise
+     */
+    private UUID routeLockedTransaction(
             Long userId,
             KfeSubmitTransactionRequest request,
             PreparedTransaction prepared,
@@ -184,12 +302,24 @@ public class KfeSubmitTransactionUseCase {
         KfeTransactionEntity tx = prepared.tx();
         if (request.rail() == KfeRail.INTERNAL || request.direction() == KfeDirection.INTERNAL) {
             settleInternal(userId, tx, lock.sourceWallet(), lock.destinationWallet());
-        } else {
-            outboxUseCase.enqueueExternal(tx, request);
-            stateMachine.transition(tx, KfeTransactionStatus.EXECUTING, "KFE_TRANSACTION_EXECUTING",
-                    Map.of("proposalHash", prepared.proposalHash(), "rail", tx.getRail().name()));
-            statementRecorder.record(userId, tx, lock.statementWalletId(tx), request);
+            return null;
         }
+        UUID outboxId = outboxUseCase.enqueueExternal(tx, request);
+        stateMachine.transition(tx, KfeTransactionStatus.EXECUTING, "KFE_TRANSACTION_EXECUTING",
+                Map.of("proposalHash", prepared.proposalHash(), "rail", tx.getRail().name()));
+        statementRecorder.record(userId, tx, lock.statementWalletId(tx), request);
+
+        notificationPort.notifyExternalPaymentSent(
+                userId,
+                tx.getId(),
+                lock.statementWalletId(tx),
+                tx.getRail().name(),
+                tx.getGrossAmountSats());
+
+        if (request.rail() == KfeRail.LIGHTNING && request.direction() == KfeDirection.OUTBOUND) {
+            return outboxId;
+        }
+        return null;
     }
 
     private KfeTransactionResponse completePublishAndRespond(
@@ -231,8 +361,13 @@ public class KfeSubmitTransactionUseCase {
         feeSettlementService.creditKeroseneFee(tx);
 
         statementRecorder.record(userId, tx, sourceWallet.getId(), null);
+        notificationPort.notifyInternalTransferSent(
+                userId, tx.getId(), sourceWallet.getId(), tx.getTotalDebitSats());
+
         if (!destinationWallet.getUserId().equals(userId)) {
             statementRecorder.record(destinationWallet.getUserId(), tx, destinationWallet.getId(), null);
+            notificationPort.notifyInternalTransferReceived(
+                    destinationWallet.getUserId(), tx.getId(), destinationWallet.getId(), tx.getReceiverAmountSats());
         }
     }
 
@@ -320,6 +455,15 @@ public class KfeSubmitTransactionUseCase {
         private static SubmissionAttempt existing(String requestHash, KfeTransactionResponse existingResponse) {
             return new SubmissionAttempt(requestHash, null, existingResponse);
         }
+    }
+
+    /**
+     * @param lightningOutboxId non-null when LIGHTNING OUTBOUND was enqueued and should drain sync
+     */
+    private record SubmissionOutcome(
+            KfeTransactionResponse response,
+            UUID transactionId,
+            UUID lightningOutboxId) {
     }
 
     private record PreparedTransaction(
