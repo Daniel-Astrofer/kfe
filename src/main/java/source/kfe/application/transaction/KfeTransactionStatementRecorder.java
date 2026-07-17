@@ -32,6 +32,7 @@ public class KfeTransactionStatementRecorder {
         if (request != null && request.memo() != null && !request.memo().isBlank()) {
             payload.put("memo", request.memo());
         }
+        // Join the submit TX (REQUIRED) so FK to transactions_master succeeds before commit.
         statementService.recordUserStatement(userId, walletId, tx, payload);
     }
 }

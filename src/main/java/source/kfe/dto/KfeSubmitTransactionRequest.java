@@ -38,6 +38,21 @@ public record KfeSubmitTransactionRequest(
                 confirmationPassphrase, appPin, paymentRequestPublicId, feeRateSatPerVbyte, feeTargetBlocks);
     }
 
+    /** Rewrites only the on-chain destination address (platform routing to custodial/cold). */
+    public KfeSubmitTransactionRequest withExternalReference(String resolvedExternalReference) {
+        return new KfeSubmitTransactionRequest(
+                idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats,
+                networkFeeSats, resolvedExternalReference, memo, totpCode, passkeyAssertionJson,
+                confirmationPassphrase, appPin, paymentRequestPublicId, feeRateSatPerVbyte, feeTargetBlocks);
+    }
+
+    public KfeSubmitTransactionRequest withMemo(String resolvedMemo) {
+        return new KfeSubmitTransactionRequest(
+                idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats,
+                networkFeeSats, externalReference, resolvedMemo, totpCode, passkeyAssertionJson,
+                confirmationPassphrase, appPin, paymentRequestPublicId, feeRateSatPerVbyte, feeTargetBlocks);
+    }
+
     public KfeSubmitTransactionRequest(
             String idempotencyKey,
             KfeRail rail,

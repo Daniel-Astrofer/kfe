@@ -29,7 +29,7 @@ class KfeQuorumPsbtSigningServiceTest {
 
     @Test
     void rejectsFundedPsbtBeforeSigningWhenActualFeeExceedsReservedLimit() {
-        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6))
+        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 500L));
 
         assertThatThrownBy(() -> service.preflight(command(499L)))
@@ -39,7 +39,7 @@ class KfeQuorumPsbtSigningServiceTest {
 
     @Test
     void acceptsFundedPsbtWhenActualFeeFitsReservedLimit() {
-        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6))
+        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 500L));
 
         var preflight = service.preflight(command(500L));
@@ -63,7 +63,11 @@ class KfeQuorumPsbtSigningServiceTest {
                 true,
                 "bitcoin-core-wallet");
 
-        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6))
+        when(bitcoinCore.createFundedPsbt(
+                        org.mockito.ArgumentMatchers.eq("bcrt1qdestination"),
+                        org.mockito.ArgumentMatchers.eq(100_000L),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 200L));
         when(bitcoinCore.walletProcessPsbt("funded-psbt")).thenReturn("signed-psbt");
         when(bitcoinCore.combinePsbt(org.mockito.ArgumentMatchers.anyList())).thenReturn("combined-psbt");

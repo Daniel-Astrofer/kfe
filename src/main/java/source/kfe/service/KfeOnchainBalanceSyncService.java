@@ -115,16 +115,48 @@ public class KfeOnchainBalanceSyncService {
 
     /**
      * Probe the chain and write absolute {@code observed_sats}. Safe to call after import or inbound detect.
-     * Uses {@link TransactionTemplate} (not self-invoked {@code @Transactional}) so scheduled
-     * reconcile and FOR UPDATE balance locks always run inside a real transaction.
+     *
+     * <p>Chain RPC runs <strong>outside</strong> a DB transaction; only the balance write uses
+     * {@link TransactionTemplate} (FOR UPDATE). Holding Hikari connections across scantxoutset
+     * starved the API and readiness probes.
      *
      * <p>For {@link KfeWalletKind#WATCH_ONLY}, descriptor-only probes are quality
      * {@link ProbeQuality#CONFIRMED_UTXO_SET} and will not overwrite a non-zero previous
      * observed (cold live path owns Electrum parity).
      */
     public long syncWallet(UUID walletId) {
-        Long result = transactionTemplate.execute(status -> doSyncWallet(walletId));
-        return result == null ? -1L : result;
+        KfeWalletEntity wallet = walletRepository.findById(walletId)
+                .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
+        if (!CHAIN_SYNC_KINDS.contains(wallet.getKind())) {
+            return 0L;
+        }
+        BlockchainClient client = blockchainClient.getIfAvailable();
+        if (client == null) {
+            log.debug("[KFE Onchain Balance] blockchain client unavailable walletId={}", walletId);
+            return -1L;
+        }
+
+        final long chainSats;
+        try {
+            chainSats = probeChainBalanceSats(client, wallet);
+        } catch (RuntimeException exception) {
+            // Never write a partial/failed probe — that is what made cold balances oscillate.
+            log.warn(
+                    "[KFE Onchain Balance] probe failed walletId={} — keeping previous observed: {}",
+                    walletId,
+                    exception.getMessage());
+            return -1L;
+        }
+
+        ProbeQuality quality = ProbeQuality.CONFIRMED_UTXO_SET;
+        boolean authoritative = wallet.getKind() != KfeWalletKind.WATCH_ONLY;
+        ChainProbeResult probe = new ChainProbeResult(
+                chainSats,
+                quality,
+                authoritative,
+                0,
+                "syncWallet-descriptor");
+        return applyObserved(walletId, probe);
     }
 
     /**
@@ -312,70 +344,6 @@ public class KfeOnchainBalanceSyncService {
         } catch (IllegalArgumentException ignored) {
             return null;
         }
-    }
-
-    private long doSyncWallet(UUID walletId) {
-        KfeWalletEntity wallet = walletRepository.findById(walletId)
-                .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
-        if (!CHAIN_SYNC_KINDS.contains(wallet.getKind())) {
-            return 0L;
-        }
-        BlockchainClient client = blockchainClient.getIfAvailable();
-        if (client == null) {
-            log.debug("[KFE Onchain Balance] blockchain client unavailable walletId={}", walletId);
-            return -1L;
-        }
-
-        final long chainSats;
-        try {
-            chainSats = probeChainBalanceSats(client, wallet);
-        } catch (RuntimeException exception) {
-            // Never write a partial/failed probe — that is what made cold balances oscillate.
-            log.warn(
-                    "[KFE Onchain Balance] probe failed walletId={} — keeping previous observed: {}",
-                    walletId,
-                    exception.getMessage());
-            return -1L;
-        }
-
-        ProbeQuality quality = wallet.getKind() == KfeWalletKind.WATCH_ONLY
-                ? ProbeQuality.CONFIRMED_UTXO_SET
-                : ProbeQuality.CONFIRMED_UTXO_SET;
-        boolean authoritative = wallet.getKind() != KfeWalletKind.WATCH_ONLY;
-        ChainProbeResult probe = new ChainProbeResult(
-                chainSats,
-                quality,
-                authoritative,
-                0,
-                "syncWallet-descriptor");
-        // Re-use policy without nested transaction template (already in TX).
-        long previous = readObservedSats(walletId);
-        Decision decision = decideWrite(wallet.getKind(), previous, probe);
-        if (!decision.write()) {
-            log.info(
-                    "[KFE Onchain Balance] syncWallet deferred walletId={} kind={} previous={} next={} reason={}",
-                    walletId,
-                    wallet.getKind(),
-                    previous,
-                    chainSats,
-                    decision.reason());
-            return previous;
-        }
-
-        balanceService.setObserved(walletId, ASSET_BTC, chainSats);
-
-        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
-            balanceService.zeroSpendableBucketsIfNeeded(walletId, ASSET_BTC);
-        }
-
-        dashboardPublisher.publishAfterCommit(wallet.getUserId());
-        log.info(
-                "[KFE Onchain Balance] walletId={} kind={} chainSats={} quality={}",
-                walletId,
-                wallet.getKind(),
-                chainSats,
-                quality);
-        return chainSats;
     }
 
     long probeChainBalanceSats(BlockchainClient client, KfeWalletEntity wallet) {

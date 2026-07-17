@@ -135,8 +135,11 @@ public class KfeColdWalletObservationService {
     }
 
     /**
-     * Observes one cold wallet. Always runs inside a real transaction (template), so scheduled
-     * and ZMQ callers never hit "Query requires transaction be in progress".
+     * Observes one cold wallet. Chain probes run <strong>outside</strong> a DB transaction;
+     * ledger/history writes use a short {@link TransactionTemplate} afterwards.
+     *
+     * <p>Holding a TX across scantxoutset/listunspent exhausted Hikari and (when nested under
+     * broadcast+audit) held {@code GLOBAL_AUDIT_APPENDER} for minutes.
      * Serialized per wallet against concurrent schedule/ZMQ observes.
      */
     public void observeWallet(UUID walletId) {
@@ -145,7 +148,31 @@ public class KfeColdWalletObservationService {
         }
         Object lock = walletLocks.computeIfAbsent(walletId, id -> new Object());
         synchronized (lock) {
-            transactionTemplate.executeWithoutResult(status -> doObserveWallet(walletId));
+            KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+            if (wallet == null || wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
+                return;
+            }
+            BlockchainClient client = blockchainClient.getIfAvailable();
+            if (client == null) {
+                return;
+            }
+
+            // Do NOT rebuild the full address index on every observe (was multi-second).
+            // Scheduled refresh + ZMQ start already keep it warm; rebuild only if empty.
+            KfeMonitoredChainAddressIndex index = addressIndex.getIfAvailable();
+            if (index != null && index.addressCount() == 0) {
+                try {
+                    index.rebuild();
+                } catch (RuntimeException ignored) {
+                    // keep previous index
+                }
+            }
+
+            // Heavy RPC outside any open transaction.
+            CollectResult collected = collectInbounds(client, wallet);
+            transactionTemplate.executeWithoutResult(status -> applyObserveWallet(walletId, collected));
+            // Confirmation probes also stay outside long DB transactions.
+            refreshConfirmations(walletId);
         }
     }
 
@@ -518,28 +545,18 @@ public class KfeColdWalletObservationService {
                 .orElse(false);
     }
 
-    private void doObserveWallet(UUID walletId) {
+    /**
+     * Applies a pre-probed collect under a short DB transaction (no chain RPC here).
+     */
+    private void applyObserveWallet(UUID walletId, CollectResult collected) {
         KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
         if (wallet == null || wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
             return;
         }
-        BlockchainClient client = blockchainClient.getIfAvailable();
-        if (client == null) {
+        if (collected == null) {
             return;
         }
 
-        // Do NOT rebuild the full address index on every observe (was multi-second).
-        // Scheduled refresh + ZMQ start already keep it warm; rebuild only if empty.
-        KfeMonitoredChainAddressIndex index = addressIndex.getIfAvailable();
-        if (index != null && index.addressCount() == 0) {
-            try {
-                index.rebuild();
-            } catch (RuntimeException ignored) {
-                // keep previous index
-            }
-        }
-
-        CollectResult collected = collectInbounds(client, wallet);
         boolean changed = false;
         for (ObservedInbound inbound : collected.observations().values()) {
             if (upsertInboundObservation(wallet, inbound)) {
@@ -550,9 +567,6 @@ public class KfeColdWalletObservationService {
         // another output of the same funding tx was still unspent.
         if (recordExternalSpendsForMissingUtxos(
                 wallet, collected.liveOutpoints(), collected.liveUnspentTxids())) {
-            changed = true;
-        }
-        if (refreshColdOutboundConfirmations(client, wallet.getId())) {
             changed = true;
         }
 
@@ -606,6 +620,54 @@ public class KfeColdWalletObservationService {
 
         if (changed || sync != null) {
             dashboardPublisher.publishAfterCommit(wallet.getUserId());
+        }
+    }
+
+    /**
+     * Confirmation refresh: load open cold txs, probe chain outside the DB TX, then touch rows.
+     */
+    public void refreshConfirmations(UUID walletId) {
+        if (walletId == null) {
+            return;
+        }
+        BlockchainClient client = blockchainClient.getIfAvailable();
+        if (client == null) {
+            return;
+        }
+        List<KfeTransactionEntity> open = transactionRepository.findByWalletIdAndStatusIn(
+                walletId,
+                List.of(
+                        KfeTransactionStatus.EXECUTING,
+                        KfeTransactionStatus.VALIDATING,
+                        KfeTransactionStatus.SETTLED));
+        for (KfeTransactionEntity tx : open) {
+            if (!isColdObservation(tx) || tx.getBlockchainTxid() == null || tx.getBlockchainTxid().isBlank()) {
+                continue;
+            }
+            if (tx.getStatus() == KfeTransactionStatus.SETTLED && tx.getConfirmations() >= 6) {
+                continue;
+            }
+            int confs = -1;
+            try {
+                if (client instanceof source.kfe.rail.BitcoinCoreRpcClient core) {
+                    var found = core.findTransactionConfirmations(tx.getBlockchainTxid().trim());
+                    if (found.isPresent()) {
+                        confs = found.getAsInt();
+                    }
+                } else {
+                    var raw = client.getRawTransaction(tx.getBlockchainTxid().trim(), true);
+                    if (raw != null && raw.path("confirmations").isIntegralNumber()) {
+                        confs = raw.path("confirmations").asInt();
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            if (confs >= 0) {
+                final int next = confs;
+                final UUID txId = tx.getId();
+                transactionTemplate.executeWithoutResult(status -> touchColdConfirmations(txId, next));
+            }
         }
     }
 

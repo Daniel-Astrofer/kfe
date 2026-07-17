@@ -49,6 +49,15 @@ class KfeExecutionTransactionHelperTest {
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityProvider =
             mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositProvider =
+            mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+            platformRouterProvider = mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfePlatformPeerInboundService> peerInboundProvider =
+            mock(ObjectProvider.class);
 
     private final KfeExecutionTransactionHelper helper = helper(8);
 
@@ -254,6 +263,9 @@ class KfeExecutionTransactionHelperTest {
     private KfeExecutionTransactionHelper helper(int maxRetryAttempts) {
         when(onchainBalanceSyncProvider.getIfAvailable()).thenReturn(null);
         when(lightningLiquidityProvider.getIfAvailable()).thenReturn(null);
+        when(custodialDepositProvider.getIfAvailable()).thenReturn(null);
+        when(platformRouterProvider.getIfAvailable()).thenReturn(null);
+        when(peerInboundProvider.getIfAvailable()).thenReturn(null);
         when(responseMapper.buildDisplayPayload(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new java.util.LinkedHashMap<>());
         return new KfeExecutionTransactionHelper(
@@ -272,6 +284,9 @@ class KfeExecutionTransactionHelperTest {
                 feeSettlementService,
                 onchainBalanceSyncProvider,
                 lightningLiquidityProvider,
+                custodialDepositProvider,
+                platformRouterProvider,
+                peerInboundProvider,
                 maxRetryAttempts);
     }
 

@@ -32,6 +32,10 @@ public class KfeExecutionOutboxWorker {
             initialDelayString = "${kfe.execution.outbox.initial-delay-ms:10000}")
     public void drain() {
         List<KfeExecutionOutboxEntity> claimed = outboxService.claimDue(workerId);
+        if (claimed.isEmpty()) {
+            return;
+        }
+        log.info("[KFE Outbox] claimed {} item(s) workerId={}", claimed.size(), workerId);
         for (KfeExecutionOutboxEntity item : claimed) {
             try {
                 processor.process(item.getId());

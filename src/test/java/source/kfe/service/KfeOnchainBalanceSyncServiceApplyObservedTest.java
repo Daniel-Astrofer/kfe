@@ -69,7 +69,7 @@ class KfeOnchainBalanceSyncServiceApplyObservedTest {
                 KfeWalletKind.WATCH_ONLY,
                 631_477L,
                 ProbeQuality.LIVE_MEMPOOL_AWARE,
-                LocalDateTime.now().minusSeconds(10),
+                LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(10),
                 probe,
                 120L);
         assertThat(decision.write()).isFalse();
@@ -83,7 +83,7 @@ class KfeOnchainBalanceSyncServiceApplyObservedTest {
                 KfeWalletKind.WATCH_ONLY,
                 631_477L,
                 ProbeQuality.LIVE_MEMPOOL_AWARE,
-                LocalDateTime.now().minusSeconds(300),
+                LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(300),
                 probe,
                 120L);
         assertThat(decision.write()).isTrue();

@@ -123,8 +123,11 @@ public class KfeCustodialDepositObservationService {
         if (client == null) {
             return;
         }
+        // CUSTODIAL is the primary sink; also scan INTERNAL wallets that still hold
+        // historical receive addresses so deposits are not invisible if routing missed.
         List<KfeWalletEntity> wallets = walletRepository.findByKindInAndStatus(
-                List.of(KfeWalletKind.CUSTODIAL_ONCHAIN), KfeWalletStatus.ACTIVE);
+                List.of(KfeWalletKind.CUSTODIAL_ONCHAIN, KfeWalletKind.INTERNAL),
+                KfeWalletStatus.ACTIVE);
         int limit = Math.min(batchSize, wallets.size());
         for (int i = 0; i < limit; i++) {
             try {
@@ -143,10 +146,12 @@ public class KfeCustodialDepositObservationService {
         // Probe UTXOs outside a long TX, then commit each deposit independently so one
         // failure cannot roll back earlier credits.
         KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
-        if (wallet == null || wallet.getKind() != KfeWalletKind.CUSTODIAL_ONCHAIN) {
+        if (wallet == null || wallet.getStatus() != KfeWalletStatus.ACTIVE) {
             return;
         }
-        if (wallet.getStatus() != KfeWalletStatus.ACTIVE) {
+        // Ledger-credit sinks for on-chain deposits (not cold WATCH_ONLY — that path is cold observation).
+        if (wallet.getKind() != KfeWalletKind.CUSTODIAL_ONCHAIN
+                && wallet.getKind() != KfeWalletKind.INTERNAL) {
             return;
         }
         BlockchainClient client = blockchainClient.getIfAvailable();
@@ -324,7 +329,9 @@ public class KfeCustodialDepositObservationService {
         tx.setDirection(KfeDirection.INBOUND);
         tx.setDestinationWalletId(wallet.getId());
         tx.setExternalReference(deposit.sampleAddress);
-        tx.setMemo("Depósito on-chain (carteira custodial)");
+        tx.setMemo(wallet.getKind() == KfeWalletKind.INTERNAL
+                ? "Depósito on-chain (conta Kerosene)"
+                : "Depósito on-chain (carteira custodial)");
         tx.setGrossAmountSats(quote.grossAmountSats());
         tx.setReceiverAmountSats(quote.receiverAmountSats());
         tx.setNetworkFeeSats(0L);

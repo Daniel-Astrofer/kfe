@@ -42,8 +42,11 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
                 and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
             ) or (
                 o.status = 'PROCESSING'
-                and o.claimedAt is not null
-                and o.claimedAt < :staleClaimBefore
+                and (
+                    o.claimedAt is null
+                    or o.claimedAt < :staleClaimBefore
+                    or o.updatedAt < :staleClaimBefore
+                )
             )
             order by o.createdAt asc
             """)
@@ -65,8 +68,11 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
                     and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
                 ) or (
                     o.status = 'PROCESSING'
-                    and o.claimedAt is not null
-                    and o.claimedAt < :staleClaimBefore
+                    and (
+                        o.claimedAt is null
+                        or o.claimedAt < :staleClaimBefore
+                        or o.updatedAt < :staleClaimBefore
+                    )
                 )
               )
             """)

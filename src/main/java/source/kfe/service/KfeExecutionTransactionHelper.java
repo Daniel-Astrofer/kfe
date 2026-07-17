@@ -7,7 +7,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import source.kfe.model.KfeBalanceMovementEntity;
 import source.kfe.model.KfeExecutionOutboxEntity;
 import source.kfe.model.KfeTransactionEntity;
@@ -24,6 +27,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -47,6 +51,10 @@ public class KfeExecutionTransactionHelper {
     private final KfeFeeSettlementService feeSettlementService;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService;
+    private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService;
+    private final ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+            platformOnchainDestinationRouter;
+    private final ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService;
     private final int maxRetryAttempts;
 
     public KfeExecutionTransactionHelper(
@@ -65,6 +73,10 @@ public class KfeExecutionTransactionHelper {
             KfeFeeSettlementService feeSettlementService,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService,
+            ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
+            ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+                    platformOnchainDestinationRouter,
+            ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService,
             @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
@@ -81,6 +93,9 @@ public class KfeExecutionTransactionHelper {
         this.feeSettlementService = feeSettlementService;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
         this.lightningLiquidityService = lightningLiquidityService;
+        this.custodialDepositObservationService = custodialDepositObservationService;
+        this.platformOnchainDestinationRouter = platformOnchainDestinationRouter;
+        this.platformPeerInboundService = platformPeerInboundService;
         if (maxRetryAttempts <= 0) {
             throw new IllegalArgumentException("maxRetryAttempts must be positive.");
         }
@@ -133,6 +148,21 @@ public class KfeExecutionTransactionHelper {
         }
 
         String op = outbox.getOperation() != null ? outbox.getOperation().trim().toUpperCase() : "";
+        // Idempotency: never re-broadcast an on-chain send that already has a txid recorded.
+        // Retries after statement/UI glitches used to create duplicate mempool spends.
+        if ("ONCHAIN_OUTBOUND".equals(op)
+                && tx.getBlockchainTxid() != null
+                && !tx.getBlockchainTxid().isBlank()) {
+            recordStatement(tx, tx.getSourceWalletId(), null);
+            markOutboxDispatched(
+                    outbox,
+                    firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid(), outbox.getProviderReference()));
+            dashboardPublisher.publishAfterCommit(tx.getUserId());
+            log.info(
+                    "[KFE Outbox] skip re-broadcast txId={} already has blockchainTxid",
+                    tx.getId());
+            return PreparationResult.skip();
+        }
         if (!"ONCHAIN_OUTBOUND".equals(op) && !"LIGHTNING_OUTBOUND".equals(op)) {
             if ("ONCHAIN_INBOUND".equals(op) || "LIGHTNING_INBOUND".equals(op)) {
                 markRequiresReconciliation(
@@ -211,38 +241,146 @@ public class KfeExecutionTransactionHelper {
             throw new IllegalArgumentException("blockchainTxid is required after broadcast.");
         }
 
+        String normalizedTxid = blockchainTxid.trim();
+        // Already recorded (retry after a partial success) — close outbox, do not re-touch fee.
+        if (tx.getBlockchainTxid() != null
+                && !tx.getBlockchainTxid().isBlank()
+                && tx.getBlockchainTxid().equalsIgnoreCase(normalizedTxid)) {
+            recordStatement(tx, sourceWalletId, providerPayload);
+            markOutboxDispatched(outbox, firstNonBlank(providerReference, normalizedTxid));
+            dashboardPublisher.publishAfterCommit(tx.getUserId());
+            return;
+        }
+
         tx.setProvider(trim(provider, 64));
-        tx.setProviderReference(firstNonBlank(providerReference, blockchainTxid));
-        tx.setBlockchainTxid(blockchainTxid.trim());
+        tx.setProviderReference(firstNonBlank(providerReference, normalizedTxid));
+        tx.setBlockchainTxid(normalizedTxid);
         tx.setConfirmations(0);
         if (!reconcileOutboundFee(outbox, tx, sourceWalletId, feeSats)) {
             return;
         }
         // Keep EXECUTING — reserve remains locked until chain confirmation monitor settles.
-        transactionRepository.save(tx);
+        // Persist txid BEFORE statement so a statement glitch cannot leave EXECUTING with no txid.
+        transactionRepository.saveAndFlush(tx);
         recordStatement(tx, sourceWalletId, providerPayload);
         updateIdempotency(tx);
-        markOutboxDispatched(outbox, firstNonBlank(providerReference, blockchainTxid));
+        markOutboxDispatched(outbox, firstNonBlank(providerReference, normalizedTxid));
         audit(tx, "KFE_PSBT_WORKFLOW_BROADCAST", tx.getStatus(), tx.getStatus(),
                 Map.of(
-                        "txidHash", hashService.sha256(blockchainTxid.trim()),
-                        "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, blockchainTxid))));
+                        "txidHash", hashService.sha256(normalizedTxid),
+                        "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, normalizedTxid))));
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        // Peer expose + deposit observe MUST run after commit. Audit takes
+        // pg_advisory_xact_lock(GLOBAL_AUDIT_APPENDER) for the whole outer TX; doing RPC/observe
+        // here held that lock for minutes, exhausted Hikari, and made /health/ready fail so the
+        // API (including payment-requests) stopped answering.
+        UUID outboundId = tx.getId();
+        String destinationAddress = tx.getExternalReference();
+        runAfterCommit(() -> {
+            transactionRepository.findById(outboundId).ifPresent(this::exposePlatformPeerInbound);
+            kickPlatformDepositObservation(destinationAddress);
+        });
     }
 
-    @Transactional
+    /**
+     * Runs {@code action} only after the outer TX has fully completed and resources (EntityManager /
+     * connection) are unbound. Using {@code afterCommit} alone is unsafe: Spring still holds the
+     * session until {@code afterCompletion}, so nested {@code @Transactional} joins a dead context
+     * ("no transaction is in progress") and peer inbound never lands.
+     */
+    private void runAfterCommit(Runnable action) {
+        if (action == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_COMMITTED) {
+                    return;
+                }
+                try {
+                    action.run();
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] after-completion hook failed: {}", exception.getMessage());
+                }
+            }
+        });
+    }
+
+    private void exposePlatformPeerInbound(KfeTransactionEntity outbound) {
+        KfePlatformPeerInboundService peer = platformPeerInboundService.getIfAvailable();
+        if (peer == null) {
+            return;
+        }
+        try {
+            peer.exposeAfterOutboundBroadcast(outbound);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Execution] platform peer inbound expose failed txId={}: {}",
+                    outbound.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    private void kickPlatformDepositObservation(String destinationAddress) {
+        if (destinationAddress == null || destinationAddress.isBlank()) {
+            return;
+        }
+        var router = platformOnchainDestinationRouter.getIfAvailable();
+        var observer = custodialDepositObservationService.getIfAvailable();
+        if (router == null || observer == null) {
+            return;
+        }
+        try {
+            Optional<UUID> sink = router.findPlatformSinkWalletIdForAddress(destinationAddress.trim());
+            if (sink.isEmpty()) {
+                sink = router.resolveRecipientOnchainSinkWalletId(destinationAddress.trim());
+            }
+            sink.ifPresent(walletId -> {
+                try {
+                    observer.observeWallet(walletId);
+                } catch (RuntimeException exception) {
+                    log.debug(
+                            "[KFE Execution] post-broadcast deposit observe failed walletId={}: {}",
+                            walletId,
+                            exception.getMessage());
+                }
+            });
+        } catch (RuntimeException exception) {
+            log.debug(
+                    "[KFE Execution] platform deposit kick failed: {}",
+                    exception.getMessage());
+        }
+    }
+
+    /**
+     * Persist chain confirmation progress for UI rings (0/6…6/6).
+     *
+     * <p>{@link Propagation#REQUIRES_NEW}: committed independently of settle/audit so a hung
+     * settle cannot leave the app frozen at 0 confirmations while Core already has 1+.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void touchOutboundConfirmations(UUID transactionId, int confirmations) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
         if (tx == null || confirmations <= tx.getConfirmations()) {
             return;
         }
         tx.setConfirmations(confirmations);
-        transactionRepository.save(tx);
+        transactionRepository.saveAndFlush(tx);
+        // Refresh 24h statement so the app shows confirmation progress (not infinite PENDING).
+        recordStatement(tx, firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId()), null);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
     }
 
     /**
      * Unlocks/settles reserved debit after the outbound tx is monitored with enough confirmations.
+     *
+     * <p>Callers must already have persisted conf progress via {@link #touchOutboundConfirmations}
+     * so the UI keeps advancing if this method fails mid-way (audit lock, fee race, etc.).
      */
     @Transactional
     public boolean settleOutboundWhenConfirmed(UUID transactionId, int confirmations) {
@@ -251,6 +389,13 @@ public class KfeExecutionTransactionHelper {
             return false;
         }
         if (tx.getStatus() == KfeTransactionStatus.SETTLED) {
+            // Still advance confs on already-settled rows (rings past minConfirmations).
+            if (confirmations > tx.getConfirmations()) {
+                tx.setConfirmations(confirmations);
+                transactionRepository.saveAndFlush(tx);
+                recordStatement(tx, firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId()), null);
+                dashboardPublisher.publishAfterCommit(tx.getUserId());
+            }
             return true;
         }
         if (tx.getStatus() != KfeTransactionStatus.EXECUTING
@@ -269,7 +414,10 @@ public class KfeExecutionTransactionHelper {
                 .findFirst()
                 .orElse(null);
 
+        // Flush confs before heavy settle work so a later failure still leaves progress visible.
         tx.setConfirmations(Math.max(tx.getConfirmations(), confirmations));
+        transactionRepository.saveAndFlush(tx);
+
         String providerReference = firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid());
         String provider = firstNonBlank(tx.getProvider(), "BITCOIN_CORE_QUORUM");
 
@@ -280,7 +428,15 @@ public class KfeExecutionTransactionHelper {
                         "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, "")),
                         "confirmations", String.valueOf(confirmations),
                         "provider", provider));
-        feeSettlementService.creditKeroseneFee(tx);
+        try {
+            feeSettlementService.creditKeroseneFee(tx);
+        } catch (RuntimeException feeFailure) {
+            // Fee credit is idempotent on retry; do not roll back unlock/SETTLED for fee audit glitches.
+            log.warn(
+                    "[KFE Execution] kerosene fee settle deferred txId={}: {}",
+                    tx.getId(),
+                    feeFailure.getMessage());
+        }
         recordStatement(tx, tx.getSourceWalletId(), null);
         updateIdempotency(tx);
         if (outbox != null) {
@@ -288,8 +444,12 @@ public class KfeExecutionTransactionHelper {
             locked.setProviderReference(providerReference);
             markOutboxDispatched(locked, providerReference);
         }
-        resyncCustodialObserved(tx.getSourceWalletId());
+        UUID sourceWalletId = tx.getSourceWalletId();
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        // Never block the confirmation monitor on chain RPC. Scheduled onchain-balance-sync
+        // will refresh observed_sats; kick async after commit so settle returns immediately.
+        runAfterCommit(() -> Thread.startVirtualThread(
+                () -> resyncCustodialObserved(sourceWalletId)));
         return true;
     }
 
@@ -718,11 +878,15 @@ public class KfeExecutionTransactionHelper {
     }
 
     private void recordStatement(KfeTransactionEntity tx, UUID walletId, String providerPayload) {
+        if (tx == null || tx.getUserId() == null) {
+            return;
+        }
         Map<String, Object> payload = new LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, tx.getUserId()));
         if (providerPayload != null && !providerPayload.isBlank()) {
             payload.put("providerPayloadHash", hashService.sha256(providerPayload));
         }
-        statementService.recordUserStatement(tx.getUserId(), walletId, tx, payload);
+        // Best-effort: outbox/monitor must not die if statement cache glitches.
+        statementService.recordUserStatementBestEffort(tx.getUserId(), walletId, tx, payload);
     }
 
     private void updateIdempotency(KfeTransactionEntity tx) {

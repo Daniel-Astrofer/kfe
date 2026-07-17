@@ -58,6 +58,7 @@ public class KfeSubmitTransactionUseCase {
     private final KfeTransactionAuthorizationUseCase authorizationUseCase;
     private final KfeTransactionIdempotencyUseCase idempotencyUseCase;
     private final KfeTransactionWalletResolver walletResolver;
+    private final KfePlatformOnchainDestinationRouter onchainDestinationRouter;
     private final KfeTransactionStateMachine stateMachine;
     private final KfeBalanceMovementRecorder movementRecorder;
     private final KfeTransactionOutboxUseCase outboxUseCase;
@@ -69,6 +70,7 @@ public class KfeSubmitTransactionUseCase {
     private final KfeExecutionOutboxService outboxService;
     private final KfeExecutionOutboxProcessor outboxProcessor;
     private final boolean lightningSyncOnSubmit;
+    private final boolean onchainSyncOnSubmit;
     private final TransactionTemplate transactionTemplate;
 
     public KfeSubmitTransactionUseCase(
@@ -84,6 +86,7 @@ public class KfeSubmitTransactionUseCase {
             KfeTransactionAuthorizationUseCase authorizationUseCase,
             KfeTransactionIdempotencyUseCase idempotencyUseCase,
             KfeTransactionWalletResolver walletResolver,
+            KfePlatformOnchainDestinationRouter onchainDestinationRouter,
             KfeTransactionStateMachine stateMachine,
             KfeBalanceMovementRecorder movementRecorder,
             KfeTransactionOutboxUseCase outboxUseCase,
@@ -95,6 +98,7 @@ public class KfeSubmitTransactionUseCase {
             KfeExecutionOutboxService outboxService,
             KfeExecutionOutboxProcessor outboxProcessor,
             @Value("${kfe.execution.lightning.sync-on-submit:true}") boolean lightningSyncOnSubmit,
+            @Value("${kfe.execution.onchain.sync-on-submit:true}") boolean onchainSyncOnSubmit,
             PlatformTransactionManager transactionManager) {
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
@@ -108,6 +112,7 @@ public class KfeSubmitTransactionUseCase {
         this.authorizationUseCase = authorizationUseCase;
         this.idempotencyUseCase = idempotencyUseCase;
         this.walletResolver = walletResolver;
+        this.onchainDestinationRouter = onchainDestinationRouter;
         this.stateMachine = stateMachine;
         this.movementRecorder = movementRecorder;
         this.outboxUseCase = outboxUseCase;
@@ -119,6 +124,7 @@ public class KfeSubmitTransactionUseCase {
         this.outboxService = outboxService;
         this.outboxProcessor = outboxProcessor;
         this.lightningSyncOnSubmit = lightningSyncOnSubmit;
+        this.onchainSyncOnSubmit = onchainSyncOnSubmit;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -143,6 +149,8 @@ public class KfeSubmitTransactionUseCase {
 
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         request = walletResolver.resolveInternalDestinationReference(request);
+        // On-chain → known Kerosene address: deliver to recipient's custodial/cold sink.
+        request = onchainDestinationRouter.resolve(request);
         validator.validate(request);
 
         String requestHash = idempotencyUseCase.requestHash(userId, request);
@@ -163,7 +171,12 @@ public class KfeSubmitTransactionUseCase {
         }
 
         if (outcome.lightningOutboxId() != null && lightningSyncOnSubmit) {
-            return drainLightningOutboxSync(outcome);
+            return drainOutboxSync(outcome, "Lightning");
+        }
+        // Broadcast on-chain in the request path so platform peer inbound can be exposed
+        // immediately (recipient history + push) instead of waiting for the async worker.
+        if (outcome.onchainOutboxId() != null && onchainSyncOnSubmit) {
+            return drainOutboxSync(outcome, "Onchain");
         }
         return outcome.response();
     }
@@ -178,7 +191,7 @@ public class KfeSubmitTransactionUseCase {
         } catch (DataIntegrityViolationException | ConstraintViolationException ex) {
             KfeTransactionResponse existing =
                     idempotencyUseCase.getExistingByIdempotency(userId, request.idempotencyKey(), requestHash);
-            return new SubmissionOutcome(existing, null, null);
+            return new SubmissionOutcome(existing, null, null, null);
         }
 
         KfePaymentRequestEntity paymentRequest = paymentRequestSettlementUseCase.lockAndValidate(request);
@@ -188,31 +201,39 @@ public class KfeSubmitTransactionUseCase {
 
         PreparedTransaction prepared = validateQuoteAndQuorum(userId, tx, request, requestHash);
         WalletLock lock = reserveAndLock(request, prepared);
-        UUID lightningOutboxId = routeLockedTransaction(userId, request, prepared, lock);
+        UUID outboxId = routeLockedTransaction(userId, request, prepared, lock);
         paymentRequestSettlementUseCase.markPaid(paymentRequest, prepared.tx());
 
         KfeTransactionResponse response =
                 completePublishAndRespond(userId, idempotency, prepared.tx(), lock.destinationWallet());
-        return new SubmissionOutcome(response, prepared.tx().getId(), lightningOutboxId);
+        UUID lightningOutboxId =
+                request.rail() == KfeRail.LIGHTNING ? outboxId : null;
+        UUID onchainOutboxId =
+                request.rail() == KfeRail.ONCHAIN ? outboxId : null;
+        return new SubmissionOutcome(response, prepared.tx().getId(), lightningOutboxId, onchainOutboxId);
     }
 
     /**
-     * After the ledger TX commits: claim the LIGHTNING_OUTBOUND outbox item and run LND pay now.
-     * Reloads the transaction so the HTTP response reflects SETTLED / FAILED / still EXECUTING.
+     * After the ledger TX commits: claim the outbox item and run provider execution now
+     * (Lightning pay or on-chain broadcast). Reloads the transaction for the HTTP response.
      */
-    private KfeTransactionResponse drainLightningOutboxSync(SubmissionOutcome outcome) {
-        UUID outboxId = outcome.lightningOutboxId();
+    private KfeTransactionResponse drainOutboxSync(SubmissionOutcome outcome, String railLabel) {
+        UUID outboxId = outcome.lightningOutboxId() != null
+                ? outcome.lightningOutboxId()
+                : outcome.onchainOutboxId();
         UUID transactionId = outcome.transactionId();
         try {
             boolean claimed = outboxService.claimImmediate(outboxId, SYNC_WORKER_ID);
             if (!claimed) {
                 log.info(
-                        "[KFE Submit] Lightning outbox already claimed (async worker) outboxId={} txId={}",
+                        "[KFE Submit] {} outbox already claimed (async worker) outboxId={} txId={}",
+                        railLabel,
                         outboxId,
                         transactionId);
             } else {
                 log.info(
-                        "[KFE Submit] Lightning sync-on-submit drain starting outboxId={} txId={}",
+                        "[KFE Submit] {} sync-on-submit drain starting outboxId={} txId={}",
+                        railLabel,
                         outboxId,
                         transactionId);
                 outboxProcessor.process(outboxId);
@@ -221,7 +242,8 @@ public class KfeSubmitTransactionUseCase {
             // Processor already marks retryable/final failure in most paths; never fail the HTTP
             // envelope if the intent was recorded — client can poll history.
             log.warn(
-                    "[KFE Submit] Lightning sync drain error outboxId={} txId={}: {}",
+                    "[KFE Submit] {} sync drain error outboxId={} txId={}: {}",
+                    railLabel,
                     outboxId,
                     transactionId,
                     exception.getMessage());
@@ -292,7 +314,8 @@ public class KfeSubmitTransactionUseCase {
     }
 
     /**
-     * @return outbox id when Lightning outbound was enqueued (for sync-on-submit); null otherwise
+     * @return outbox id when Lightning or On-chain outbound was enqueued (for sync-on-submit);
+     *     null for internal settlement
      */
     private UUID routeLockedTransaction(
             Long userId,
@@ -307,6 +330,8 @@ public class KfeSubmitTransactionUseCase {
         UUID outboxId = outboxUseCase.enqueueExternal(tx, request);
         stateMachine.transition(tx, KfeTransactionStatus.EXECUTING, "KFE_TRANSACTION_EXECUTING",
                 Map.of("proposalHash", prepared.proposalHash(), "rail", tx.getRail().name()));
+        // Ensure transactions_master row is visible to statement FK before insert.
+        transactionRepository.saveAndFlush(tx);
         statementRecorder.record(userId, tx, lock.statementWalletId(tx), request);
 
         notificationPort.notifyExternalPaymentSent(
@@ -316,7 +341,8 @@ public class KfeSubmitTransactionUseCase {
                 tx.getRail().name(),
                 tx.getGrossAmountSats());
 
-        if (request.rail() == KfeRail.LIGHTNING && request.direction() == KfeDirection.OUTBOUND) {
+        if (request.direction() == KfeDirection.OUTBOUND
+                && (request.rail() == KfeRail.LIGHTNING || request.rail() == KfeRail.ONCHAIN)) {
             return outboxId;
         }
         return null;
@@ -458,12 +484,14 @@ public class KfeSubmitTransactionUseCase {
     }
 
     /**
-     * @param lightningOutboxId non-null when LIGHTNING OUTBOUND was enqueued and should drain sync
+     * @param lightningOutboxId non-null when LIGHTNING OUTBOUND should drain sync
+     * @param onchainOutboxId non-null when ONCHAIN OUTBOUND should drain sync
      */
     private record SubmissionOutcome(
             KfeTransactionResponse response,
             UUID transactionId,
-            UUID lightningOutboxId) {
+            UUID lightningOutboxId,
+            UUID onchainOutboxId) {
     }
 
     private record PreparedTransaction(

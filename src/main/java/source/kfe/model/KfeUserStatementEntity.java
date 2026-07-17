@@ -4,13 +4,15 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
+import jakarta.persistence.PostLoad;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.UniqueConstraint;
+import org.springframework.data.domain.Persistable;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
@@ -26,11 +28,18 @@ import java.util.UUID;
                         name = "uq_user_statement_24h_user_tx",
                         columnNames = {"user_id", "transaction_id"})
         })
-public class KfeUserStatementEntity {
+public class KfeUserStatementEntity implements Persistable<UUID> {
 
     @Id
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id = UUID.randomUUID();
+
+    /**
+     * Assigned UUIDs make Spring Data treat entities as existing (merge/INSERT by PK).
+     * Track true first insert so JPA save uses persist when appropriate.
+     */
+    @Transient
+    private boolean isNew = true;
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
@@ -57,6 +66,11 @@ public class KfeUserStatementEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @PostLoad
+    void onLoad() {
+        isNew = false;
+    }
+
     @PrePersist
     void onCreate() {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
@@ -64,15 +78,33 @@ public class KfeUserStatementEntity {
             createdAt = now;
         }
         updatedAt = now;
+        isNew = false;
     }
 
     @PreUpdate
     void onUpdate() {
         updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        isNew = false;
     }
 
+    @Override
     public UUID getId() {
         return id;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    /** Mark this instance as a first insert (required when id is pre-assigned). */
+    public void markNew() {
+        this.isNew = true;
+    }
+
+    /** Mark as existing after load from the database. */
+    public void markNotNew() {
+        this.isNew = false;
     }
 
     public Long getUserId() {

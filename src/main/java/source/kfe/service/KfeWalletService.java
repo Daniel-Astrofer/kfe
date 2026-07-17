@@ -534,6 +534,35 @@ public class KfeWalletService {
                 .toList();
     }
 
+    /**
+     * Returns an active receive address for {@code walletId}, issuing one if needed.
+     * Used when routing platform on-chain payments to a user's custodial/cold sink.
+     */
+    @Transactional
+    public String ensureActiveReceiveAddress(Long userId, UUID walletId) {
+        KfeWalletEntity wallet = walletRepository.findByIdAndUserIdForUpdate(walletId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
+        requireActive(wallet);
+        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY && !hasText(wallet.getXpub())
+                && !receiveAddressIssuer.canIssue()) {
+            throw new IllegalStateException(
+                    "WATCH_ONLY wallet has no XPUB and cannot issue a receive address.");
+        }
+        List<KfeWalletAddressEntity> active = addressRepository.findByWalletIdAndStatusOrderByCreatedAtDesc(
+                wallet.getId(), KfeWalletAddressStatus.ACTIVE);
+        for (KfeWalletAddressEntity row : active) {
+            if (row.getAddress() != null
+                    && !row.getAddress().isBlank()
+                    && (row.getAddressRole() == null
+                            || row.getAddressRole() == KfeWalletAddressRole.RECEIVE
+                            || row.getAddressRole() == KfeWalletAddressRole.MONITOR)) {
+                return row.getAddress().trim();
+            }
+        }
+        KfeWalletAddressEntity issued = issueFreshAddress(wallet, false);
+        return issued.getAddress().trim();
+    }
+
     public KfeAddressResponse rotateAddress(Long userId, UUID walletId) {
         PendingAddressRotation pending = Objects.requireNonNull(transactionTemplate.execute(status ->
                 beginAddressRotation(userId, walletId)));

@@ -1,6 +1,8 @@
 package source.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,13 +17,15 @@ import source.kfe.model.KfeUserStatementEntity;
 import source.kfe.repository.KfeUserStatementRepository;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -33,73 +37,105 @@ class KfeStatementServiceTest {
     @Mock
     private KfeUserStatementRepository statementRepository;
 
+    @Mock
+    private EntityManager entityManager;
+
+    @Mock
+    private Query nativeQuery;
+
     private KfeStatementService service;
 
     @BeforeEach
     void setUp() {
-        service = new KfeStatementService(statementRepository, new ObjectMapper());
+        service = new KfeStatementService(statementRepository, new ObjectMapper(), entityManager, null);
+        lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
+        lenient().when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
+        lenient().when(nativeQuery.executeUpdate()).thenReturn(1);
     }
 
     @Test
-    void firstWriteUsesLedgerCreatedAtAsOrderKey() {
+    void firstWriteUsesNativeUpsert() {
         UUID walletId = UUID.randomUUID();
         KfeTransactionEntity tx = transaction(KfeTransactionStatus.EXECUTING);
         LocalDateTime ledgerCreated = LocalDateTime.of(2026, 1, 15, 12, 0, 0);
-        // Simulate entity already persisted with fixed createdAt.
         setCreated(tx, ledgerCreated);
-
-        when(statementRepository.findByUserIdAndTransactionId(7L, tx.getId()))
-                .thenReturn(Optional.empty());
-        when(statementRepository.save(any(KfeUserStatementEntity.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         service.recordUserStatement(7L, walletId, tx, Map.of(
                 "status", "EXECUTING",
                 "displayStatus", "PENDING"));
 
-        ArgumentCaptor<KfeUserStatementEntity> captor =
-                ArgumentCaptor.forClass(KfeUserStatementEntity.class);
-        verify(statementRepository).save(captor.capture());
-        KfeUserStatementEntity saved = captor.getValue();
-        assertThat(saved.getCreatedAt()).isEqualTo(ledgerCreated);
-        assertThat(saved.getTransactionId()).isEqualTo(tx.getId());
-        assertThat(saved.getUserId()).isEqualTo(7L);
-        assertThat(saved.getDisplayPayloadJson()).contains("EXECUTING");
+        verify(entityManager).createNativeQuery(anyString());
+        verify(nativeQuery).executeUpdate();
+        verify(statementRepository, never()).save(any());
     }
 
     @Test
-    void secondWriteUpdatesPayloadWithoutChangingCreatedAt() {
+    void secondWriteAlsoUsesNativeUpsertNotSecondInsert() {
+        UUID walletId = UUID.randomUUID();
+        KfeTransactionEntity tx = transaction(KfeTransactionStatus.SETTLED);
+        setCreated(tx, LocalDateTime.of(2026, 1, 15, 12, 0, 0));
+
+        service.recordUserStatement(7L, walletId, tx, Map.of("status", "SETTLED"));
+        service.recordUserStatement(7L, walletId, tx, Map.of("status", "SETTLED", "confirmations", 3));
+
+        verify(nativeQuery, times(2)).executeUpdate();
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void uniqueRaceFallsBackToJpaUpdate() {
+        when(entityManager.createNativeQuery(anyString()))
+                .thenThrow(new RuntimeException("duplicate key value violates unique constraint \"uq_user_statement_24h_user_tx\""));
+
         UUID walletId = UUID.randomUUID();
         KfeTransactionEntity tx = transaction(KfeTransactionStatus.SETTLED);
         LocalDateTime ledgerCreated = LocalDateTime.of(2026, 1, 15, 12, 0, 0);
         setCreated(tx, ledgerCreated);
 
         KfeUserStatementEntity existing = new KfeUserStatementEntity();
+        existing.markNotNew();
         existing.setUserId(7L);
         existing.setTransactionId(tx.getId());
         existing.setWalletId(walletId);
         existing.setCreatedAt(ledgerCreated);
         existing.setUpdatedAt(ledgerCreated);
         existing.setExpiresAt(ledgerCreated.plusHours(24));
-        existing.setDisplayPayloadJson("{\"status\":\"EXECUTING\",\"displayStatus\":\"PENDING\"}");
+        existing.setDisplayPayloadJson("{\"status\":\"EXECUTING\"}");
 
         when(statementRepository.findByUserIdAndTransactionId(7L, tx.getId()))
                 .thenReturn(Optional.of(existing));
         when(statementRepository.save(any(KfeUserStatementEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.recordUserStatement(7L, walletId, tx, Map.of(
-                "status", "SETTLED",
-                "displayStatus", "CONFIRMED"));
+        service.recordUserStatement(7L, walletId, tx, Map.of("status", "SETTLED"));
 
         ArgumentCaptor<KfeUserStatementEntity> captor =
                 ArgumentCaptor.forClass(KfeUserStatementEntity.class);
         verify(statementRepository).save(captor.capture());
-        KfeUserStatementEntity saved = captor.getValue();
-        assertThat(saved.getCreatedAt()).isEqualTo(ledgerCreated);
-        assertThat(saved.getDisplayPayloadJson()).contains("SETTLED");
-        assertThat(saved.getDisplayPayloadJson()).contains("CONFIRMED");
-        assertThat(saved.getUpdatedAt()).isAfter(ledgerCreated.minusSeconds(1));
+        assertThat(captor.getValue().getDisplayPayloadJson()).contains("SETTLED");
+    }
+
+    @Test
+    void nonUniqueFailureIsRethrownSoSubmitDoesNotSilentlyRollbackLater() {
+        when(entityManager.createNativeQuery(anyString()))
+                .thenThrow(new RuntimeException(
+                        "insert or update on table \"user_statement_24h\" violates foreign key constraint"));
+
+        KfeTransactionEntity tx = transaction(KfeTransactionStatus.EXECUTING);
+        assertThatThrownBy(() ->
+                        service.recordUserStatement(7L, UUID.randomUUID(), tx, Map.of("status", "EXECUTING")))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("foreign key");
+    }
+
+    @Test
+    void bestEffortSwallowsFailure() {
+        when(entityManager.createNativeQuery(anyString()))
+                .thenThrow(new RuntimeException("foreign key"));
+
+        KfeTransactionEntity tx = transaction(KfeTransactionStatus.EXECUTING);
+        service.recordUserStatementBestEffort(7L, UUID.randomUUID(), tx, Map.of("status", "EXECUTING"));
+        // no throw
     }
 
     @Test
@@ -110,7 +146,7 @@ class KfeStatementServiceTest {
         service.recordUserStatementIfAbsent(7L, UUID.randomUUID(), tx, Map.of("status", "SETTLED"));
 
         verify(statementRepository, never()).save(any());
-        verify(statementRepository, times(1)).existsByUserIdAndTransactionId(7L, tx.getId());
+        verify(entityManager, never()).createNativeQuery(anyString());
     }
 
     private static KfeTransactionEntity transaction(KfeTransactionStatus status) {

@@ -55,6 +55,8 @@ class KfeSubmitTransactionUseCaseTest {
     private final KfeTransactionAuthorizationUseCase authorizationUseCase = mock(KfeTransactionAuthorizationUseCase.class);
     private final KfeTransactionIdempotencyUseCase idempotencyUseCase = mock(KfeTransactionIdempotencyUseCase.class);
     private final KfeTransactionWalletResolver walletResolver = mock(KfeTransactionWalletResolver.class);
+    private final KfePlatformOnchainDestinationRouter onchainDestinationRouter =
+            mock(KfePlatformOnchainDestinationRouter.class);
     private final KfeTransactionStateMachine stateMachine = mock(KfeTransactionStateMachine.class);
     private final KfeBalanceMovementRecorder movementRecorder = mock(KfeBalanceMovementRecorder.class);
     private final KfeTransactionOutboxUseCase outboxUseCase = mock(KfeTransactionOutboxUseCase.class);
@@ -97,6 +99,7 @@ class KfeSubmitTransactionUseCaseTest {
             authorizationUseCase,
             idempotencyUseCase,
             walletResolver,
+            onchainDestinationRouter,
             stateMachine,
             movementRecorder,
             outboxUseCase,
@@ -107,6 +110,7 @@ class KfeSubmitTransactionUseCaseTest {
             notificationPort,
             outboxService,
             outboxProcessor,
+            true,
             true,
             transactionManager
     );
@@ -122,6 +126,7 @@ class KfeSubmitTransactionUseCaseTest {
         KfeSubmitTransactionRequest request = outboundRequest();
         String requestHash = "request-hash";
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
         KfeTransactionResponse existingResponse = transactionResponse();
 
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn(requestHash);
@@ -146,6 +151,7 @@ class KfeSubmitTransactionUseCaseTest {
         String requestHash = "request-hash";
         KfeTransactionResponse existingResponse = transactionResponse();
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn(requestHash);
         when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
         when(idempotencyUseCase.reserve(userId, request, requestHash))
@@ -167,6 +173,7 @@ class KfeSubmitTransactionUseCaseTest {
         KfeSubmitTransactionRequest request = outboundRequest();
         String requestHash = "request-hash";
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
 
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn(requestHash);
         when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
@@ -188,6 +195,7 @@ class KfeSubmitTransactionUseCaseTest {
         KfeTransactionResponse response = transactionResponse();
 
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn("request-hash");
         when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
         when(idempotencyUseCase.reserve(userId, request, "request-hash")).thenReturn(idempotency);
@@ -240,6 +248,7 @@ class KfeSubmitTransactionUseCaseTest {
         KfeTransactionResponse settledResponse = transactionResponse();
 
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn("ln-hash");
         when(idempotencyUseCase.find(userId, request.idempotencyKey())).thenReturn(null);
         when(idempotencyUseCase.reserve(userId, request, "ln-hash")).thenReturn(idempotency);
@@ -299,6 +308,7 @@ class KfeSubmitTransactionUseCaseTest {
         KfeTransactionResponse response = transactionResponse();
 
         when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
         when(idempotencyUseCase.requestHash(userId, request)).thenReturn("internal-request-hash");
         when(idempotencyUseCase.reserve(userId, request, "internal-request-hash")).thenReturn(idempotency);
         when(paymentRequestSettlementUseCase.lockAndValidate(request)).thenReturn(paymentRequest);

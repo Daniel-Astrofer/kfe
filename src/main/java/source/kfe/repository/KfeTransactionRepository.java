@@ -78,12 +78,14 @@ public interface KfeTransactionRepository extends JpaRepository<KfeTransactionEn
               and t.status in :statuses
               and t.blockchainTxid is not null
               and t.blockchainTxid <> ''
+              and t.confirmations < :maxConfirmations
             order by t.updatedAt asc
             """)
     List<KfeTransactionEntity> findOutboundAwaitingConfirmation(
             @Param("rail") KfeRail rail,
             @Param("direction") KfeDirection direction,
             @Param("statuses") Collection<KfeTransactionStatus> statuses,
+            @Param("maxConfirmations") int maxConfirmations,
             Pageable pageable);
 
     List<KfeTransactionEntity> findTop25ByUserIdOrderByCreatedAtDesc(Long userId);

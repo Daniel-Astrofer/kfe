@@ -255,8 +255,9 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         options.put("change_type", "bech32");
         boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
         if (explicitFeeRate) {
-            // BTC/kvB — same units as watch-only path / Core walletcreatefundedpsbt.
-            options.put("fee_rate", satsPerVbyteToBtcPerKvbyte(feeRateSatsPerVbyte));
+            // Bitcoin Core: fee_rate = sat/vB ; feeRate (legacy) = BTC/kvB.
+            // Passing BTC/kvB into fee_rate yields RPC -3 "Invalid amount".
+            options.put("fee_rate", Math.max(1L, feeRateSatsPerVbyte));
         } else if (confirmationTarget != null && confirmationTarget > 0) {
             options.put("conf_target", confirmationTarget);
         }
@@ -596,7 +597,8 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         }
         boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
         if (explicitFeeRate) {
-            options.put("fee_rate", satsPerVbyteToBtcPerKvbyte(feeRateSatsPerVbyte));
+            // fee_rate is sat/vB in modern Bitcoin Core (not BTC/kvB).
+            options.put("fee_rate", Math.max(1L, feeRateSatsPerVbyte));
         }
         if (!explicitFeeRate && confirmationTarget != null && confirmationTarget > 0) {
             options.put("conf_target", confirmationTarget);

@@ -18,17 +18,23 @@ import source.kfe.repository.KfeTransactionRepository;
 import java.util.List;
 
 /**
- * Production confirmation monitor for on-chain outbounds.
+ * Production confirmation monitor for on-chain outbounds and inbounds.
  *
  * <p>After broadcast ({@link KfeExecutionTransactionHelper#recordOutboundBroadcast}), funds remain
  * LOCKED on the source wallet until this monitor observes {@code minConfirmations} on the
  * blockchain txid, then settles the reserved debit.
+ *
+ * <p><strong>UI contract:</strong> confirmation rings (0/6…6/6) must advance on every block even
+ * when settle fails or hangs. Conf updates run in a short {@code REQUIRES_NEW} TX before settle.
  */
 @Component
 @ConditionalOnProperty(name = "kfe.network-monitor.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeOutboundConfirmationMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfeOutboundConfirmationMonitor.class);
+
+    /** App confirmation rings target; keep refreshing SETTLED rows until this. */
+    private static final int UI_CONFIRMATION_TARGET = 6;
 
     private final KfeTransactionRepository transactionRepository;
     private final KfeExecutionTransactionHelper transactionHelper;
@@ -63,17 +69,35 @@ public class KfeOutboundConfirmationMonitor {
             return;
         }
 
-        // Include VALIDATING: cold Electrum spends and many on-chain rows never enter EXECUTING.
-        List<KfeTransactionEntity> candidates = transactionRepository.findOutboundAwaitingConfirmation(
+        // Prefer unlocks (non-SETTLED) first, then SETTLED ring climbs — two queries so a flood of
+        // SETTLED conf bumps cannot delay settle of EXECUTING rows.
+        List<KfeTransactionEntity> openOutbounds = transactionRepository.findOutboundAwaitingConfirmation(
                 KfeRail.ONCHAIN,
                 KfeDirection.OUTBOUND,
                 List.of(
                         KfeTransactionStatus.EXECUTING,
                         KfeTransactionStatus.VALIDATING,
                         KfeTransactionStatus.REQUIRES_RECONCILIATION),
+                UI_CONFIRMATION_TARGET,
+                PageRequest.of(0, batchSize));
+        List<KfeTransactionEntity> settledOutbounds = transactionRepository.findOutboundAwaitingConfirmation(
+                KfeRail.ONCHAIN,
+                KfeDirection.OUTBOUND,
+                List.of(KfeTransactionStatus.SETTLED),
+                UI_CONFIRMATION_TARGET,
                 PageRequest.of(0, batchSize));
 
-        for (KfeTransactionEntity tx : candidates) {
+        for (KfeTransactionEntity tx : openOutbounds) {
+            try {
+                inspect(core, tx);
+            } catch (RuntimeException exception) {
+                log.warn(
+                        "[KFE Outbound Monitor] confirmation check failed txId={}: {}",
+                        tx.getId(),
+                        exception.getMessage());
+            }
+        }
+        for (KfeTransactionEntity tx : settledOutbounds) {
             try {
                 inspect(core, tx);
             } catch (RuntimeException exception) {
@@ -84,7 +108,7 @@ public class KfeOutboundConfirmationMonitor {
             }
         }
 
-        // Also advance confirmation rings for inbounds (VALIDATING + recently SETTLED < 6 confs).
+        // Inbounds: VALIDATING + SETTLED until rings hit 6.
         List<KfeTransactionEntity> openInbounds =
                 transactionRepository.findOutboundAwaitingConfirmation(
                         KfeRail.ONCHAIN,
@@ -93,11 +117,9 @@ public class KfeOutboundConfirmationMonitor {
                                 KfeTransactionStatus.VALIDATING,
                                 KfeTransactionStatus.EXECUTING,
                                 KfeTransactionStatus.SETTLED),
+                        UI_CONFIRMATION_TARGET,
                         PageRequest.of(0, batchSize));
         for (KfeTransactionEntity tx : openInbounds) {
-            if (tx.getStatus() == KfeTransactionStatus.SETTLED && tx.getConfirmations() >= 6) {
-                continue;
-            }
             try {
                 inspectInbound(core, tx);
             } catch (RuntimeException exception) {
@@ -126,14 +148,7 @@ public class KfeOutboundConfirmationMonitor {
             }
             return;
         }
-        if (confirmations > tx.getConfirmations()) {
-            transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
-            log.info(
-                    "[KFE Outbound Monitor] inbound confs txId={} confs={} status={}",
-                    tx.getId(),
-                    confirmations,
-                    tx.getStatus());
-        }
+        persistConfProgress(tx, confirmations, "inbound");
     }
 
     private void inspect(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
@@ -151,24 +166,51 @@ public class KfeOutboundConfirmationMonitor {
             KfeColdWalletObservationService coldObs = coldObservationService.getIfAvailable();
             if (coldObs != null) {
                 coldObs.touchColdConfirmations(tx.getId(), confirmations);
-            } else if (confirmations > tx.getConfirmations()) {
-                transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
+            } else {
+                persistConfProgress(tx, confirmations, "cold-outbound");
             }
+            return;
+        }
+
+        // Always commit conf rings first (REQUIRES_NEW). Settle can hang on audit locks without
+        // freezing the UI at 0/6.
+        persistConfProgress(tx, confirmations, "outbound");
+
+        if (tx.getStatus() == KfeTransactionStatus.SETTLED) {
             return;
         }
         if (confirmations < minConfirmations) {
-            // Persist partial progress for UI without unlocking yet.
-            if (confirmations > tx.getConfirmations()) {
-                transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
-            }
             return;
         }
-        boolean settled = transactionHelper.settleOutboundWhenConfirmed(tx.getId(), confirmations);
-        if (settled) {
-            log.info(
-                    "[KFE Outbound Monitor] settled outbound txId={} confs={}",
+        try {
+            boolean settled = transactionHelper.settleOutboundWhenConfirmed(tx.getId(), confirmations);
+            if (settled) {
+                log.info(
+                        "[KFE Outbound Monitor] settled outbound txId={} confs={}",
+                        tx.getId(),
+                        confirmations);
+            }
+        } catch (RuntimeException exception) {
+            // Confs already committed; unlock can retry next cycle.
+            log.warn(
+                    "[KFE Outbound Monitor] settle deferred txId={} confs={}: {}",
                     tx.getId(),
-                    confirmations);
+                    confirmations,
+                    exception.getMessage());
         }
+    }
+
+    private void persistConfProgress(KfeTransactionEntity tx, int confirmations, String kind) {
+        if (tx == null || confirmations <= tx.getConfirmations()) {
+            return;
+        }
+        transactionHelper.touchOutboundConfirmations(tx.getId(), confirmations);
+        log.info(
+                "[KFE Outbound Monitor] {} confs txId={} confs={} was={} status={}",
+                kind,
+                tx.getId(),
+                confirmations,
+                tx.getConfirmations(),
+                tx.getStatus());
     }
 }
