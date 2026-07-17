@@ -135,7 +135,9 @@ public class KfeExecutionOutboxProcessor {
                             prep.networkFeeSats(),
                             prep.memo() != null ? prep.memo() : "KFE on-chain outbound",
                             prep.idempotencyKey(),
-                            prep.quorumProposalHash()));
+                            prep.quorumProposalHash(),
+                            prep.feeRateSatsPerVbyte(),
+                            prep.feeTargetBlocks()));
             String providerReference = firstNonBlank(result.txid(), result.providerReference());
             transactionHelper.settleOutbound(
                     outboxId,

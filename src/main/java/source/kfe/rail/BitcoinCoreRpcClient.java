@@ -235,13 +235,29 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
     }
 
     public FundedPsbt createFundedPsbt(String destinationAddress, long amountSats, Integer confirmationTarget) {
+        return createFundedPsbt(destinationAddress, amountSats, confirmationTarget, null);
+    }
+
+    /**
+     * Funds a custodial PSBT. Prefer explicit {@code feeRateSatsPerVbyte} (user-selected tier);
+     * otherwise fall back to Bitcoin Core {@code conf_target}.
+     */
+    public FundedPsbt createFundedPsbt(
+            String destinationAddress,
+            long amountSats,
+            Integer confirmationTarget,
+            Long feeRateSatsPerVbyte) {
         Map<String, Object> output = new LinkedHashMap<>();
         output.put(destinationAddress, satsToBtc(amountSats));
 
         Map<String, Object> options = new LinkedHashMap<>();
         options.put("includeWatching", true);
         options.put("change_type", "bech32");
-        if (confirmationTarget != null && confirmationTarget > 0) {
+        boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
+        if (explicitFeeRate) {
+            // BTC/kvB — same units as watch-only path / Core walletcreatefundedpsbt.
+            options.put("fee_rate", satsPerVbyteToBtcPerKvbyte(feeRateSatsPerVbyte));
+        } else if (confirmationTarget != null && confirmationTarget > 0) {
             options.put("conf_target", confirmationTarget);
         }
 

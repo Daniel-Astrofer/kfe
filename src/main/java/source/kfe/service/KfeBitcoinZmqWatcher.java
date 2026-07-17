@@ -37,6 +37,7 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
     private final KfeMonitoredChainAddressIndex addressIndex;
     private final KfeColdWalletReactiveRefreshService refreshService;
     private final ObjectProvider<KfeColdWalletObservationService> coldObservationService;
+    private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService;
     private final String hashblockEndpoint;
     private final String rawtxEndpoint;
     private final boolean subscribeRawTx;
@@ -49,6 +50,7 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
             KfeMonitoredChainAddressIndex addressIndex,
             KfeColdWalletReactiveRefreshService refreshService,
             ObjectProvider<KfeColdWalletObservationService> coldObservationService,
+            ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
             @Value("${kfe.bitcoin.zmq.hashblock:}") String hashblockEndpoint,
             @Value("${kfe.bitcoin.zmq.rawtx:}") String rawtxEndpoint,
             @Value("${kfe.bitcoin.zmq.subscribe-rawtx:true}") boolean subscribeRawTx,
@@ -56,6 +58,7 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
         this.addressIndex = addressIndex;
         this.refreshService = refreshService;
         this.coldObservationService = coldObservationService;
+        this.custodialDepositObservationService = custodialDepositObservationService;
         this.hashblockEndpoint = blankToNull(hashblockEndpoint);
         this.rawtxEndpoint = blankToNull(rawtxEndpoint);
         this.subscribeRawTx = subscribeRawTx;
@@ -243,21 +246,38 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
             return;
         }
         log.info(
-                "[KFE ZMQ] rawtx matched cold wallets={} outputs={} fundingInputs={} txid={}",
+                "[KFE ZMQ] rawtx matched wallets={} outputs={} fundingInputs={} txid={}",
                 hits.size(),
                 outputs.size(),
                 fundingTxids.size(),
                 parsed.txid());
         // Instant expose at 0 confs — do not wait for scantxoutset / debounce.
+        // Cold: ingest raw outputs into history as VALIDATING.
         KfeColdWalletObservationService coldObs = coldObservationService.getIfAvailable();
         if (coldObs != null) {
             try {
                 coldObs.ingestZmqRawTx(parsed, hits);
             } catch (RuntimeException exception) {
                 log.warn(
-                        "[KFE ZMQ] instant ingest failed txid={}: {}",
+                        "[KFE ZMQ] instant cold ingest failed txid={}: {}",
                         parsed.txid(),
                         exception.getMessage());
+            }
+        }
+        // Custodial: create VALIDATING inbound + notify recipient immediately (credit later).
+        KfeCustodialDepositObservationService custodialObs =
+                custodialDepositObservationService.getIfAvailable();
+        if (custodialObs != null) {
+            for (UUID walletId : hits) {
+                try {
+                    custodialObs.observeWallet(walletId);
+                } catch (RuntimeException exception) {
+                    log.warn(
+                            "[KFE ZMQ] instant custodial observe failed walletId={} txid={}: {}",
+                            walletId,
+                            parsed.txid(),
+                            exception.getMessage());
+                }
             }
         }
         // Debounced full observe still runs for balance truth + confirmation refresh.

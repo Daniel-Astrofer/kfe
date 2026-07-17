@@ -29,6 +29,7 @@ public class KfeNetworkFeeEstimateService {
     private final long fallbackSlowRate;
     private final long expectedBlockSeconds;
     private final long quoteTtlSeconds;
+    private final String bitcoinNetwork;
 
     public KfeNetworkFeeEstimateService(
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider,
@@ -40,7 +41,8 @@ public class KfeNetworkFeeEstimateService {
             @Value("${kfe.fee-estimate.fallback-standard-sat-vbyte:12}") long fallbackStandardRate,
             @Value("${kfe.fee-estimate.fallback-slow-sat-vbyte:6}") long fallbackSlowRate,
             @Value("${kfe.fee-estimate.expected-block-seconds:600}") long expectedBlockSeconds,
-            @Value("${kfe.fee-estimate.quote-ttl-seconds:120}") long quoteTtlSeconds) {
+            @Value("${kfe.fee-estimate.quote-ttl-seconds:120}") long quoteTtlSeconds,
+            @Value("${bitcoin.network:mainnet}") String bitcoinNetwork) {
         this.bitcoinCoreProvider = bitcoinCoreProvider;
         this.estimatedVbytes = positive(estimatedVbytes, "estimatedVbytes");
         this.fastTargetBlocks = positive(fastTargetBlocks, "fastTargetBlocks");
@@ -51,6 +53,7 @@ public class KfeNetworkFeeEstimateService {
         this.fallbackSlowRate = positive(fallbackSlowRate, "fallbackSlowRate");
         this.expectedBlockSeconds = positive(expectedBlockSeconds, "expectedBlockSeconds");
         this.quoteTtlSeconds = positive(quoteTtlSeconds, "quoteTtlSeconds");
+        this.bitcoinNetwork = bitcoinNetwork != null ? bitcoinNetwork.trim() : "mainnet";
     }
 
     public Estimate estimate(
@@ -111,7 +114,12 @@ public class KfeNetworkFeeEstimateService {
 
     private KfeFeeTierResponse tier(String priority, long rate, int targetBlocks, String source) {
         long networkFeeSats = Math.multiplyExact(rate, estimatedVbytes);
-        long estimatedSeconds = Math.multiplyExact((long) targetBlocks, expectedBlockSeconds);
+        // Testnet/regtest block times are irregular — use a more conservative block interval
+        // so the UI does not promise mainnet-like ~10 min blocks.
+        long blockSeconds = isNonMainnet(bitcoinNetwork)
+                ? Math.max(expectedBlockSeconds, 1_200L)
+                : expectedBlockSeconds;
+        long estimatedSeconds = Math.multiplyExact((long) targetBlocks, blockSeconds);
         return new KfeFeeTierResponse(
                 priority,
                 rate,
@@ -119,6 +127,14 @@ public class KfeNetworkFeeEstimateService {
                 targetBlocks,
                 estimatedSeconds,
                 source);
+    }
+
+    private static boolean isNonMainnet(String network) {
+        if (network == null || network.isBlank()) {
+            return false;
+        }
+        String n = network.trim().toLowerCase();
+        return n.contains("test") || n.contains("regtest") || n.contains("signet");
     }
 
     private static int positive(int value, String name) {

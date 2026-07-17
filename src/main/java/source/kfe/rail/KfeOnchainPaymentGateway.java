@@ -29,7 +29,36 @@ public interface KfeOnchainPaymentGateway {
             long maxFeeSats,
             String description,
             String idempotencyKey,
-            String authorizationProof) {
+            String authorizationProof,
+            /** Explicit sat/vB from the user fee tier; preferred over conf_target when &gt; 0. */
+            Long feeRateSatsPerVbyte,
+            /** Confirmation target blocks for Core estimatesmartfee path when no explicit rate. */
+            Integer confirmationTarget) {
+
+        /** Back-compat for callers that only pass max fee. */
+        public OnchainPaymentCommand(
+                Long userId,
+                Long walletId,
+                String walletName,
+                String destinationAddress,
+                long amountSats,
+                long maxFeeSats,
+                String description,
+                String idempotencyKey,
+                String authorizationProof) {
+            this(
+                    userId,
+                    walletId,
+                    walletName,
+                    destinationAddress,
+                    amountSats,
+                    maxFeeSats,
+                    description,
+                    idempotencyKey,
+                    authorizationProof,
+                    null,
+                    null);
+        }
     }
 
     record OnchainFundingPreflight(

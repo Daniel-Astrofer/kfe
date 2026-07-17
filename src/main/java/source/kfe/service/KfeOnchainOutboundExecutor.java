@@ -41,7 +41,9 @@ public class KfeOnchainOutboundExecutor implements KfeRailExecution {
                         prep.networkFeeSats(),
                         prep.memo() != null ? prep.memo() : "KFE on-chain outbound",
                         prep.idempotencyKey(),
-                        prep.quorumProposalHash()));
+                        prep.quorumProposalHash(),
+                        prep.feeRateSatsPerVbyte(),
+                        prep.feeTargetBlocks()));
 
         String providerReference = firstNonBlank(result.txid(), result.providerReference());
         // Broadcast only: reserve stays locked until the confirmation monitor settles.

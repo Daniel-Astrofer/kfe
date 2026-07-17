@@ -99,30 +99,37 @@ public class KfeExecutionTransactionHelper {
             long networkFeeSats,
             String memo,
             String idempotencyKey,
-            String quorumProposalHash
-    ) {}
+            String quorumProposalHash,
+            Long feeRateSatsPerVbyte,
+            Integer feeTargetBlocks
+    ) {
+        private static PreparationResult skip() {
+            return new PreparationResult(
+                    false, null, null, null, null, null, null, 0, 0, null, null, null, null, null);
+        }
+    }
 
     @Transactional
     public PreparationResult prepare(UUID outboxId) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId).orElse(null);
         if (outbox == null || !"PROCESSING".equals(outbox.getStatus()) || outbox.getClaimedBy() == null || outbox.getClaimedAt() == null) {
-            return new PreparationResult(false, null, null, null, null, null, null, 0, 0, null, null, null);
+            return PreparationResult.skip();
         }
 
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(outbox.getTransactionId()).orElse(null);
         if (tx == null) {
             markOutboxFailed(outbox, "TRANSACTION_NOT_FOUND", "KFE transaction does not exist.", false);
-            return new PreparationResult(false, null, null, null, null, null, null, 0, 0, null, null, null);
+            return PreparationResult.skip();
         }
         if (tx.getStatus() == KfeTransactionStatus.SETTLED || tx.getStatus() == KfeTransactionStatus.FAILED) {
             markOutboxDispatched(outbox, firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid(), tx.getPaymentHash()));
-            return new PreparationResult(false, null, null, null, null, null, null, 0, 0, null, null, null);
+            return PreparationResult.skip();
         }
         if (tx.getStatus() != KfeTransactionStatus.EXECUTING
                 && tx.getStatus() != KfeTransactionStatus.REQUIRES_RECONCILIATION) {
             markOutboxFailed(outbox, "INVALID_TRANSACTION_STATUS",
                     "KFE transaction is not executable in status " + tx.getStatus() + ".", false);
-            return new PreparationResult(false, null, null, null, null, null, null, 0, 0, null, null, null);
+            return PreparationResult.skip();
         }
 
         String op = outbox.getOperation() != null ? outbox.getOperation().trim().toUpperCase() : "";
@@ -140,7 +147,7 @@ public class KfeExecutionTransactionHelper {
                         "UNSUPPORTED_OPERATION",
                         "Unsupported KFE outbox operation " + outbox.getOperation() + ".");
             }
-            return new PreparationResult(false, null, null, null, null, null, null, 0, 0, null, null, null);
+            return PreparationResult.skip();
         }
 
         KfeWalletEntity sourceWallet = walletRepository.findById(tx.getSourceWalletId())
@@ -149,6 +156,17 @@ public class KfeExecutionTransactionHelper {
         JsonNode payload = payload(outbox);
         String externalReference = text(payload, "externalReference", tx.getExternalReference());
         String memo = text(payload, "memo", tx.getMemo());
+        Long feeRate = longOrNull(payload, "feeRateSatsPerVbyte", "feeRateSatPerVbyte");
+        Integer feeTarget = intOrNull(payload, "feeTargetBlocks", "confirmationTarget");
+        // Derive sat/vB from quoted network fee when client only sent max-fee sats.
+        if ((feeRate == null || feeRate <= 0L) && tx.getNetworkFeeSats() > 0L) {
+            long vbytes = longOrNull(payload, "estimatedVbytes") != null
+                    ? longOrNull(payload, "estimatedVbytes")
+                    : 180L;
+            if (vbytes > 0L) {
+                feeRate = Math.max(1L, (tx.getNetworkFeeSats() + vbytes - 1L) / vbytes);
+            }
+        }
 
         return new PreparationResult(
                 true,
@@ -162,7 +180,9 @@ public class KfeExecutionTransactionHelper {
                 tx.getNetworkFeeSats(),
                 memo,
                 tx.getIdempotencyKey(),
-                tx.getQuorumProposalHash()
+                tx.getQuorumProposalHash(),
+                feeRate,
+                feeTarget
         );
     }
 
@@ -731,6 +751,37 @@ public class KfeExecutionTransactionHelper {
     private String text(JsonNode payload, String field, String fallback) {
         JsonNode value = payload.path(field);
         return value.isTextual() && !value.asText().isBlank() ? value.asText() : fallback;
+    }
+
+    private Long longOrNull(JsonNode payload, String... fields) {
+        if (payload == null || fields == null) {
+            return null;
+        }
+        for (String field : fields) {
+            JsonNode value = payload.path(field);
+            if (value.isIntegralNumber()) {
+                return value.asLong();
+            }
+            if (value.isTextual()) {
+                try {
+                    return Long.parseLong(value.asText().trim());
+                } catch (NumberFormatException ignored) {
+                    // try next field
+                }
+            }
+        }
+        return null;
+    }
+
+    private Integer intOrNull(JsonNode payload, String... fields) {
+        Long value = longOrNull(payload, fields);
+        if (value == null) {
+            return null;
+        }
+        if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) {
+            return null;
+        }
+        return value.intValue();
     }
 
     private String firstNonBlank(String... values) {

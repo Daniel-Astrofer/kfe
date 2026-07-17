@@ -77,6 +77,7 @@ class KfeNetworkFeeEstimateServiceTest {
                 12,
                 6,
                 600,
-                120);
+                120,
+                "mainnet");
     }
 }

@@ -25,13 +25,17 @@ public record KfeSubmitTransactionRequest(
         String confirmationPassphrase,
         String appPin,
         @Size(max = 48)
-        String paymentRequestPublicId) {
+        String paymentRequestPublicId,
+        /** Explicit sat/vB from fee tier (FAST/STANDARD/SLOW). Used for on-chain PSBT funding. */
+        Long feeRateSatPerVbyte,
+        /** Confirmation target blocks for the selected fee tier (e.g. FAST=2). */
+        Integer feeTargetBlocks) {
 
     public KfeSubmitTransactionRequest withDestinationWalletId(UUID resolvedDestinationWalletId) {
         return new KfeSubmitTransactionRequest(
                 idempotencyKey, rail, direction, sourceWalletId, resolvedDestinationWalletId, amountSats,
                 networkFeeSats, externalReference, memo, totpCode, passkeyAssertionJson,
-                confirmationPassphrase, appPin, paymentRequestPublicId);
+                confirmationPassphrase, appPin, paymentRequestPublicId, feeRateSatPerVbyte, feeTargetBlocks);
     }
 
     public KfeSubmitTransactionRequest(
@@ -48,7 +52,29 @@ public record KfeSubmitTransactionRequest(
             String passkeyAssertionJson,
             String confirmationPassphrase) {
         this(idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats, networkFeeSats,
-                externalReference, memo, totpCode, passkeyAssertionJson, confirmationPassphrase, null, null);
+                externalReference, memo, totpCode, passkeyAssertionJson, confirmationPassphrase, null, null,
+                null, null);
+    }
+
+    /** Tests / callers that set paymentRequestPublicId without fee-tier fields. */
+    public KfeSubmitTransactionRequest(
+            String idempotencyKey,
+            KfeRail rail,
+            KfeDirection direction,
+            UUID sourceWalletId,
+            UUID destinationWalletId,
+            long amountSats,
+            long networkFeeSats,
+            String externalReference,
+            String memo,
+            String totpCode,
+            String passkeyAssertionJson,
+            String confirmationPassphrase,
+            String appPin,
+            String paymentRequestPublicId) {
+        this(idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats, networkFeeSats,
+                externalReference, memo, totpCode, passkeyAssertionJson, confirmationPassphrase, appPin,
+                paymentRequestPublicId, null, null);
     }
 
     public KfeSubmitTransactionRequest(
@@ -62,6 +88,6 @@ public record KfeSubmitTransactionRequest(
             String externalReference,
             String memo) {
         this(idempotencyKey, rail, direction, sourceWalletId, destinationWalletId, amountSats, networkFeeSats,
-                externalReference, memo, null, null, null, null, null);
+                externalReference, memo, null, null, null, null, null, null, null);
     }
 }

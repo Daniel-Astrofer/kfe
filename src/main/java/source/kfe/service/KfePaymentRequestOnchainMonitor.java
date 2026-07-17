@@ -30,6 +30,7 @@ import source.kfe.repository.KfeWalletRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -175,12 +176,25 @@ public class KfePaymentRequestOnchainMonitor {
 
         KfeTransactionEntity existing = findObservedOrSettledTransaction(payment.txid()).orElse(null);
         if (existing != null) {
+            boolean patched = false;
             if (existing.getConfirmations() < payment.confirmations()) {
                 existing.setConfirmations(payment.confirmations());
-                transactionRepository.save(existing);
+                patched = true;
                 notifyDepositConfirmationProgress(request, existing, payment);
             }
-            recordObservedStatementIfAbsent(request, existing, payment, existing.getReceiverAmountSats());
+            if (patched) {
+                transactionRepository.save(existing);
+                statementService.recordUserStatement(
+                        request.getUserId(),
+                        request.getWalletId(),
+                        existing,
+                        new LinkedHashMap<>(
+                                responseMapper.buildDisplayPayload(existing, request.getUserId())));
+                dashboardPublisher.publishAfterCommit(request.getUserId());
+            } else {
+                recordObservedStatementIfAbsent(
+                        request, existing, payment, existing.getReceiverAmountSats());
+            }
             return;
         }
 

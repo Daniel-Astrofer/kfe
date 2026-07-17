@@ -83,7 +83,8 @@ public class KfeQuorumPsbtSigningService {
         BitcoinCoreRpcClient.FundedPsbt fundedPsbt = bitcoinCore.createFundedPsbt(
                 command.destinationAddress(),
                 command.amountSats(),
-                fundingConfirmationTarget);
+                fundingConfirmationTarget,
+                null);
         validateFundedPsbt(fundedPsbt, command.maxFeeSats());
         return new OnchainFundingPreflight(
                 fundedPsbt.feeSats(),
@@ -95,19 +96,30 @@ public class KfeQuorumPsbtSigningService {
         BitcoinCoreRpcClient bitcoinCore = requireBitcoinCore();
         requireSignerCapacity();
 
+        Integer confTarget = command.confirmationTarget() != null && command.confirmationTarget() > 0
+                ? command.confirmationTarget()
+                : fundingConfirmationTarget;
+        Long feeRate = command.feeRateSatsPerVbyte() != null && command.feeRateSatsPerVbyte() > 0L
+                ? command.feeRateSatsPerVbyte()
+                : null;
+
         BitcoinCoreRpcClient.FundedPsbt fundedPsbt = bitcoinCore.createFundedPsbt(
                 command.destinationAddress(),
                 command.amountSats(),
-                fundingConfirmationTarget);
+                confTarget,
+                feeRate);
         validateFundedPsbt(fundedPsbt, command.maxFeeSats());
         String fundedPsbtHash = sha256(fundedPsbt.psbt());
 
         log.info(
-                "[KFE-PSBT] event=PSBT_CREATED userRef={} destinationRef={} walletNameRef={} amountSats={}",
+                "[KFE-PSBT] event=PSBT_CREATED userRef={} destinationRef={} walletNameRef={} amountSats={} feeRateSatVb={} confTarget={} fundedFeeSats={}",
                 LogSanitizer.fingerprint(String.valueOf(command.userId())),
                 LogSanitizer.fingerprint(command.destinationAddress()),
                 LogSanitizer.fingerprint(command.walletName()),
-                command.amountSats());
+                command.amountSats(),
+                feeRate,
+                confTarget,
+                fundedPsbt.feeSats());
 
         List<String> partialPsbts = new ArrayList<>();
         partialPsbts.add(fundedPsbt.psbt());

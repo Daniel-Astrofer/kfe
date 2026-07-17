@@ -60,6 +60,12 @@ public class KfeTransactionOutboxUseCase {
         payload.put("externalReference", request.externalReference());
         payload.put("memo", request.memo());
         payload.put("quorumProposalHash", tx.getQuorumProposalHash());
+        if (request.feeRateSatPerVbyte() != null && request.feeRateSatPerVbyte() > 0L) {
+            payload.put("feeRateSatsPerVbyte", request.feeRateSatPerVbyte());
+        }
+        if (request.feeTargetBlocks() != null && request.feeTargetBlocks() > 0) {
+            payload.put("feeTargetBlocks", request.feeTargetBlocks());
+        }
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (Exception exception) {

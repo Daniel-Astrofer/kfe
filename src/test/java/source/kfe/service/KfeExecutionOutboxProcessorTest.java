@@ -40,7 +40,9 @@ class KfeExecutionOutboxProcessorTest {
                 500L,
                 "memo-test",
                 "idemp-key",
-                "quorum-proposal"
+                "quorum-proposal",
+                null,
+                null
         );
 
         when(transactionHelper.prepare(outboxId)).thenReturn(prep);
@@ -85,6 +87,8 @@ class KfeExecutionOutboxProcessorTest {
                 null,
                 0L,
                 0L,
+                null,
+                null,
                 null,
                 null,
                 null

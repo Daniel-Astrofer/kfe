@@ -36,6 +36,11 @@ import java.util.UUID;
  * Detects external on-chain deposits into {@link KfeWalletKind#CUSTODIAL_ONCHAIN} addresses
  * (e.g. Electrum → custodial receive address) and credits the internal ledger.
  *
+ * <p>Policy: as soon as the tx is seen on the network (mempool / 0-conf), create an inbound
+ * row with status {@code VALIDATING} (UI badge PENDING), notify the user, and publish
+ * dashboard/WS so the recipient app updates immediately. {@code available_sats} is credited
+ * only when confirmations reach {@code minConfirmations}.
+ *
  * <p>Without this, only payment-request inbounds credit {@code available_sats}. Random chain
  * deposits only moved {@code observed_sats}, so the app balance looked stuck.
  */
@@ -229,12 +234,11 @@ public class KfeCustodialDepositObservationService {
         if (deposit.amountSats <= 0L) {
             return false;
         }
-        if (deposit.confirmations < minConfirmations) {
-            // Still record as VALIDATING at 0 conf when min is 0; when min>0 wait.
-            if (minConfirmations > 0) {
-                return false;
-            }
-        }
+        // Always surface 0-conf (mempool) deposits as VALIDATING so the recipient
+        // app sees the inbound immediately. available_sats is credited only when
+        // confirmations >= minConfirmations (default 3 in prod / 1 local).
+        // Previously confs < min returned false and the Linux app stayed blank
+        // until 3 blocks — sender already saw the outbound.
 
         // Already known for this chain tx (payment-request or prior custodial observe).
         List<KfeTransactionEntity> existingForTx =
@@ -250,6 +254,12 @@ public class KfeCustodialDepositObservationService {
             boolean patched = false;
             if (deposit.confirmations > existing.getConfirmations()) {
                 existing.setConfirmations(deposit.confirmations);
+                patched = true;
+            }
+            // Amount can grow if more outputs to same address appear in the same tx.
+            if (deposit.amountSats > existing.getGrossAmountSats()) {
+                existing.setGrossAmountSats(deposit.amountSats);
+                existing.setReceiverAmountSats(Math.max(existing.getReceiverAmountSats(), deposit.amountSats));
                 patched = true;
             }
             int settleAt = Math.max(0, minConfirmations);
@@ -357,13 +367,14 @@ public class KfeCustodialDepositObservationService {
                 audit);
 
         log.info(
-                "[KFE Custodial Deposit] credited walletId={} txid={} observedSats={} creditedSats={} confs={} status={}",
+                "[KFE Custodial Deposit] exposed walletId={} txid={} observedSats={} creditedSats={} confs={} status={} settleNow={}",
                 wallet.getId(),
                 txid,
                 deposit.amountSats,
                 quote.receiverAmountSats(),
                 confs,
-                status);
+                status,
+                settleNow);
         return true;
     }
 
