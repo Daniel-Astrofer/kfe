@@ -92,6 +92,13 @@ public class KfeWalletNetworkService {
 
     @Transactional(readOnly = true)
     public KfeReceivingCapabilitiesResponse receivingCapabilities(String receiverIdentifier) {
+        return receivingCapabilities(null, receiverIdentifier);
+    }
+
+    @Transactional(readOnly = true)
+    public KfeReceivingCapabilitiesResponse receivingCapabilities(
+            Long senderUserId,
+            String receiverIdentifier) {
         ResolvedReceiver resolved = resolveReceiver(receiverIdentifier);
         if (resolved == null
                 || resolved.user() == null
@@ -145,6 +152,9 @@ public class KfeWalletNetworkService {
             missing.add("KFE_ONCHAIN_ADDRESS_NOT_FOUND");
         }
 
+        List<KfeReceivingCapabilitiesResponse.SenderSourceWallet> eligibleSources =
+                resolveEligibleSourceWallets(senderUserId, rails);
+
         return new KfeReceivingCapabilitiesResponse(
                 internal,
                 lightning,
@@ -156,7 +166,57 @@ public class KfeWalletNetworkService {
                 onchainTarget.map(OnchainReceiveTarget::address).orElse(null),
                 onchainTarget.map(OnchainReceiveTarget::walletId).orElse(null),
                 rails,
+                eligibleSources,
                 DEFAULT_LIMITS);
+    }
+
+    /**
+     * Sender wallets that can fund at least one rail the receiver accepts.
+     * Product rule: source list is delegated by the backend, not filtered locally.
+     */
+    private List<KfeReceivingCapabilitiesResponse.SenderSourceWallet> resolveEligibleSourceWallets(
+            Long senderUserId,
+            List<String> availableRails) {
+        if (senderUserId == null || availableRails == null || availableRails.isEmpty()) {
+            return List.of();
+        }
+        List<KfeWalletEntity> senderWallets = walletRepository
+                .findByUserIdOrderByCreatedAtDesc(senderUserId)
+                .stream()
+                .filter(wallet -> wallet.getStatus() == KfeWalletStatus.ACTIVE)
+                .toList();
+        List<KfeReceivingCapabilitiesResponse.SenderSourceWallet> eligible = new ArrayList<>();
+        for (KfeWalletEntity wallet : senderWallets) {
+            List<String> compatible = availableRails.stream()
+                    .filter(rail -> senderCanFundRail(wallet, rail))
+                    .toList();
+            if (compatible.isEmpty()) {
+                continue;
+            }
+            eligible.add(new KfeReceivingCapabilitiesResponse.SenderSourceWallet(
+                    wallet.getId(),
+                    wallet.getKind().name(),
+                    wallet.getLabel(),
+                    List.copyOf(compatible)));
+        }
+        return List.copyOf(eligible);
+    }
+
+    private static boolean senderCanFundRail(KfeWalletEntity wallet, String rail) {
+        if (wallet == null || rail == null) {
+            return false;
+        }
+        String normalized = rail.trim().toUpperCase();
+        KfeWalletKind kind = wallet.getKind();
+        boolean spendable = wallet.isSpendable();
+        return switch (normalized) {
+            case "INTERNAL", "PAYMENT_LINK" -> kind == KfeWalletKind.INTERNAL && spendable;
+            case "LIGHTNING" -> kind == KfeWalletKind.INTERNAL && spendable;
+            case "ONCHAIN" -> (kind == KfeWalletKind.INTERNAL && spendable)
+                    || (kind == KfeWalletKind.CUSTODIAL_ONCHAIN && spendable)
+                    || kind == KfeWalletKind.WATCH_ONLY;
+            default -> false;
+        };
     }
 
     @Transactional(readOnly = true)
@@ -428,6 +488,7 @@ public class KfeWalletNetworkService {
                 null,
                 null,
                 null,
+                List.of(),
                 List.of(),
                 DEFAULT_LIMITS);
     }

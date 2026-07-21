@@ -110,8 +110,8 @@ public class KfePaymentRequestOnchainMonitor {
     }
 
     @Scheduled(
-            fixedDelayString = "${kfe.payment-request-monitor.fixed-delay-ms:30000}",
-            initialDelayString = "${kfe.payment-request-monitor.initial-delay-ms:20000}")
+            fixedDelayString = "${kfe.payment-request-monitor.fixed-delay-ms:1000}",
+            initialDelayString = "${kfe.payment-request-monitor.initial-delay-ms:2000}")
     public void reconcileOpenOnchainPaymentRequests() {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {

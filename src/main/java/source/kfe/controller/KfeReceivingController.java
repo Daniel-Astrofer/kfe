@@ -1,6 +1,7 @@
 package source.kfe.controller;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,9 +22,13 @@ public class KfeReceivingController {
 
     @GetMapping("/users/{receiverIdentifier}/receiving-capabilities")
     public ResponseEntity<ApiResponse<KfeReceivingCapabilitiesResponse>> capabilities(
-            @PathVariable String receiverIdentifier) {
+            @PathVariable String receiverIdentifier,
+            Authentication authentication) {
+        Long senderUserId = authentication == null
+                ? null
+                : KfeAuthenticationSupport.authenticatedUserId(authentication);
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE receiving capabilities retrieved.",
-                financialApi.receivingCapabilities(receiverIdentifier)));
+                financialApi.receivingCapabilities(senderUserId, receiverIdentifier)));
     }
 }

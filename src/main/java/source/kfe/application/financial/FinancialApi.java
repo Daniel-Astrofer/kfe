@@ -192,4 +192,10 @@ public class FinancialApi {
     public KfeReceivingCapabilitiesResponse receivingCapabilities(String receiverIdentifier) {
         return walletNetworkService.receivingCapabilities(receiverIdentifier);
     }
+
+    public KfeReceivingCapabilitiesResponse receivingCapabilities(
+            Long senderUserId,
+            String receiverIdentifier) {
+        return walletNetworkService.receivingCapabilities(senderUserId, receiverIdentifier);
+    }
 }

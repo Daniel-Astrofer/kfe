@@ -93,6 +93,41 @@ class KfeWalletNetworkServiceTest {
         assertThat(response.onchainWalletId()).isEqualTo(wallet.getId());
         assertThat(response.availableRails()).containsExactly("INTERNAL", "ONCHAIN");
         assertThat(response.missingRequirements()).containsExactly("KFE_LIGHTNING_RECEIVE_NOT_CONFIGURED");
+        assertThat(response.eligibleSourceWallets()).isEmpty();
+    }
+
+    @Test
+    void receivingCapabilitiesReturnsEligibleSenderWalletsForAuthenticatedSender() {
+        FinancialUserDirectoryPort.FinancialUserHandle receiver =
+                new FinancialUserDirectoryPort.FinancialUserHandle(42L, "alice", true);
+        KfeWalletEntity receiverWallet = wallet(KfeWalletKind.INTERNAL);
+        KfeWalletAddressEntity address = address(receiverWallet.getId());
+
+        KfeWalletEntity senderInternal = wallet(KfeWalletKind.INTERNAL);
+        senderInternal.setLabel("Hot");
+        KfeWalletEntity senderCold = wallet(KfeWalletKind.WATCH_ONLY);
+        senderCold.setLabel("Cold");
+        senderCold.setSpendable(false);
+
+        when(userDirectory.findByUsername("alice")).thenReturn(Optional.of(receiver));
+        when(walletRepository.findByUserIdOrderByCreatedAtDesc(42L)).thenReturn(List.of(receiverWallet));
+        when(walletRepository.findByUserIdOrderByCreatedAtDesc(99L))
+                .thenReturn(List.of(senderInternal, senderCold));
+        when(addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                receiverWallet.getId(),
+                KfeWalletAddressStatus.ACTIVE)).thenReturn(Optional.of(address));
+        when(lightningInvoiceGateway.isLive()).thenReturn(false);
+
+        KfeReceivingCapabilitiesResponse response =
+                service.receivingCapabilities(99L, "@alice");
+
+        assertThat(response.eligibleSourceWallets()).hasSize(2);
+        assertThat(response.eligibleSourceWallets().get(0).walletId()).isEqualTo(senderInternal.getId());
+        assertThat(response.eligibleSourceWallets().get(0).compatibleRails())
+                .containsExactly("INTERNAL", "ONCHAIN");
+        assertThat(response.eligibleSourceWallets().get(1).walletId()).isEqualTo(senderCold.getId());
+        assertThat(response.eligibleSourceWallets().get(1).compatibleRails())
+                .containsExactly("ONCHAIN");
     }
 
     @Test

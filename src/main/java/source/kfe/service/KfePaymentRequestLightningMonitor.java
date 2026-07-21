@@ -87,8 +87,8 @@ public class KfePaymentRequestLightningMonitor {
     }
 
     @Scheduled(
-            fixedDelayString = "${kfe.payment-request-lightning-monitor.fixed-delay-ms:15000}",
-            initialDelayString = "${kfe.payment-request-lightning-monitor.initial-delay-ms:25000}")
+            fixedDelayString = "${kfe.payment-request-lightning-monitor.fixed-delay-ms:1000}",
+            initialDelayString = "${kfe.payment-request-lightning-monitor.initial-delay-ms:2000}")
     public void reconcileOpenLightningPaymentRequests() {
         if (!enabled || !lightningInvoiceGateway.isLive()) {
             return;

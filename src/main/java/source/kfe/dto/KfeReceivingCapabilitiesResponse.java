@@ -19,6 +19,11 @@ public record KfeReceivingCapabilitiesResponse(
         /** Wallet that owns {@link #onchainReceiveAddress}, when known. */
         UUID onchainWalletId,
         List<String> availableRails,
+        /**
+         * Sender wallets (authenticated user) that can fund at least one of
+         * {@link #availableRails}. Empty when sender is unknown or none qualify.
+         */
+        List<SenderSourceWallet> eligibleSourceWallets,
         Limits limits) {
 
     public record Limits(
@@ -27,5 +32,13 @@ public record KfeReceivingCapabilitiesResponse(
             long minInternalSats,
             long minLightningSats,
             long minOnchainSats) {
+    }
+
+    /** Opaque source wallet the sender may choose for this destination. */
+    public record SenderSourceWallet(
+            UUID walletId,
+            String kind,
+            String label,
+            List<String> compatibleRails) {
     }
 }
