@@ -22,6 +22,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -179,6 +180,43 @@ class KfeColdWalletObservationServiceTest {
     }
 
     @Test
+    void attributeWalletSpendCapsPaymentToThisWalletFunding() {
+        // Our cold UTXO (222_078) is one input in a huge batch paying ~23 BTC out.
+        var attr = KfeColdWalletObservationService.attributeWalletSpend(
+                222_078L, 0L, 2_354_562_655L);
+        assertThat(attr.paymentSats()).isEqualTo(222_078L);
+        assertThat(attr.feeSats()).isZero();
+        assertThat(attr.consolidationOnly()).isFalse();
+    }
+
+    @Test
+    void attributeWalletSpendSplitsFeeWhenExternalSmallerThanFunding() {
+        // Sent 80k external, 20k fee, no change.
+        var attr = KfeColdWalletObservationService.attributeWalletSpend(
+                100_000L, 0L, 80_000L);
+        assertThat(attr.paymentSats()).isEqualTo(80_000L);
+        assertThat(attr.feeSats()).isEqualTo(20_000L);
+    }
+
+    @Test
+    void attributeWalletSpendTreatsChangeOnlyAsConsolidationFee() {
+        var attr = KfeColdWalletObservationService.attributeWalletSpend(
+                100_000L, 99_500L, 0L);
+        assertThat(attr.paymentSats()).isZero();
+        assertThat(attr.feeSats()).isEqualTo(500L);
+        assertThat(attr.consolidationOnly()).isTrue();
+    }
+
+    @Test
+    void attributeWalletSpendSimpleSendUsesExternalWhenWithinFunding() {
+        var attr = KfeColdWalletObservationService.attributeWalletSpend(
+                100_000L, 10_000L, 89_500L);
+        // leftWallet = 90_000; payment capped to external 89_500; fee 500
+        assertThat(attr.paymentSats()).isEqualTo(89_500L);
+        assertThat(attr.feeSats()).isEqualTo(500L);
+    }
+
+    @Test
     void touchColdConfirmationsSettlesWhenMinReached() {
         KfeTransactionEntity tx = new KfeTransactionEntity();
         tx.setUserId(3L);
@@ -196,6 +234,47 @@ class KfeColdWalletObservationServiceTest {
         assertThat(settled).isTrue();
         assertThat(tx.getStatus()).isEqualTo(KfeTransactionStatus.SETTLED);
         assertThat(tx.getConfirmations()).isEqualTo(4);
+    }
+
+    @Test
+    void observeWalletCreatesInboundEvenWhenOutboundSharesTxid() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = watchOnly(walletId, 9L);
+        KfeWalletAddressEntity address = new KfeWalletAddressEntity();
+        address.setAddress("tb1qcoldreceive");
+
+        KfeTransactionEntity outbound = new KfeTransactionEntity();
+        outbound.setUserId(9L);
+        outbound.setDirection(KfeDirection.OUTBOUND);
+        outbound.setBlockchainTxid("deadbeef");
+        outbound.setSourceWalletId(walletId);
+        outbound.setProvider(KfeColdWalletObservationService.PROVIDER_COLD_PSBT);
+
+        when(walletRepository.findById(walletId)).thenReturn(Optional.of(wallet));
+        when(addressRepository.findByWalletIdOrderByCreatedAtDesc(walletId)).thenReturn(List.of(address));
+        when(blockchainClient.getUnspentOutputsMerged("tb1qcoldreceive")).thenReturn(List.of(
+                new BlockchainClient.AddressUtxo(
+                        "deadbeef", 0, 50_000L, "0014", 5, "tb1qcoldreceive")));
+        when(blockchainClient.getUnspentOutputsFromScan(any(), any(Integer.class))).thenReturn(List.of());
+        when(blockchainClient.getAddressTransactions(any())).thenReturn(null);
+        when(transactionRepository.findByIdempotencyKey("cold-obs:" + walletId + ":deadbeef"))
+                .thenReturn(Optional.empty());
+        // Same chain txid already used by an outbound — must NOT block cold inbound.
+        when(transactionRepository.findByBlockchainTxidAndUserId("deadbeef", 9L))
+                .thenReturn(List.of(outbound));
+        when(transactionRepository.findByDestinationWalletIdAndProvider(
+                        walletId, KfeColdWalletObservationService.PROVIDER_COLD_OBSERVER))
+                .thenReturn(List.of());
+        when(transactionRepository.findByWalletIdAndStatusIn(eq(walletId), any())).thenReturn(List.of());
+        when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.observeWallet(walletId);
+
+        verify(transactionRepository).save(argThat(tx ->
+                tx.getDirection() == KfeDirection.INBOUND
+                        && "deadbeef".equals(tx.getBlockchainTxid())
+                        && walletId.equals(tx.getDestinationWalletId())));
+        verify(statementService).recordUserStatement(eq(9L), eq(walletId), any(), any());
     }
 
     private static KfeWalletEntity watchOnly(UUID id, long userId) {

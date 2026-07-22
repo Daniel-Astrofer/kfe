@@ -43,11 +43,21 @@ class KfeStatementServiceTest {
     @Mock
     private Query nativeQuery;
 
+    @Mock
+    private org.springframework.beans.factory.ObjectProvider<source.kfe.service.TransactionEventPublisher>
+            transactionEventPublisher;
+
     private KfeStatementService service;
 
     @BeforeEach
     void setUp() {
-        service = new KfeStatementService(statementRepository, new ObjectMapper(), entityManager, null);
+        lenient().when(transactionEventPublisher.getIfAvailable()).thenReturn(null);
+        service = new KfeStatementService(
+                statementRepository,
+                new ObjectMapper(),
+                entityManager,
+                transactionEventPublisher,
+                null);
         lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
         lenient().when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
         lenient().when(nativeQuery.executeUpdate()).thenReturn(1);

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -42,16 +43,19 @@ public class KfeStatementService {
     private final KfeUserStatementRepository statementRepository;
     private final ObjectMapper objectMapper;
     private final EntityManager entityManager;
+    private final TransactionEventPublisher transactionEventPublisher;
     private final KfeStatementService self;
 
     public KfeStatementService(
             KfeUserStatementRepository statementRepository,
             ObjectMapper objectMapper,
             EntityManager entityManager,
+            ObjectProvider<TransactionEventPublisher> transactionEventPublisher,
             @Lazy KfeStatementService self) {
         this.statementRepository = statementRepository;
         this.objectMapper = objectMapper;
         this.entityManager = entityManager;
+        this.transactionEventPublisher = transactionEventPublisher.getIfAvailable();
         this.self = self != null ? self : this;
     }
 
@@ -76,9 +80,10 @@ public class KfeStatementService {
         try {
             if (entityManager != null) {
                 nativeUpsert(userId, walletId, transaction, payload);
-                return;
+            } else {
+                jpaUpsert(userId, walletId, transaction, payload);
             }
-            jpaUpsert(userId, walletId, transaction, payload);
+            publishTransactionEvent(userId, payload);
         } catch (RuntimeException first) {
             // Unique race only: re-load and update. Do NOT swallow FK / other errors that
             // leave the JDBC connection aborted — rethrow so caller can fail cleanly
@@ -97,10 +102,19 @@ public class KfeStatementService {
                     transaction.getId());
             try {
                 jpaUpsert(userId, walletId, transaction, payload);
+                publishTransactionEvent(userId, payload);
             } catch (DataIntegrityViolationException race) {
                 jpaUpsert(userId, walletId, transaction, payload);
+                publishTransactionEvent(userId, payload);
             }
         }
+    }
+
+    private void publishTransactionEvent(Long userId, Map<String, ?> payload) {
+        if (transactionEventPublisher == null || payload == null) {
+            return;
+        }
+        transactionEventPublisher.publishAfterCommit(userId, payload);
     }
 
     /**

@@ -26,10 +26,12 @@ import source.kfe.repository.KfeTransactionRepository;
 import source.kfe.repository.KfeWalletAddressRepository;
 import source.kfe.repository.KfeWalletRepository;
 
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -70,6 +72,7 @@ public class KfeCustodialDepositObservationService {
     private final KfeAuditLogService auditLogService;
     private final ObjectProvider<FinancialNotificationPort> notificationPort;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
+    private final ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex;
     private final TransactionTemplate transactionTemplate;
     private final int batchSize;
     private final int minConfirmations;
@@ -90,6 +93,7 @@ public class KfeCustodialDepositObservationService {
             KfeAuditLogService auditLogService,
             ObjectProvider<FinancialNotificationPort> notificationPort,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
+            ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex,
             TransactionTemplate transactionTemplate,
             @Value("${kfe.custodial-deposit-observation.batch-size:30}") int batchSize,
             @Value(
@@ -110,6 +114,7 @@ public class KfeCustodialDepositObservationService {
         this.auditLogService = auditLogService;
         this.notificationPort = notificationPort;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
+        this.addressIndex = addressIndex;
         this.transactionTemplate = transactionTemplate;
         this.batchSize = Math.max(1, batchSize);
         this.minConfirmations = Math.max(0, minConfirmations);
@@ -195,6 +200,115 @@ public class KfeCustodialDepositObservationService {
         }
     }
 
+    /**
+     * Instant path: materialize custodial/INTERNAL inbound from a ZMQ {@code rawtx} at
+     * 0 confirmations without waiting for {@code listunspent}/{@code scantxoutset}.
+     * Full {@link #observeWallet} still runs afterwards for confs + available credit.
+     */
+    public void ingestZmqRawTx(KfeBitcoinZmqTxMatcher.ParsedRawTx parsed, Set<UUID> walletIds) {
+        if (parsed == null || walletIds == null || walletIds.isEmpty()) {
+            return;
+        }
+        String txid = parsed.txid();
+        if (txid == null || txid.isBlank()) {
+            return;
+        }
+        String normalizedTxid = txid.trim().toLowerCase(Locale.ROOT);
+        KfeMonitoredChainAddressIndex index = addressIndex.getIfAvailable();
+        Set<Long> usersToPublish = new HashSet<>();
+
+        for (UUID walletId : walletIds) {
+            if (walletId == null) {
+                continue;
+            }
+            KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
+            if (wallet == null || wallet.getStatus() != KfeWalletStatus.ACTIVE) {
+                continue;
+            }
+            if (wallet.getKind() != KfeWalletKind.CUSTODIAL_ONCHAIN
+                    && wallet.getKind() != KfeWalletKind.INTERNAL) {
+                continue;
+            }
+
+            long amountSats = 0L;
+            String sampleAddress = null;
+            for (KfeBitcoinZmqTxMatcher.ParsedOutput out : parsed.outputs()) {
+                if (out == null || out.valueSats() <= 0L) {
+                    continue;
+                }
+                String address = out.address();
+                if (address == null || address.isBlank()) {
+                    continue;
+                }
+                if (!addressBelongsToWallet(walletId, address, index)) {
+                    continue;
+                }
+                amountSats = Math.addExact(amountSats, out.valueSats());
+                if (sampleAddress == null) {
+                    sampleAddress = address.trim();
+                }
+            }
+            if (amountSats <= 0L) {
+                continue;
+            }
+
+            DepositAggregate deposit = new DepositAggregate(sampleAddress, amountSats, 0);
+            try {
+                Boolean applied = transactionTemplate.execute(status -> {
+                    KfeWalletEntity locked = walletRepository.findById(walletId).orElse(null);
+                    if (locked == null) {
+                        return false;
+                    }
+                    return upsertDeposit(locked, normalizedTxid, deposit);
+                });
+                if (Boolean.TRUE.equals(applied)) {
+                    if (wallet.getUserId() != null) {
+                        usersToPublish.add(wallet.getUserId());
+                    }
+                    log.info(
+                            "[KFE Custodial Deposit] zmq-ingest walletId={} txid={} sats={} confs=0",
+                            walletId,
+                            normalizedTxid,
+                            amountSats);
+                }
+            } catch (RuntimeException exception) {
+                log.warn(
+                        "[KFE Custodial Deposit] zmq-ingest failed walletId={} txid={}: {}",
+                        walletId,
+                        normalizedTxid,
+                        exception.getMessage());
+            }
+        }
+
+        for (Long userId : usersToPublish) {
+            dashboardPublisher.publishAfterCommit(userId);
+        }
+    }
+
+    private boolean addressBelongsToWallet(
+            UUID walletId, String address, KfeMonitoredChainAddressIndex index) {
+        if (index != null) {
+            UUID owner = index.walletIdForAddress(address);
+            if (walletId.equals(owner)) {
+                return true;
+            }
+            // Index miss (stale cache) — fall through to DB.
+            if (owner != null) {
+                return false;
+            }
+        }
+        String key = address == null ? null : address.trim().toLowerCase(Locale.ROOT);
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
+        return addressRepository.findByWalletIdOrderByCreatedAtDesc(walletId).stream()
+                .anyMatch(row ->
+                        row.getAddress() != null
+                                && key.equals(row.getAddress().trim().toLowerCase(Locale.ROOT))
+                                && (row.getStatus() == null
+                                        || row.getStatus() == KfeWalletAddressStatus.ACTIVE));
+    }
+
     private Map<String, DepositAggregate> collectDeposits(BlockchainClient client, UUID walletId) {
         List<KfeWalletAddressEntity> addresses =
                 addressRepository.findByWalletIdOrderByCreatedAtDesc(walletId);
@@ -257,9 +371,11 @@ public class KfeCustodialDepositObservationService {
             }
             // Update confs / settle when needed; credit only if no available credit yet.
             boolean patched = false;
+            boolean confBumped = false;
             if (deposit.confirmations > existing.getConfirmations()) {
                 existing.setConfirmations(deposit.confirmations);
                 patched = true;
+                confBumped = true;
             }
             // Amount can grow if more outputs to same address appear in the same tx.
             if (deposit.amountSats > existing.getGrossAmountSats()) {
@@ -269,9 +385,11 @@ public class KfeCustodialDepositObservationService {
             }
             int settleAt = Math.max(0, minConfirmations);
             boolean canSettle = deposit.confirmations >= settleAt;
+            boolean settledNow = false;
             if (existing.getStatus() != KfeTransactionStatus.SETTLED && canSettle) {
                 existing.setStatus(KfeTransactionStatus.SETTLED);
                 patched = true;
+                settledNow = true;
                 if (!alreadyCreditedAvailable(existing.getId())) {
                     long creditSats = Math.max(0L, existing.getReceiverAmountSats());
                     if (creditSats <= 0L) {
@@ -283,16 +401,38 @@ public class KfeCustodialDepositObservationService {
                         feeSettlementService.creditKeroseneFee(existing);
                         notifyDeposit(wallet, existing, creditSats, deposit.confirmations);
                     }
+                } else {
+                    // Already credited earlier — still announce confirmed once.
+                    notifyDeposit(
+                            wallet,
+                            existing,
+                            Math.max(0L, existing.getReceiverAmountSats()),
+                            deposit.confirmations);
                 }
+            } else if (confBumped && existing.getStatus() != KfeTransactionStatus.SETTLED) {
+                // Realtime ring updates: 0→1→2… before settle.
+                notifyDepositProgress(
+                        wallet,
+                        existing,
+                        Math.max(0L, existing.getReceiverAmountSats()),
+                        deposit.confirmations);
             }
             if (patched) {
                 transactionRepository.save(existing);
                 // Keep history row identity; only status/confs/updatedAt change.
+                // Publishes /queue/transactions so FE rings advance on each block.
                 statementService.recordUserStatement(
                         wallet.getUserId(),
                         wallet.getId(),
                         existing,
                         new LinkedHashMap<>(responseMapper.buildDisplayPayload(existing, wallet.getUserId())));
+                if (settledNow) {
+                    log.info(
+                            "[KFE Custodial Deposit] settled walletId={} txid={} confs={}",
+                            wallet.getId(),
+                            txid,
+                            deposit.confirmations);
+                }
                 return true;
             }
             return false;
@@ -428,6 +568,27 @@ public class KfeCustodialDepositObservationService {
         } catch (RuntimeException exception) {
             log.warn(
                     "[KFE Custodial Deposit] notify confirmed failed: {}",
+                    exception.getMessage());
+        }
+    }
+
+    private void notifyDepositProgress(
+            KfeWalletEntity wallet, KfeTransactionEntity tx, long amount, int confs) {
+        FinancialNotificationPort port = notificationPort.getIfAvailable();
+        if (port == null || tx == null) {
+            return;
+        }
+        try {
+            port.notifyDepositConfirmationProgress(
+                    wallet.getUserId(),
+                    tx.getId(),
+                    wallet.getId(),
+                    "ONCHAIN",
+                    amount,
+                    confs);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Custodial Deposit] notify progress failed: {}",
                     exception.getMessage());
         }
     }

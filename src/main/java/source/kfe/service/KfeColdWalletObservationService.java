@@ -314,10 +314,18 @@ public class KfeColdWalletObservationService {
                                         : sumInboundAmounts(walletId, spentFundingTxids);
                         SpendDetails details =
                                 resolveSpendDetails(client, walletId, spendTxid, amountHint);
-                        long payment = details.paymentSats() > 0L ? details.paymentSats() : externalOut;
+                        // Never fall back to full tx externalOut — other inputs fund that.
+                        long walletLeft = Math.max(0L, amountHint - changeToUs);
+                        long payment = details.paymentSats() > 0L
+                                ? details.paymentSats()
+                                : walletLeft;
                         long fee = details.feeSats();
+                        if (walletLeft > 0L) {
+                            payment = Math.min(payment, walletLeft);
+                            fee = Math.min(fee, Math.max(0L, walletLeft - payment));
+                        }
                         if (payment <= 0L && fundingSpentSats > 0L) {
-                            payment = Math.max(0L, fundingSpentSats - changeToUs);
+                            payment = walletLeft;
                         }
                         if (payment <= 0L && fee > 0L) {
                             payment = fee;
@@ -753,23 +761,17 @@ public class KfeColdWalletObservationService {
             } else if (PROVIDER_COLD_OBSERVER.equals(tx.getProvider())) {
                 KfeWalletEntity wallet = walletRepository.findById(firstWallet(tx)).orElse(null);
                 if (wallet != null) {
-                    FinancialNotificationPort port = notificationPort.getIfAvailable();
-                    if (port != null) {
-                        try {
-                            port.notifyDepositConfirmed(
-                                    wallet.getUserId(),
-                                    tx.getId(),
-                                    wallet.getId(),
-                                    "ONCHAIN",
-                                    Math.max(0L, tx.getReceiverAmountSats()),
-                                    next);
-                        } catch (RuntimeException exception) {
-                            log.warn(
-                                    "[KFE Cold Observation] confirm notify failed: {}",
-                                    exception.getMessage());
-                        }
-                    }
+                    notifyColdInboundConfirmedSafe(wallet, tx);
                 }
+            }
+        } else if (confChanged
+                && isColdObservation(tx)
+                && PROVIDER_COLD_OBSERVER.equals(tx.getProvider())
+                && tx.getStatus() != KfeTransactionStatus.SETTLED
+                && tx.getStatus() != KfeTransactionStatus.FAILED) {
+            KfeWalletEntity wallet = walletRepository.findById(firstWallet(tx)).orElse(null);
+            if (wallet != null) {
+                notifyColdInboundProgressSafe(wallet, tx, next);
             }
         }
         transactionRepository.save(tx);
@@ -1163,9 +1165,12 @@ public class KfeColdWalletObservationService {
 
         if (existing != null) {
             boolean changed = false;
+            boolean confBumped = false;
+            boolean settledNow = false;
             if (confs > existing.getConfirmations()) {
                 existing.setConfirmations(confs);
                 changed = true;
+                confBumped = true;
             }
             if (inbound.amountSats() > existing.getReceiverAmountSats()) {
                 existing.setGrossAmountSats(inbound.amountSats());
@@ -1176,19 +1181,33 @@ public class KfeColdWalletObservationService {
                     && existing.getStatus() != KfeTransactionStatus.SETTLED) {
                 existing.setStatus(KfeTransactionStatus.SETTLED);
                 changed = true;
+                settledNow = true;
             }
             if (changed) {
                 transactionRepository.save(existing);
                 statementService.recordUserStatement(
                         wallet.getUserId(), wallet.getId(), existing, statementPayload(existing));
+                if (settledNow) {
+                    notifyColdInboundConfirmedSafe(wallet, existing);
+                } else if (confBumped
+                        && existing.getStatus() != KfeTransactionStatus.SETTLED
+                        && existing.getStatus() != KfeTransactionStatus.FAILED) {
+                    notifyColdInboundProgressSafe(wallet, existing, confs);
+                }
             }
             return changed;
         }
 
-        // Avoid duplicating payment-request or PSBT rows that already use the same txid.
-        if (!transactionRepository
+        // Only skip a true duplicate cold inbound for THIS wallet.
+        // Outbound / PSBT / self-fund rows share the chain txid and must NOT
+        // block creating the cold receive history + notification.
+        boolean alreadyInboundForWallet = transactionRepository
                 .findByBlockchainTxidAndUserId(inbound.txid(), wallet.getUserId())
-                .isEmpty()) {
+                .stream()
+                .anyMatch(row ->
+                        row.getDirection() == KfeDirection.INBOUND
+                                && wallet.getId().equals(row.getDestinationWalletId()));
+        if (alreadyInboundForWallet) {
             return false;
         }
 
@@ -1214,6 +1233,11 @@ public class KfeColdWalletObservationService {
         statementService.recordUserStatement(
                 wallet.getUserId(), wallet.getId(), tx, statementPayload(tx));
         notifyColdInboundSafe(wallet, tx);
+        // First sight already settled (e.g. ≥ min confs) — also fire confirmed
+        // so clients don't stay on "detected" forever.
+        if (status == KfeTransactionStatus.SETTLED) {
+            notifyColdInboundConfirmedSafe(wallet, tx);
+        }
         return true;
     }
 
@@ -1233,6 +1257,49 @@ public class KfeColdWalletObservationService {
         } catch (RuntimeException exception) {
             log.warn(
                     "[KFE Cold Observation] inbound notify failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    private void notifyColdInboundConfirmedSafe(KfeWalletEntity wallet, KfeTransactionEntity tx) {
+        FinancialNotificationPort port = notificationPort.getIfAvailable();
+        if (port == null || tx == null) {
+            return;
+        }
+        try {
+            port.notifyDepositConfirmed(
+                    wallet.getUserId(),
+                    tx.getId(),
+                    wallet.getId(),
+                    "ONCHAIN",
+                    Math.max(0L, tx.getReceiverAmountSats()),
+                    Math.max(0, tx.getConfirmations()));
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Cold Observation] inbound confirm notify failed walletId={}: {}",
+                    wallet.getId(),
+                    exception.getMessage());
+        }
+    }
+
+    private void notifyColdInboundProgressSafe(
+            KfeWalletEntity wallet, KfeTransactionEntity tx, int confirmations) {
+        FinancialNotificationPort port = notificationPort.getIfAvailable();
+        if (port == null || tx == null) {
+            return;
+        }
+        try {
+            port.notifyDepositConfirmationProgress(
+                    wallet.getUserId(),
+                    tx.getId(),
+                    wallet.getId(),
+                    "ONCHAIN",
+                    Math.max(0L, tx.getReceiverAmountSats()),
+                    Math.max(0, confirmations));
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "[KFE Cold Observation] inbound progress notify failed walletId={}: {}",
                     wallet.getId(),
                     exception.getMessage());
         }
@@ -1599,6 +1666,34 @@ public class KfeColdWalletObservationService {
             String destinationAddress, long paymentSats, long feeSats, int confirmations) {
     }
 
+    /**
+     * Attributes payment/fee to <em>this</em> cold wallet when its UTXO is one input among many.
+     *
+     * <p>Still monitors the external spend (txid/dest stay on the row). Never books the full
+     * transaction {@code externalOut} — that can be funded by unrelated inputs (coinjoin /
+     * batch / Electrum consolidations on shared chains).
+     */
+    static WalletSpendAttribution attributeWalletSpend(
+            long fundingAmountSats, long changeToUs, long externalOut) {
+        long funding = Math.max(0L, fundingAmountSats);
+        long change = Math.max(0L, Math.min(changeToUs, funding));
+        long leftWallet = Math.max(0L, funding - change);
+        long external = Math.max(0L, externalOut);
+
+        if (external > 0L) {
+            long payment = Math.min(external, leftWallet);
+            long fee = Math.max(0L, leftWallet - payment);
+            return new WalletSpendAttribution(payment, fee, false);
+        }
+        if (change > 0L && change < funding) {
+            // Self-send / consolidate: only fee left the wallet.
+            return new WalletSpendAttribution(0L, leftWallet, true);
+        }
+        return new WalletSpendAttribution(leftWallet > 0L ? leftWallet : funding, 0L, false);
+    }
+
+    record WalletSpendAttribution(long paymentSats, long feeSats, boolean consolidationOnly) {}
+
     private SpendDetails resolveSpendDetails(
             BlockchainClient client, UUID walletId, String spendTxid, long fundingAmountSats) {
         long payment = Math.max(0L, fundingAmountSats);
@@ -1652,19 +1747,10 @@ public class KfeColdWalletObservationService {
                     }
                 }
             }
-            // Payment to external = funding - change back to us (fee is residual).
-            if (externalOut > 0L) {
-                payment = externalOut;
-                long residual = fundingAmountSats - changeToUs - externalOut;
-                fee = Math.max(0L, residual);
-            } else if (changeToUs > 0L && changeToUs < fundingAmountSats) {
-                // Self-send / consolidate: only fee left the wallet.
-                payment = 0L;
-                fee = Math.max(0L, fundingAmountSats - changeToUs);
-                if (fee <= 0L) {
-                    payment = fundingAmountSats;
-                }
-            }
+            WalletSpendAttribution attr =
+                    attributeWalletSpend(fundingAmountSats, changeToUs, externalOut);
+            payment = attr.paymentSats();
+            fee = attr.feeSats();
             if (payment <= 0L && fee > 0L) {
                 payment = fee; // show fee as movement when pure consolidation
                 fee = 0L;

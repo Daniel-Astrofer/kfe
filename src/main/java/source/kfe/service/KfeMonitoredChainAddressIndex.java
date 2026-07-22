@@ -74,9 +74,12 @@ public class KfeMonitoredChainAddressIndex {
     }
 
     public void rebuild() {
-        // Cold (WATCH_ONLY) + custodial receive addresses — so ZMQ can detect Electrum→custodial.
+        // Cold + custodial + INTERNAL receive addresses — ZMQ must see platform sinks too.
         List<KfeWalletEntity> monitoredWallets = walletRepository.findByKindInAndStatus(
-                List.of(KfeWalletKind.WATCH_ONLY, KfeWalletKind.CUSTODIAL_ONCHAIN),
+                List.of(
+                        KfeWalletKind.WATCH_ONLY,
+                        KfeWalletKind.CUSTODIAL_ONCHAIN,
+                        KfeWalletKind.INTERNAL),
                 KfeWalletStatus.ACTIVE);
         Map<String, UUID> addressToWallet = new HashMap<>();
         Map<String, UUID> fundingTxidToWallet = new HashMap<>();

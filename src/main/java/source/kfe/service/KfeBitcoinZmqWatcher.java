@@ -264,20 +264,18 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                         exception.getMessage());
             }
         }
-        // Custodial: create VALIDATING inbound + notify recipient immediately (credit later).
+        // Custodial / INTERNAL: ingest outputs at 0 conf immediately (listunspent often
+        // lags mempool). Debounced observeWallet still refreshes confs + available credit.
         KfeCustodialDepositObservationService custodialObs =
                 custodialDepositObservationService.getIfAvailable();
         if (custodialObs != null) {
-            for (UUID walletId : hits) {
-                try {
-                    custodialObs.observeWallet(walletId);
-                } catch (RuntimeException exception) {
-                    log.warn(
-                            "[KFE ZMQ] instant custodial observe failed walletId={} txid={}: {}",
-                            walletId,
-                            parsed.txid(),
-                            exception.getMessage());
-                }
+            try {
+                custodialObs.ingestZmqRawTx(parsed, hits);
+            } catch (RuntimeException exception) {
+                log.warn(
+                        "[KFE ZMQ] instant custodial ingest failed txid={}: {}",
+                        parsed.txid(),
+                        exception.getMessage());
             }
         }
         // Debounced full observe still runs for balance truth + confirmation refresh.
