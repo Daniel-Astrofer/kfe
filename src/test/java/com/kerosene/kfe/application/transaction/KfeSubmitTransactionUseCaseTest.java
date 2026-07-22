@@ -26,6 +26,7 @@ import source.kfe.service.KfeLightningLiquidityService;
 import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeResponseMapper;
+import source.kfe.service.KfeVaultMeshIntentService;
 
 import java.util.List;
 import java.util.Optional;
@@ -70,6 +71,7 @@ class KfeSubmitTransactionUseCaseTest {
     private final FinancialNotificationPort notificationPort = mock(FinancialNotificationPort.class);
     private final KfeExecutionOutboxService outboxService = mock(KfeExecutionOutboxService.class);
     private final KfeExecutionOutboxProcessor outboxProcessor = mock(KfeExecutionOutboxProcessor.class);
+    private final KfeVaultMeshIntentService vaultMeshIntentService = mock(KfeVaultMeshIntentService.class);
     /** No-op TX manager so TransactionTemplate runs the callback without a real DB. */
     private final org.springframework.transaction.PlatformTransactionManager transactionManager =
             new org.springframework.transaction.PlatformTransactionManager() {
@@ -113,6 +115,7 @@ class KfeSubmitTransactionUseCaseTest {
             notificationPort,
             outboxService,
             outboxProcessor,
+            vaultMeshIntentService,
             true,
             true,
             transactionManager
