@@ -205,9 +205,10 @@ public class KfeChannelDecisionService {
     }
 
     /**
-     * When enabled (mesh go-live), OPEN must be backed by a real CHANNELS→LND inject.
-     * Default adapter is fail-closed ({@code CHANNELS_MESH_INJECT_NOT_WIRED}) — LND wallet
-     * balance alone is not mesh CHANNELS capital.
+     * When enabled (mesh go-live), OPEN must be backed by a wired CHANNELS→LND inject gateway.
+     * Decision-gate is non-mutating; ledger soft-reserve happens in
+     * {@code KfeChannelLifecycleService.openChannel}. Default adapter is fail-closed
+     * ({@code CHANNELS_MESH_INJECT_NOT_WIRED}) — LND wallet balance alone is not mesh CHANNELS capital.
      */
     private ChannelFlagEvaluation evaluateChannelsMeshInject(long amountSats, String peerPubkey) {
         if (!requireChannelsMeshInject) {

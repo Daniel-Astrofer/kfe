@@ -10,7 +10,8 @@ import org.springframework.context.annotation.Configuration;
  * otherwise a fail-closed disabled gateway is registered.
  *
  * <p>CHANNELS→LND mesh inject defaults to {@link FailClosedChannelsMeshInjectGateway}
- * until a real adapter exists (no fake channel capital).
+ * when vaultmesh is off. With {@code kfe.vaultmesh.enabled=true},
+ * {@link VaultMeshChannelsMeshInjectGateway} soft-reserves CHANNELS capital at open.
  */
 @Configuration
 public class LightningChannelGatewayConfiguration {

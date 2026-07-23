@@ -14,22 +14,28 @@ import com.kerosene.kfe.dto.KfePpmAdjustRequest;
 import com.kerosene.kfe.dto.KfeRebalanceChannelRequest;
 import com.kerosene.kfe.model.KfeChannelOperationDecisionEntity;
 import com.kerosene.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.rail.ChannelsMeshInjectGateway;
 import com.kerosene.kfe.rail.LightningChannelGateway;
 import com.kerosene.kfe.repository.KfeChannelOperationDecisionRepository;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
 /**
  * Channel lifecycle: binary decision → optional LND execution → forensic row.
  * Structural costs are attributed under SYSTEM_PROFIT policy (profit wallet must exist).
+ *
+ * <p>When {@code kfe.channel.require-channels-mesh-inject=true}, OPEN couples mesh CHANNELS
+ * soft-reserve → LND {@code openChannel} → Intent commit (release on open failure).
  */
 @Service
 public class KfeChannelLifecycleService {
 
     private final KfeChannelDecisionService decisionService;
     private final LightningChannelGateway channelGateway;
+    private final ChannelsMeshInjectGateway channelsMeshInject;
     private final KfeChannelOperationDecisionRepository decisionRepository;
     private final KfeChannelRebalanceQueueService rebalanceQueueService;
     private final KfeHashService hashService;
@@ -38,10 +44,12 @@ public class KfeChannelLifecycleService {
     private final ObjectMapper objectMapper;
     private final boolean anchorsRequired;
     private final int defaultTimeLockDelta;
+    private final boolean requireChannelsMeshInject;
 
     public KfeChannelLifecycleService(
             KfeChannelDecisionService decisionService,
             LightningChannelGateway channelGateway,
+            ChannelsMeshInjectGateway channelsMeshInject,
             KfeChannelOperationDecisionRepository decisionRepository,
             KfeChannelRebalanceQueueService rebalanceQueueService,
             KfeHashService hashService,
@@ -49,9 +57,11 @@ public class KfeChannelLifecycleService {
             KfeAuditLogService auditLogService,
             ObjectMapper objectMapper,
             @Value("${kfe.channel.anchors-required:true}") boolean anchorsRequired,
-            @Value("${kfe.channel.default-time-lock-delta:80}") int defaultTimeLockDelta) {
+            @Value("${kfe.channel.default-time-lock-delta:80}") int defaultTimeLockDelta,
+            @Value("${kfe.channel.require-channels-mesh-inject:false}") boolean requireChannelsMeshInject) {
         this.decisionService = decisionService;
         this.channelGateway = channelGateway;
+        this.channelsMeshInject = channelsMeshInject;
         this.decisionRepository = decisionRepository;
         this.rebalanceQueueService = rebalanceQueueService;
         this.hashService = hashService;
@@ -60,6 +70,7 @@ public class KfeChannelLifecycleService {
         this.objectMapper = objectMapper;
         this.anchorsRequired = anchorsRequired;
         this.defaultTimeLockDelta = Math.max(18, defaultTimeLockDelta);
+        this.requireChannelsMeshInject = requireChannelsMeshInject;
     }
 
     @Transactional(readOnly = true)
@@ -97,14 +108,79 @@ public class KfeChannelLifecycleService {
         if (!channelGateway.isLive()) {
             return markReason(evaluated.id(), "GATEWAY_NOT_LIVE");
         }
+        if (hasOpenOrPendingChannelToPeer(request.peerPubkey())) {
+            return markReason(evaluated.id(), "CHANNEL_ALREADY_OPEN");
+        }
         systemWalletService.requireProfitWalletId();
-        LightningChannelGateway.OpenChannelResult result = channelGateway.openChannel(
-                new LightningChannelGateway.OpenChannelCommand(
-                        request.peerPubkey(),
-                        request.localAmountSats(),
-                        Boolean.TRUE.equals(request.privateChannel()),
-                        Boolean.TRUE.equals(request.spendUnconfirmed())));
+
+        String injectIntentId = null;
+        if (requireChannelsMeshInject) {
+            injectIntentId = "channels-inject-open-" + evaluated.id();
+            ChannelsMeshInjectGateway.DebitResult debit =
+                    channelsMeshInject.reserveOpen(
+                            injectIntentId, request.localAmountSats(), request.peerPubkey());
+            if (!debit.authorized()) {
+                return markReason(
+                        evaluated.id(),
+                        debit.reasonCode() == null
+                                ? "CHANNELS_INJECT_RESERVE_FAILED"
+                                : debit.reasonCode());
+            }
+            injectIntentId = debit.intentId() != null ? debit.intentId() : injectIntentId;
+        }
+
+        LightningChannelGateway.OpenChannelResult result;
+        try {
+            result = channelGateway.openChannel(
+                    new LightningChannelGateway.OpenChannelCommand(
+                            request.peerPubkey(),
+                            request.localAmountSats(),
+                            Boolean.TRUE.equals(request.privateChannel()),
+                            Boolean.TRUE.equals(request.spendUnconfirmed())));
+        } catch (RuntimeException ex) {
+            if (injectIntentId != null) {
+                ChannelsMeshInjectGateway.InjectResult released =
+                        channelsMeshInject.releaseOpen(
+                                injectIntentId, request.localAmountSats(), request.peerPubkey());
+                String suffix = released.authorized()
+                        ? ":COMPENSATED"
+                        : ":COMPENSATE_FAILED:"
+                                + (released.reasonCode() == null ? "UNKNOWN" : released.reasonCode());
+                return markReason(evaluated.id(), "OPEN_FAILED_AFTER_DEBIT" + suffix);
+            }
+            throw ex;
+        }
+
+        if (injectIntentId != null) {
+            ChannelsMeshInjectGateway.InjectResult committed =
+                    channelsMeshInject.commitOpen(injectIntentId);
+            if (!committed.authorized()) {
+                // Channel already opened on LND — fail-closed on ledger: surface commit gap.
+                return markExecuted(
+                        evaluated.id(),
+                        result.channelPoint(),
+                        "OPENED_COMMIT_FAILED:"
+                                + injectIntentId
+                                + ":"
+                                + (committed.reasonCode() == null ? "UNKNOWN" : committed.reasonCode()));
+            }
+            return markExecuted(
+                    evaluated.id(),
+                    result.channelPoint(),
+                    "MESH:" + injectIntentId + "|" + result.fundingTxid());
+        }
         return markExecuted(evaluated.id(), result.channelPoint(), result.fundingTxid());
+    }
+
+    private boolean hasOpenOrPendingChannelToPeer(String peerPubkey) {
+        if (peerPubkey == null || peerPubkey.isBlank()) {
+            return false;
+        }
+        String normalized = peerPubkey.trim().toLowerCase(Locale.ROOT);
+        return channelGateway.listChannels().stream()
+                .anyMatch(
+                        c -> c.remotePubkey() != null
+                                && normalized.equals(c.remotePubkey().trim().toLowerCase(Locale.ROOT)));
     }
 
     @Transactional

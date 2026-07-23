@@ -15,4 +15,19 @@ public class FailClosedChannelsMeshInjectGateway implements ChannelsMeshInjectGa
     public InjectResult authorizeOpen(long amountSats, String peerPubkey) {
         return InjectResult.refuse(REASON);
     }
+
+    @Override
+    public DebitResult reserveOpen(String intentId, long amountSats, String peerPubkey) {
+        return DebitResult.refuse(REASON);
+    }
+
+    @Override
+    public InjectResult releaseOpen(String intentId, long amountSats, String peerPubkey) {
+        return InjectResult.refuse(REASON);
+    }
+
+    @Override
+    public InjectResult commitOpen(String intentId) {
+        return InjectResult.refuse(REASON);
+    }
 }

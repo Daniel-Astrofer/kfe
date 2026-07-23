@@ -3,18 +3,23 @@ package com.kerosene.kfe.rail;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Locale;
-import java.util.UUID;
 
+/**
+ * Mesh CHANNELS inject: decision-gate is non-mutating; execution soft-reserves via
+ * {@code POST /v1/intent/reserve} with allowlisted destination {@code ln-channel-rebalance}.
+ */
 @Component
-@ConditionalOnBean(VaultMeshSettlementPort.class)
+@ConditionalOnProperty(name = "kfe.vaultmesh.enabled", havingValue = "true")
 public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGateway {
 
     private static final String BUCKET_CHANNELS = "CHANNELS";
+    /** Mesh allowlist tag for CHANNELS bucket (not LN peer pubkey). */
+    static final String CHANNELS_DESTINATION = "ln-channel-rebalance";
 
     private final VaultMeshSettlementPort settlementPort;
 
@@ -30,32 +35,95 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
         if (peerPubkey == null || peerPubkey.isBlank()) {
             return InjectResult.refuse("CHANNELS_INJECT_MISSING_PEER");
         }
+        // Decision-gate only — no ledger mutation. Capital is reserved at open execution.
+        return InjectResult.ok("CHANNELS_INJECT_READY");
+    }
 
-        String intentId = "channels-inject-open-" + UUID.randomUUID();
+    @Override
+    public DebitResult reserveOpen(String intentId, long amountSats, String peerPubkey) {
+        InjectResult gate = authorizeOpen(amountSats, peerPubkey);
+        if (!gate.authorized()) {
+            return DebitResult.refuse(gate.reasonCode());
+        }
+        if (intentId == null || intentId.isBlank()) {
+            return DebitResult.refuse("CHANNELS_INJECT_MISSING_INTENT_ID");
+        }
+
         VaultMeshIntent intent =
                 new VaultMeshIntent(
-                        intentId,
+                        intentId.trim(),
                         BUCKET_CHANNELS,
-                        peerPubkey.trim().toLowerCase(Locale.ROOT),
+                        CHANNELS_DESTINATION,
                         amountSats,
                         "",
                         Instant.now().toEpochMilli());
 
         VaultMeshReceipt receipt;
         try {
-            receipt = settlementPort.submitIntent(intent);
+            receipt = settlementPort.reserveIntent(intent);
         } catch (RuntimeException ex) {
-            return InjectResult.refuse(
+            return DebitResult.refuse(
                     "CHANNELS_INJECT_VAULT_HTTP_ERROR:" + ex.getClass().getSimpleName());
         }
 
         if (receipt == null) {
-            return InjectResult.refuse("CHANNELS_INJECT_NULL_RECEIPT");
+            return DebitResult.refuse("CHANNELS_INJECT_NULL_RECEIPT");
         }
         if (receipt.status() != VaultMeshReceipt.Status.ACCEPTED) {
-            return InjectResult.refuse("CHANNELS_INJECT_REJECTED:" + receipt.reasonCode());
+            return DebitResult.refuse(
+                    "CHANNELS_INJECT_RESERVE_REJECTED:"
+                            + (receipt.reasonCode() == null ? "UNKNOWN" : receipt.reasonCode()));
         }
-        return InjectResult.ok("CHANNELS_INJECT_ACCEPTED:" + receipt.intentId());
+        String reservedId = receipt.intentId() == null || receipt.intentId().isBlank()
+                ? intentId.trim()
+                : receipt.intentId();
+        return DebitResult.ok(reservedId, "CHANNELS_INJECT_RESERVED:" + reservedId);
+    }
+
+    @Override
+    public InjectResult releaseOpen(String intentId, long amountSats, String peerPubkey) {
+        if (intentId == null || intentId.isBlank()) {
+            return InjectResult.refuse("CHANNELS_INJECT_MISSING_INTENT_ID");
+        }
+        VaultMeshReceipt receipt;
+        try {
+            receipt = settlementPort.releaseIntent(intentId.trim(), BUCKET_CHANNELS, amountSats);
+        } catch (RuntimeException ex) {
+            return InjectResult.refuse(
+                    "CHANNELS_INJECT_RELEASE_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+        if (receipt == null) {
+            return InjectResult.refuse("CHANNELS_INJECT_RELEASE_NULL_RECEIPT");
+        }
+        if (receipt.status() != VaultMeshReceipt.Status.ACCEPTED) {
+            return InjectResult.refuse(
+                    "CHANNELS_INJECT_RELEASE_REJECTED:"
+                            + (receipt.reasonCode() == null ? "UNKNOWN" : receipt.reasonCode()));
+        }
+        return InjectResult.ok(
+                "CHANNELS_INJECT_RELEASED:" + intentId.trim().toLowerCase(Locale.ROOT));
+    }
+
+    @Override
+    public InjectResult commitOpen(String intentId) {
+        if (intentId == null || intentId.isBlank()) {
+            return InjectResult.refuse("CHANNELS_INJECT_MISSING_INTENT_ID");
+        }
+        VaultMeshReceipt receipt;
+        try {
+            receipt = settlementPort.commitIntent(intentId.trim());
+        } catch (RuntimeException ex) {
+            return InjectResult.refuse(
+                    "CHANNELS_INJECT_COMMIT_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+        if (receipt == null) {
+            return InjectResult.refuse("CHANNELS_INJECT_COMMIT_NULL_RECEIPT");
+        }
+        if (receipt.status() != VaultMeshReceipt.Status.ACCEPTED) {
+            return InjectResult.refuse(
+                    "CHANNELS_INJECT_COMMIT_REJECTED:"
+                            + (receipt.reasonCode() == null ? "UNKNOWN" : receipt.reasonCode()));
+        }
+        return InjectResult.ok("CHANNELS_INJECT_COMMITTED:" + intentId.trim());
     }
 }
-

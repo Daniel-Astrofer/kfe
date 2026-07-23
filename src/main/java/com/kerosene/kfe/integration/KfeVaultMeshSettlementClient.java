@@ -168,6 +168,95 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     }
 
     @Override
+    public VaultMeshReceipt reserveIntent(VaultMeshIntent intent) {
+        if (intent == null || intent.intentId() == null || intent.intentId().isBlank()) {
+            return rejected("INVALID_INTENT", null);
+        }
+        return postIntentPhase("/v1/intent/reserve", intentPayload(intent), intent.intentId());
+    }
+
+    @Override
+    public VaultMeshReceipt releaseIntent(String intentId, String bucket, long amountSats) {
+        if (intentId == null || intentId.isBlank()) {
+            return rejected("INVALID_INTENT", null);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("intent_id", intentId.trim());
+        payload.put(
+                "bucket",
+                bucket == null || bucket.isBlank() ? "USERS" : bucket.trim().toUpperCase(Locale.ROOT));
+        payload.put("amount_sats", amountSats);
+        return postIntentPhase("/v1/intent/release", payload, intentId.trim());
+    }
+
+    @Override
+    public VaultMeshReceipt commitIntent(String intentId) {
+        if (intentId == null || intentId.isBlank()) {
+            return rejected("INVALID_INTENT", null);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("intent_id", intentId.trim());
+        return postIntentPhase("/v1/intent/commit", payload, intentId.trim());
+    }
+
+    private Map<String, Object> intentPayload(VaultMeshIntent intent) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("intent_id", intent.intentId().trim());
+        payload.put(
+                "bucket",
+                intent.bucket() == null || intent.bucket().isBlank()
+                        ? "USERS"
+                        : intent.bucket().trim().toUpperCase(Locale.ROOT));
+        payload.put("destination", intent.destination() == null ? "" : intent.destination());
+        payload.put("amount_sats", intent.amountSats());
+        return payload;
+    }
+
+    private VaultMeshReceipt postIntentPhase(String pathSuffix, Map<String, Object> payload, String intentId) {
+        String path = baseUrl + pathSuffix;
+        try {
+            String json = objectMapper.writeValueAsString(payload);
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(path, new HttpEntity<>(json, authHeaders(true)), Map.class);
+            return toIntentPhaseReceipt(intentId, response.getBody());
+        } catch (RestClientResponseException ex) {
+            Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
+            if (body != null && body.get("error") != null) {
+                return meshError(intentId, String.valueOf(body.get("error")));
+            }
+            return rejected("MESH_HTTP_" + ex.getStatusCode().value(), intentId);
+        } catch (Exception ex) {
+            return rejected("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName(), intentId);
+        }
+    }
+
+    private VaultMeshReceipt toIntentPhaseReceipt(String intentId, Map<?, ?> body) {
+        if (body == null) {
+            return rejected("EMPTY_RESPONSE", intentId);
+        }
+        if (body.get("error") != null) {
+            return meshError(intentId, String.valueOf(body.get("error")));
+        }
+        String status = body.get("status") == null ? "" : String.valueOf(body.get("status"));
+        String lower = status.toLowerCase(Locale.ROOT);
+        if (lower.contains("reserved")
+                || lower.contains("accepted")
+                || lower.contains("released")
+                || lower.contains("committed")
+                || lower.isBlank()) {
+            String id = body.get("intent_id") == null ? intentId : String.valueOf(body.get("intent_id"));
+            return new VaultMeshReceipt(
+                    id,
+                    VaultMeshReceipt.Status.ACCEPTED,
+                    status.isBlank() ? null : status.toUpperCase(Locale.ROOT),
+                    null,
+                    Instant.now().toEpochMilli());
+        }
+        return rejected("UNEXPECTED_INTENT_STATUS:" + status, intentId);
+    }
+
+    @Override
     public VaultMeshDepositInfo getUsersDepositAddress() {
         String path = baseUrl + "/v1/bitcoin/deposit";
         try {
