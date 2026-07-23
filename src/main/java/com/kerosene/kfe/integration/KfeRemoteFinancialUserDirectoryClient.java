@@ -1,4 +1,4 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

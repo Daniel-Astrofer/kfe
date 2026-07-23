@@ -1,4 +1,4 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.client.RestTemplateBuilder;

@@ -1,4 +1,4 @@
-package source.kfe.application.settlement;
+package com.kerosene.kfe.application.settlement;
 
 import java.util.Collections;
 import java.util.EnumMap;

@@ -1,13 +1,13 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 import source.common.financial.FinancialRailProductionSafetyPort;
-import source.kfe.rail.ConfigurableCustodyGateway;
-import source.kfe.rail.KfeOnchainPaymentGateway;
-import source.kfe.rail.LightningInvoiceGateway;
-import source.kfe.rail.LightningPaymentGateway;
+import com.kerosene.kfe.rail.ConfigurableCustodyGateway;
+import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
+import com.kerosene.kfe.rail.LightningInvoiceGateway;
+import com.kerosene.kfe.rail.LightningPaymentGateway;
 
 import java.util.ArrayList;
 import java.util.List;

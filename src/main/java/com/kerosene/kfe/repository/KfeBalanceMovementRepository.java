@@ -1,8 +1,8 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeBalanceMovementEntity;
+import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 
 import java.util.Collection;
 import java.util.UUID;

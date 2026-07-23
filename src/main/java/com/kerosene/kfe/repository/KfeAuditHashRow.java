@@ -1,4 +1,4 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 public interface KfeAuditHashRow {
 

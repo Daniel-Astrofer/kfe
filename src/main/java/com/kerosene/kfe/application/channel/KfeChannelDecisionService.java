@@ -1,12 +1,12 @@
-package source.kfe.application.channel;
+package com.kerosene.kfe.application.channel;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import source.kfe.model.KfeChannelOperationType;
-import source.kfe.rail.LightningChannelGateway;
-import source.kfe.service.KfeLightningJammingGuard;
-import source.kfe.service.KfeQuorumGateway;
-import source.kfe.service.KfeSystemWalletService;
+import com.kerosene.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.service.KfeLightningJammingGuard;
+import com.kerosene.kfe.service.KfeQuorumGateway;
+import com.kerosene.kfe.service.KfeSystemWalletService;
 
 import java.util.ArrayList;
 import java.util.Arrays;

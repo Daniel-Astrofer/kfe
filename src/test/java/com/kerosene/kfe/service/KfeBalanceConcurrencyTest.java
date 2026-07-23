@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeBalanceEntity;
-import source.kfe.model.KfeBalanceId;
+import com.kerosene.kfe.model.KfeBalanceEntity;
+import com.kerosene.kfe.model.KfeBalanceId;
 
 import java.util.ArrayList;
 import java.util.List;

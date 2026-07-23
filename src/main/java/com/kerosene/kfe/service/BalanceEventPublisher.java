@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,7 +7,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import source.kfe.integration.KfeRemoteStompRelayClient;
+import com.kerosene.kfe.integration.KfeRemoteStompRelayClient;
 
 import java.math.BigDecimal;
 

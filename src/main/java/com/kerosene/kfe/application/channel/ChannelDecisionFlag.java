@@ -1,4 +1,4 @@
-package source.kfe.application.channel;
+package com.kerosene.kfe.application.channel;
 
 /**
  * Binary flags for channel lifecycle decisions (architecture doc §3).

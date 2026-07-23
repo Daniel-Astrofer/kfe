@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 public interface KfeOnchainPaymentGateway {
 

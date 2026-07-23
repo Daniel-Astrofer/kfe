@@ -1,11 +1,11 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeLightningLiquidityReservationEntity;
-import source.kfe.model.KfeLiquidityReservationStatus;
+import com.kerosene.kfe.model.KfeLightningLiquidityReservationEntity;
+import com.kerosene.kfe.model.KfeLiquidityReservationStatus;
 
 import java.util.Optional;
 import java.util.UUID;

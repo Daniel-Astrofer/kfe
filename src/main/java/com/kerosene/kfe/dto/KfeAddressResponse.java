@@ -1,7 +1,7 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfeWalletAddressRole;
-import source.kfe.model.KfeWalletAddressStatus;
+import com.kerosene.kfe.model.KfeWalletAddressRole;
+import com.kerosene.kfe.model.KfeWalletAddressStatus;
 
 import java.time.Instant;
 import java.util.UUID;

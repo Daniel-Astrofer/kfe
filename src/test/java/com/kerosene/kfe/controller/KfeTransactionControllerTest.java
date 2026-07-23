@@ -1,9 +1,9 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.TestingAuthenticationToken;
-import source.kfe.application.financial.FinancialApi;
-import source.kfe.dto.KfeTransactionResponse;
+import com.kerosene.kfe.application.financial.FinancialApi;
+import com.kerosene.kfe.dto.KfeTransactionResponse;
 
 import java.time.Instant;
 import java.util.List;

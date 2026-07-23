@@ -1,7 +1,7 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
-import source.kfe.model.KfeBalanceEntity;
+import com.kerosene.kfe.model.KfeBalanceEntity;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 /**
  * Quality of an on-chain balance probe. Higher ordinal is not strictly better — policy

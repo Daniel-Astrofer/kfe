@@ -1,11 +1,11 @@
-package source.kfe.application.transaction;
+package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Component;
-import source.kfe.dto.KfeSubmitTransactionRequest;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.service.BitcoinAddressValidator;
-import source.kfe.service.KfePlatformLightningPolicy;
+import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.service.BitcoinAddressValidator;
+import com.kerosene.kfe.service.KfePlatformLightningPolicy;
 
 @Component
 public class KfeTransactionRequestValidator {
@@ -65,7 +65,7 @@ public class KfeTransactionRequestValidator {
         }
         if (request.rail() == KfeRail.LIGHTNING) {
             // Accept BOLT11, LNURL1…, Lightning Address (user@domain), or keysend node pubkey.
-            if (!source.kfe.rail.LightningDestinationClassifier.isValidLightningOutboundReference(ref)) {
+            if (!com.kerosene.kfe.rail.LightningDestinationClassifier.isValidLightningOutboundReference(ref)) {
                 throw new IllegalArgumentException(
                         "Invalid Lightning destination for externalReference. "
                                 + "Use a BOLT11 invoice (ln…), LNURL1…, Lightning Address (user@domain), "

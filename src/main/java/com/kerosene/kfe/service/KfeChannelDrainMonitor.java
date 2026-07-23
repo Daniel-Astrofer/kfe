@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6,12 +6,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.application.channel.ChannelDecisionResult;
-import source.kfe.application.channel.KfeChannelDecisionService;
-import source.kfe.dto.KfeChannelDecisionResponse;
-import source.kfe.dto.KfePpmAdjustRequest;
-import source.kfe.dto.KfeRebalanceChannelRequest;
-import source.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.application.channel.ChannelDecisionResult;
+import com.kerosene.kfe.application.channel.KfeChannelDecisionService;
+import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
+import com.kerosene.kfe.dto.KfePpmAdjustRequest;
+import com.kerosene.kfe.dto.KfeRebalanceChannelRequest;
+import com.kerosene.kfe.rail.LightningChannelGateway;
 
 /**
  * Periodic channel health: detect drain, queue rebalances, apply PPM deterrent when enabled.

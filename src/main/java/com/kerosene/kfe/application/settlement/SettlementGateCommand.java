@@ -1,7 +1,7 @@
-package source.kfe.application.settlement;
+package com.kerosene.kfe.application.settlement;
 
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 import java.util.UUID;
 

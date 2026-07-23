@@ -1,4 +1,4 @@
-package source.kfe.model;
+package com.kerosene.kfe.model;
 
 public enum KfeLiquidityReservationStatus {
     /** Capacity locked until Lightning payment resolves. */

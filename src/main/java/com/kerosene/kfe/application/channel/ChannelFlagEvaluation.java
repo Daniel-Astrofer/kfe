@@ -1,4 +1,4 @@
-package source.kfe.application.channel;
+package com.kerosene.kfe.application.channel;
 
 public record ChannelFlagEvaluation(
         ChannelDecisionFlag flag,

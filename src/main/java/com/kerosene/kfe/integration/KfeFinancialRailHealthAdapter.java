@@ -1,10 +1,10 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import source.common.financial.FinancialRailHealthPort;
-import source.kfe.rail.CustodyGateway;
-import source.kfe.rail.ExternalRailProviderRegistry;
+import com.kerosene.kfe.rail.CustodyGateway;
+import com.kerosene.kfe.rail.ExternalRailProviderRegistry;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

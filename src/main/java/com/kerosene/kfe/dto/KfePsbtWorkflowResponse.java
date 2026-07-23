@@ -1,6 +1,6 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfePsbtWorkflowStatus;
+import com.kerosene.kfe.model.KfePsbtWorkflowStatus;
 
 import java.time.LocalDateTime;
 import java.util.List;

@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 import java.util.Locale;
 import java.util.regex.Matcher;

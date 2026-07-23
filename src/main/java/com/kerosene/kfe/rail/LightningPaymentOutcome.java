@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 /**
  * Normalized LND / Lightning payment terminal classification for binary settlement.

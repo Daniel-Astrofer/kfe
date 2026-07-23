@@ -1,4 +1,4 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 import java.time.Instant;
 import java.util.UUID;

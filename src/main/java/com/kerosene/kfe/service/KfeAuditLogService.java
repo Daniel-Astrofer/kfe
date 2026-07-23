@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -7,9 +7,9 @@ import org.springframework.transaction.annotation.Transactional;
 import source.common.audit.AuditEventPayloadSanitizer;
 import source.common.audit.AuditEventType;
 import source.common.audit.StructuredAuditLogger;
-import source.kfe.model.KfeAuditLogEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.repository.KfeAuditLogRepository;
+import com.kerosene.kfe.model.KfeAuditLogEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.repository.KfeAuditLogRepository;
 
 import java.util.Map;
 import java.util.UUID;

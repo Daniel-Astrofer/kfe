@@ -1,12 +1,12 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import source.kfe.dto.KfeFeeTierResponse;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.dto.KfeFeeTierResponse;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 import java.time.Instant;
 import java.util.List;

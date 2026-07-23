@@ -1,10 +1,10 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeChannelRebalanceJobEntity;
-import source.kfe.model.KfeChannelRebalanceJobStatus;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobEntity;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobStatus;
 
 import java.util.Collection;
 import java.util.List;

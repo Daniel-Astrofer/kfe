@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import source.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 
 import java.util.List;
 import java.util.UUID;

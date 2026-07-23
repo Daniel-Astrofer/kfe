@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6,19 +6,19 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.application.transaction.KfeLedgerMovementTypes;
-import source.kfe.model.KfeBalanceMovementEntity;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfeExecutionOutboxRepository;
-import source.kfe.repository.KfeIdempotencyRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
+import com.kerosene.kfe.model.KfeBalanceMovementEntity;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.repository.KfeIdempotencyRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -339,7 +339,7 @@ public class KfeInboundSettlementService {
     }
 
     private void updateIdempotency(KfeTransactionEntity tx) {
-        idempotencyRepository.findById(new source.kfe.model.KfeIdempotencyId(
+        idempotencyRepository.findById(new com.kerosene.kfe.model.KfeIdempotencyId(
                         tx.getUserId(),
                         tx.getIdempotencyKey()))
                 .ifPresent(entity -> {

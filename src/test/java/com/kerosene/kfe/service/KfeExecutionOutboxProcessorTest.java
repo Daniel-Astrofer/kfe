@@ -1,9 +1,9 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.rail.CustodyGateway;
-import source.kfe.rail.KfeOnchainPaymentGateway;
-import source.kfe.rail.LightningPaymentGateway;
+import com.kerosene.kfe.rail.CustodyGateway;
+import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
+import com.kerosene.kfe.rail.LightningPaymentGateway;
 
 import java.util.UUID;
 

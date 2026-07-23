@@ -1,4 +1,4 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;

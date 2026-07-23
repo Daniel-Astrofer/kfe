@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import source.common.financial.FinancialRailHealthPort;
-import source.kfe.integration.KfeFinancialRailHealthAdapter;
+import com.kerosene.kfe.integration.KfeFinancialRailHealthAdapter;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
-import source.kfe.dto.KfeAuditRootResponse;
-import source.kfe.model.KfeAuditLogEntity;
-import source.kfe.repository.KfeAuditHashRow;
-import source.kfe.repository.KfeAuditLogRepository;
+import com.kerosene.kfe.dto.KfeAuditRootResponse;
+import com.kerosene.kfe.model.KfeAuditLogEntity;
+import com.kerosene.kfe.repository.KfeAuditHashRow;
+import com.kerosene.kfe.repository.KfeAuditLogRepository;
 
 import java.util.List;
 import java.util.Optional;

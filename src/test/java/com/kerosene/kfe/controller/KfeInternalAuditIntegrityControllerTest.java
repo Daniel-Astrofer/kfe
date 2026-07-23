@@ -1,9 +1,9 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 import source.common.financial.FinancialAuditIntegrityPort;
-import source.kfe.integration.KfeFinancialAuditIntegrityAdapter;
+import com.kerosene.kfe.integration.KfeFinancialAuditIntegrityAdapter;
 
 import java.time.LocalDateTime;
 

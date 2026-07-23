@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import source.kfe.rail.KfeOnchainPaymentGateway;
+import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
 
 import java.util.UUID;
 

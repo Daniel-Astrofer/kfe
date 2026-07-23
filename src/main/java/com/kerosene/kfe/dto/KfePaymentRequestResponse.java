@@ -1,8 +1,8 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfePaymentRequestStatus;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfePaymentRequestStatus;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionStatus;
 
 import java.time.Instant;
 import java.util.UUID;

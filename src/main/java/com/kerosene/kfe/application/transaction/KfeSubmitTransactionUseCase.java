@@ -1,4 +1,4 @@
-package source.kfe.application.transaction;
+package com.kerosene.kfe.application.transaction;
 
 import org.hibernate.exception.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -10,30 +10,30 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialTickerPort;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.application.settlement.BinarySettlementGate;
-import source.kfe.application.settlement.SettlementGateCommand;
-import source.kfe.application.settlement.SettlementGateResult;
-import source.kfe.dto.KfeSubmitTransactionRequest;
-import source.kfe.dto.KfeTransactionResponse;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeIdempotencyEntity;
-import source.kfe.model.KfePaymentRequestEntity;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.service.KfeBalanceService;
-import source.kfe.service.KfeDashboardPublisher;
-import source.kfe.service.KfeExecutionOutboxProcessor;
-import source.kfe.service.KfeExecutionOutboxService;
-import source.kfe.service.KfeFeeSettlementService;
-import source.kfe.service.KfeHashService;
-import source.kfe.service.KfeLightningLiquidityService;
-import source.kfe.service.KfeNetworkFeeEstimateService;
-import source.kfe.service.KfePricingService;
-import source.kfe.service.KfeResponseMapper;
-import source.kfe.service.KfeVaultMeshIntentService;
+import com.kerosene.kfe.application.settlement.BinarySettlementGate;
+import com.kerosene.kfe.application.settlement.SettlementGateCommand;
+import com.kerosene.kfe.application.settlement.SettlementGateResult;
+import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
+import com.kerosene.kfe.dto.KfeTransactionResponse;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeIdempotencyEntity;
+import com.kerosene.kfe.model.KfePaymentRequestEntity;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.service.KfeBalanceService;
+import com.kerosene.kfe.service.KfeDashboardPublisher;
+import com.kerosene.kfe.service.KfeExecutionOutboxProcessor;
+import com.kerosene.kfe.service.KfeExecutionOutboxService;
+import com.kerosene.kfe.service.KfeFeeSettlementService;
+import com.kerosene.kfe.service.KfeHashService;
+import com.kerosene.kfe.service.KfeLightningLiquidityService;
+import com.kerosene.kfe.service.KfeNetworkFeeEstimateService;
+import com.kerosene.kfe.service.KfePricingService;
+import com.kerosene.kfe.service.KfeResponseMapper;
+import com.kerosene.kfe.service.KfeVaultMeshIntentService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -369,6 +369,11 @@ public class KfeSubmitTransactionUseCase {
             return;
         }
         if (request.direction() != KfeDirection.OUTBOUND) {
+            return;
+        }
+        // On-chain mesh-only spends are Intent-gated in /v1/bitcoin/sign-psbt; skip DTO-hash
+        // notify to avoid anti-nonce collisions with the PSBT session.
+        if (request.rail() == KfeRail.ONCHAIN && vaultMeshIntentService.isMeshOnly()) {
             return;
         }
         try {

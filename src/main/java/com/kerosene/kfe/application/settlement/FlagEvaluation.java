@@ -1,4 +1,4 @@
-package source.kfe.application.settlement;
+package com.kerosene.kfe.application.settlement;
 
 /**
  * Single binary flag outcome for forensic audit.

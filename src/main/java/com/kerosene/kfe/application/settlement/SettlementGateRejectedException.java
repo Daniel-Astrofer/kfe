@@ -1,4 +1,4 @@
-package source.kfe.application.settlement;
+package com.kerosene.kfe.application.settlement;
 
 /**
  * Thrown when the binary settlement gate product is 0.

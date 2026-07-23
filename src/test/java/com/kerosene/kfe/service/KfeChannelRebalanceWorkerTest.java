@@ -1,12 +1,12 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.model.KfeChannelRebalanceJobEntity;
-import source.kfe.model.KfeChannelRebalanceJobStatus;
-import source.kfe.rail.LightningChannelGateway;
-import source.kfe.rail.LightningLoopClient;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobEntity;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobStatus;
+import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.rail.LightningLoopClient;
 
 import java.util.Optional;
 import java.util.UUID;

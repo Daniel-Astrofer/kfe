@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import java.time.ZoneOffset;
 
@@ -12,19 +12,19 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeWalletAddressEntity;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletStatus;
-import source.kfe.rail.BlockchainClient;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletAddressEntity;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.rail.BlockchainClient;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletAddressRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletAddressRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -63,7 +63,7 @@ public class KfeColdWalletObservationService {
     private final KfeStatementService statementService;
     private final KfeDashboardPublisher dashboardPublisher;
     private final ObjectProvider<KfeOnchainBalanceSyncService> balanceSyncService;
-    private final source.kfe.repository.KfeBalanceRepository balanceRepository;
+    private final com.kerosene.kfe.repository.KfeBalanceRepository balanceRepository;
     private final KfeWalletDescriptorResolver descriptorResolver;
     private final ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex;
     private final ObjectProvider<FinancialNotificationPort> notificationPort;
@@ -82,7 +82,7 @@ public class KfeColdWalletObservationService {
             KfeStatementService statementService,
             KfeDashboardPublisher dashboardPublisher,
             ObjectProvider<KfeOnchainBalanceSyncService> balanceSyncService,
-            source.kfe.repository.KfeBalanceRepository balanceRepository,
+            com.kerosene.kfe.repository.KfeBalanceRepository balanceRepository,
             KfeWalletDescriptorResolver descriptorResolver,
             ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex,
             ObjectProvider<FinancialNotificationPort> notificationPort,
@@ -657,7 +657,7 @@ public class KfeColdWalletObservationService {
             }
             int confs = -1;
             try {
-                if (client instanceof source.kfe.rail.BitcoinCoreRpcClient core) {
+                if (client instanceof com.kerosene.kfe.rail.BitcoinCoreRpcClient core) {
                     var found = core.findTransactionConfirmations(tx.getBlockchainTxid().trim());
                     if (found.isPresent()) {
                         confs = found.getAsInt();
@@ -884,11 +884,11 @@ public class KfeColdWalletObservationService {
             if (addressRepository.findFirstByAddressIgnoreCase(trimmed).isPresent()) {
                 return;
             }
-            source.kfe.model.KfeWalletAddressEntity row = new source.kfe.model.KfeWalletAddressEntity();
+            com.kerosene.kfe.model.KfeWalletAddressEntity row = new com.kerosene.kfe.model.KfeWalletAddressEntity();
             row.setWalletId(walletId);
             row.setAddress(trimmed);
-            row.setAddressRole(source.kfe.model.KfeWalletAddressRole.MONITOR);
-            row.setStatus(source.kfe.model.KfeWalletAddressStatus.ACTIVE);
+            row.setAddressRole(com.kerosene.kfe.model.KfeWalletAddressRole.MONITOR);
+            row.setStatus(com.kerosene.kfe.model.KfeWalletAddressStatus.ACTIVE);
             addressRepository.save(row);
         } catch (RuntimeException ignored) {
             // unique race — ignore
@@ -1354,7 +1354,7 @@ public class KfeColdWalletObservationService {
             if (tx.getStatus() == KfeTransactionStatus.SETTLED && tx.getConfirmations() >= 6) {
                 continue;
             }
-            if (!(client instanceof source.kfe.rail.BitcoinCoreRpcClient core)) {
+            if (!(client instanceof com.kerosene.kfe.rail.BitcoinCoreRpcClient core)) {
                 // Generic client: try getrawtransaction confirmations field if present.
                 try {
                     var raw = client.getRawTransaction(tx.getBlockchainTxid().trim(), true);
@@ -1379,7 +1379,7 @@ public class KfeColdWalletObservationService {
     private long readObservedSats(UUID walletId) {
         return balanceRepository.findByWalletIds(List.of(walletId)).stream()
                 .findFirst()
-                .map(source.kfe.model.KfeBalanceEntity::getObservedSats)
+                .map(com.kerosene.kfe.model.KfeBalanceEntity::getObservedSats)
                 .orElse(0L);
     }
 

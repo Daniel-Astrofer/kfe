@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.application.transaction.KfeSubmitTransactionUseCase;
-import source.kfe.application.transaction.KfeTransactionIdempotencyUseCase;
-import source.kfe.dto.KfeSubmitTransactionRequest;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.application.transaction.KfeSubmitTransactionUseCase;
+import com.kerosene.kfe.application.transaction.KfeTransactionIdempotencyUseCase;
+import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 import java.util.UUID;
 

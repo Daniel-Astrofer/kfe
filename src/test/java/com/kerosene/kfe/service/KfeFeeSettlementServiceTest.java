@@ -1,10 +1,10 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.application.transaction.KfeBalanceMovementRecorder;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
 import java.util.UUID;
 
@@ -21,7 +21,7 @@ class KfeFeeSettlementServiceTest {
     private final KfeBalanceMovementRepository movementRepository = mock(KfeBalanceMovementRepository.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
     @SuppressWarnings("unchecked")
-    private final org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeBalanceMetrics>
+    private final org.springframework.beans.factory.ObjectProvider<com.kerosene.kfe.service.KfeBalanceMetrics>
             metricsProvider = mock(org.springframework.beans.factory.ObjectProvider.class);
     private final KfeFeeSettlementService service = new KfeFeeSettlementService(
             systemWalletService,

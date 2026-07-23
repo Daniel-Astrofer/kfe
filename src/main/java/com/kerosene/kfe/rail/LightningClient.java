@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 /**
  * Interface for Lightning Network node operations (LND, Core Lightning, BTCPay).

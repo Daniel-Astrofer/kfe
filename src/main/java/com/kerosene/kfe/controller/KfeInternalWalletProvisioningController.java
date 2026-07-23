@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import source.common.dto.ApiResponse;
 import source.common.financial.FinancialWalletProvisioningRequest;
-import source.kfe.integration.KfeFinancialWalletProvisioningAdapter;
+import com.kerosene.kfe.integration.KfeFinancialWalletProvisioningAdapter;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

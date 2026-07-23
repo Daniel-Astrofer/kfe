@@ -1,4 +1,4 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;

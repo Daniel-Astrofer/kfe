@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.bitcoinj.core.Address;
 import org.bitcoinj.core.AddressFormatException;
@@ -9,7 +9,7 @@ import org.bitcoinj.params.TestNet3Params;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import source.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 @Component
 public class BitcoinAddressValidator {

@@ -1,23 +1,23 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.application.transaction.KfeBalanceMovementRecorder;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeWalletAddressEntity;
-import source.kfe.model.KfeWalletAddressStatus;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletStatus;
-import source.kfe.rail.BlockchainClient;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletAddressRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeWalletAddressEntity;
+import com.kerosene.kfe.model.KfeWalletAddressStatus;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.rail.BlockchainClient;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletAddressRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Optional;

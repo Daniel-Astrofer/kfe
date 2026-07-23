@@ -1,6 +1,6 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfeWalletName;
+import com.kerosene.kfe.model.KfeWalletName;
 
 public record KfeWalletNameOption(
         KfeWalletName name,

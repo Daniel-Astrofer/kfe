@@ -1,11 +1,11 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 import java.util.UUID;
 

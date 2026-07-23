@@ -1,9 +1,9 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeRail;
 
 import java.time.LocalDateTime;
 import java.util.UUID;

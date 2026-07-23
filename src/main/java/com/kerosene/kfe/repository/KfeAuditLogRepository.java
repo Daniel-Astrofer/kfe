@@ -1,11 +1,11 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeAuditLogEntity;
+import com.kerosene.kfe.model.KfeAuditLogEntity;
 
 import java.util.List;
 import java.util.Optional;

@@ -1,20 +1,20 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.model.KfeBalanceMovementEntity;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfeExecutionOutboxRepository;
-import source.kfe.repository.KfeIdempotencyRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.model.KfeBalanceMovementEntity;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.repository.KfeIdempotencyRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -53,7 +53,7 @@ class KfeExecutionTransactionHelperTest {
     private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositProvider =
             mock(ObjectProvider.class);
     @SuppressWarnings("unchecked")
-    private final ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+    private final ObjectProvider<com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
             platformRouterProvider = mock(ObjectProvider.class);
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfePlatformPeerInboundService> peerInboundProvider =

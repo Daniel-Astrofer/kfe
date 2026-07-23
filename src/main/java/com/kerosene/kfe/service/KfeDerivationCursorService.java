@@ -1,9 +1,9 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.model.KfeDerivationCursorEntity;
-import source.kfe.repository.KfeDerivationCursorRepository;
+import com.kerosene.kfe.model.KfeDerivationCursorEntity;
+import com.kerosene.kfe.repository.KfeDerivationCursorRepository;
 
 @Service
 public class KfeDerivationCursorService {

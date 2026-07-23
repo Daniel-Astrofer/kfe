@@ -1,4 +1,4 @@
-package source.kfe.config;
+package com.kerosene.kfe.config;
 
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -26,7 +26,7 @@ public class KfeStringCryptoConverterConfig {
 
     @PostConstruct
     void wireConverter() {
-        // Converter is not a Spring bean under scanBasePackages=source.kfe — set static port.
+        // Converter is not a Spring bean under scanBasePackages=com.kerosene.kfe — set static port.
         StringCryptoConverter holder = new StringCryptoConverter();
         holder.setCryptoPort(cryptoPort);
         log.info("[KfeStringCryptoConverterConfig] StringCryptoConverter crypto port wired.");

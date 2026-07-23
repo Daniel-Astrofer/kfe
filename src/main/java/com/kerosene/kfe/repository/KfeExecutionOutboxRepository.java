@@ -1,4 +1,4 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
@@ -8,7 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 
 import java.time.LocalDateTime;
 import java.util.Collection;

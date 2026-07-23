@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
 
 import java.util.List;
 import java.util.Optional;

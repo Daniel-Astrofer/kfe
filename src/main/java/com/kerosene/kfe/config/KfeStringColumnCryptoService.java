@@ -1,4 +1,4 @@
-package source.kfe.config;
+package com.kerosene.kfe.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +20,7 @@ import java.util.Base64;
  * AES-256-GCM column crypto for KFE standalone (xpub/descriptor at rest).
  *
  * <p>The main auth server uses {@code CosignerSecretService} + Vault. KFE is a
- * separate process and only scans {@code source.kfe}, so it needs its own port
+ * separate process and only scans {@code com.kerosene.kfe}, so it needs its own port
  * or {@link source.common.persistence.StringCryptoConverter} fails with
  * "crypto port is not initialized".
  *

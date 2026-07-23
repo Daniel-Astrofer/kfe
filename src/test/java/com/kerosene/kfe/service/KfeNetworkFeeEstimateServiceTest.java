@@ -1,10 +1,10 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;

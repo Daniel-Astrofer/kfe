@@ -1,9 +1,9 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;

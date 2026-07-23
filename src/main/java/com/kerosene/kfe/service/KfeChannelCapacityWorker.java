@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6,12 +6,12 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import source.kfe.dto.KfeChannelDecisionResponse;
-import source.kfe.dto.KfeCloseChannelRequest;
-import source.kfe.dto.KfeOpenChannelRequest;
-import source.kfe.model.KfeChannelCapacityIntent;
-import source.kfe.model.KfeChannelCapacityJobEntity;
-import source.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
+import com.kerosene.kfe.dto.KfeCloseChannelRequest;
+import com.kerosene.kfe.dto.KfeOpenChannelRequest;
+import com.kerosene.kfe.model.KfeChannelCapacityIntent;
+import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
+import com.kerosene.kfe.rail.LightningChannelGateway;
 
 import java.util.List;
 import java.util.UUID;

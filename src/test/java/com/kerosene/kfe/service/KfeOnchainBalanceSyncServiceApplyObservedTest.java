@@ -1,7 +1,7 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletKind;
 
 import java.time.LocalDateTime;
 

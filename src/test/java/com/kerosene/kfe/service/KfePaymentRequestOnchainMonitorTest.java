@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,17 +10,17 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.application.transaction.KfeBalanceMovementRecorder;
-import source.kfe.model.KfePaymentRequestEntity;
-import source.kfe.model.KfePaymentRequestStatus;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.rail.BlockchainClient;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfePaymentRequestRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.model.KfePaymentRequestEntity;
+import com.kerosene.kfe.model.KfePaymentRequestStatus;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.rail.BlockchainClient;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfePaymentRequestRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -99,7 +99,7 @@ class KfePaymentRequestOnchainMonitorTest {
                         """));
         when(transactionRepository.findByProviderReferenceForUpdate(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).thenReturn(List.of());
-        when(pricingService.quote(KfeRail.ONCHAIN, source.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
+        when(pricingService.quote(KfeRail.ONCHAIN, com.kerosene.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
                 .thenReturn(new KfePricingService.Quote(10_000L, 9_910L, 0L, 0L, 90L));
         when(transactionRepository.save(any(KfeTransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -143,7 +143,7 @@ class KfePaymentRequestOnchainMonitorTest {
                 .thenReturn(Optional.of(validRequest));
         when(transactionRepository.findByProviderReferenceForUpdate(failingTxid)).thenReturn(List.of());
         when(transactionRepository.findByProviderReferenceForUpdate(validTxid)).thenReturn(List.of());
-        when(pricingService.quote(KfeRail.ONCHAIN, source.kfe.model.KfeDirection.INBOUND, 20_000L, 0L))
+        when(pricingService.quote(KfeRail.ONCHAIN, com.kerosene.kfe.model.KfeDirection.INBOUND, 20_000L, 0L))
                 .thenReturn(new KfePricingService.Quote(20_000L, 19_820L, 0L, 0L, 180L));
         when(transactionRepository.save(any(KfeTransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -164,7 +164,7 @@ class KfePaymentRequestOnchainMonitorTest {
         when(paymentRequestRepository.findByIdForUpdate(requestId)).thenReturn(Optional.of(request));
         when(transactionRepository.findByProviderReferenceForUpdate(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).thenReturn(List.of());
-        when(pricingService.quote(KfeRail.ONCHAIN, source.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
+        when(pricingService.quote(KfeRail.ONCHAIN, com.kerosene.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
                 .thenReturn(new KfePricingService.Quote(10_000L, 9_910L, 0L, 0L, 90L));
         when(transactionRepository.save(any(KfeTransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -196,7 +196,7 @@ class KfePaymentRequestOnchainMonitorTest {
         when(paymentRequestRepository.findByIdForUpdate(requestId)).thenReturn(Optional.of(request));
         when(transactionRepository.findByProviderReferenceForUpdate(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).thenReturn(List.of());
-        when(pricingService.quote(KfeRail.ONCHAIN, source.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
+        when(pricingService.quote(KfeRail.ONCHAIN, com.kerosene.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
                 .thenReturn(new KfePricingService.Quote(10_000L, 9_910L, 0L, 0L, 90L));
         when(transactionRepository.save(any(KfeTransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -218,7 +218,7 @@ class KfePaymentRequestOnchainMonitorTest {
         tx.setUserId(request.getUserId());
         tx.setIdempotencyKey("payment-request:" + request.getId() + ":aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         tx.setRail(KfeRail.ONCHAIN);
-        tx.setDirection(source.kfe.model.KfeDirection.INBOUND);
+        tx.setDirection(com.kerosene.kfe.model.KfeDirection.INBOUND);
         tx.setDestinationWalletId(request.getWalletId());
         tx.setProviderReference("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         tx.setBlockchainTxid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -228,7 +228,7 @@ class KfePaymentRequestOnchainMonitorTest {
         when(paymentRequestRepository.findByIdForUpdate(request.getId())).thenReturn(Optional.of(request));
         when(transactionRepository.findByProviderReferenceForUpdate(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).thenReturn(List.of(tx));
-        when(pricingService.quote(KfeRail.ONCHAIN, source.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
+        when(pricingService.quote(KfeRail.ONCHAIN, com.kerosene.kfe.model.KfeDirection.INBOUND, 10_000L, 0L))
                 .thenReturn(new KfePricingService.Quote(10_000L, 9_910L, 0L, 0L, 90L));
         when(transactionRepository.save(any(KfeTransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 

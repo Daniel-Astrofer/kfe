@@ -1,4 +1,4 @@
-package source.kfe.model;
+package com.kerosene.kfe.model;
 
 import org.junit.jupiter.api.Test;
 

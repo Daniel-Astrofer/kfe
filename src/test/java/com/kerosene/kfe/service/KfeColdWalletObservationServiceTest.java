@@ -1,20 +1,20 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeWalletAddressEntity;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletStatus;
-import source.kfe.rail.BlockchainClient;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletAddressRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletAddressEntity;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.rail.BlockchainClient;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletAddressRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -40,8 +40,8 @@ class KfeColdWalletObservationServiceTest {
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfeOnchainBalanceSyncService> balanceSyncProvider = mock(ObjectProvider.class);
     private final BlockchainClient blockchainClient = mock(BlockchainClient.class);
-    private final source.kfe.repository.KfeBalanceRepository balanceRepository =
-            mock(source.kfe.repository.KfeBalanceRepository.class);
+    private final com.kerosene.kfe.repository.KfeBalanceRepository balanceRepository =
+            mock(com.kerosene.kfe.repository.KfeBalanceRepository.class);
     private final KfeWalletDescriptorResolver descriptorResolver =
             mock(KfeWalletDescriptorResolver.class);
     private final org.springframework.transaction.support.TransactionTemplate transactionTemplate =

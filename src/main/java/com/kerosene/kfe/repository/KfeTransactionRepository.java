@@ -1,4 +1,4 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -7,10 +7,10 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
 
 import java.util.Collection;
 import java.util.List;

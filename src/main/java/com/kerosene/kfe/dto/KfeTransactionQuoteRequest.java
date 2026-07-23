@@ -1,9 +1,9 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 public record KfeTransactionQuoteRequest(
         @NotNull KfeRail rail,

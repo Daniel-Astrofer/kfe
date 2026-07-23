@@ -1,7 +1,7 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
 
 import java.time.Instant;
 import java.util.List;

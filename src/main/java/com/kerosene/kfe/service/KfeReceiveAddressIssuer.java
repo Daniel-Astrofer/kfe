@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import source.common.infra.logging.LogSanitizer;
 import source.common.service.AddressDerivationService;
-import source.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 @Service
 public class KfeReceiveAddressIssuer {

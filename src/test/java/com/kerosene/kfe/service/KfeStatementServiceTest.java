@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -9,12 +9,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeUserStatementEntity;
-import source.kfe.repository.KfeUserStatementRepository;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeUserStatementEntity;
+import com.kerosene.kfe.repository.KfeUserStatementRepository;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -44,7 +44,7 @@ class KfeStatementServiceTest {
     private Query nativeQuery;
 
     @Mock
-    private org.springframework.beans.factory.ObjectProvider<source.kfe.service.TransactionEventPublisher>
+    private org.springframework.beans.factory.ObjectProvider<com.kerosene.kfe.service.TransactionEventPublisher>
             transactionEventPublisher;
 
     private KfeStatementService service;

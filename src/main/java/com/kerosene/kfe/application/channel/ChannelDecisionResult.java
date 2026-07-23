@@ -1,6 +1,6 @@
-package source.kfe.application.channel;
+package com.kerosene.kfe.application.channel;
 
-import source.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.model.KfeChannelOperationType;
 
 import java.util.LinkedHashMap;
 import java.util.List;

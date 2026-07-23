@@ -1,10 +1,10 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeChannelOperationDecisionEntity;
-import source.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.model.KfeChannelOperationDecisionEntity;
+import com.kerosene.kfe.model.KfeChannelOperationType;
 
 import java.util.List;
 import java.util.UUID;

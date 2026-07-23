@@ -1,4 +1,4 @@
-package source.kfe.model;
+package com.kerosene.kfe.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;

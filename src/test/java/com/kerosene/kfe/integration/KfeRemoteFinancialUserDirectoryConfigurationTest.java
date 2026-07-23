@@ -1,10 +1,10 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import source.common.financial.FinancialUserDirectoryPort;
-import source.kfe.config.KfeFinancialFallbackConfiguration;
+import com.kerosene.kfe.config.KfeFinancialFallbackConfiguration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

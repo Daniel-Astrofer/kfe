@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.rail.LightningClient;
+import com.kerosene.kfe.rail.LightningClient;
 
 import java.util.Set;
 

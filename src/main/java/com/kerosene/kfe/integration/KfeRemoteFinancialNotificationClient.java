@@ -1,4 +1,4 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

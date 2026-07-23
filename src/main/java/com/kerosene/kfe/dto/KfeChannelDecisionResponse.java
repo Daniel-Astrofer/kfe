@@ -1,6 +1,6 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.model.KfeChannelOperationType;
 
 import java.time.LocalDateTime;
 import java.util.UUID;

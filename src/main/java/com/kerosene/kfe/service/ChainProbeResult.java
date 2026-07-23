@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 /**
  * Result of probing on-chain balance for a wallet. Carries quality metadata so writers

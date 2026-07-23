@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;

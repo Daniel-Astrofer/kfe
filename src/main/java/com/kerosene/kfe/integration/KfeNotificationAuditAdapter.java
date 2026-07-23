@@ -1,9 +1,9 @@
-package source.kfe.integration;
+package com.kerosene.kfe.integration;
 
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import source.common.financial.FinancialNotificationAuditPort;
-import source.kfe.service.KfeAuditLogService;
+import com.kerosene.kfe.service.KfeAuditLogService;
 
 import java.util.Map;
 

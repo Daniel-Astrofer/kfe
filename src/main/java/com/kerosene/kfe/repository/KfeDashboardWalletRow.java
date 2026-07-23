@@ -1,4 +1,4 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import java.time.LocalDateTime;
 import java.util.UUID;

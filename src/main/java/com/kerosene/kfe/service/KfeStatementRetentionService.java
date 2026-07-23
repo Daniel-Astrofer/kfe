@@ -1,9 +1,9 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.repository.KfeUserStatementRepository;
+import com.kerosene.kfe.repository.KfeUserStatementRepository;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;

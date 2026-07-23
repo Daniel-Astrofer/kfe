@@ -1,4 +1,4 @@
-package source.kfe.model;
+package com.kerosene.kfe.model;
 
 import java.util.Arrays;
 import java.text.Normalizer;

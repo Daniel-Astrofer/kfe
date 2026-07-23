@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -12,15 +12,15 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import source.common.dto.ApiResponse;
-import source.kfe.application.financial.FinancialApi;
-import source.kfe.dto.KfeAddressResponse;
-import source.kfe.dto.KfeColdWalletPsbtRequest;
-import source.kfe.dto.KfeColdWalletPsbtResponse;
-import source.kfe.dto.KfeCreateWalletRequest;
-import source.kfe.dto.KfeUpdateWalletRequest;
-import source.kfe.dto.KfeUtxoResponse;
-import source.kfe.dto.KfeWalletNameOption;
-import source.kfe.dto.KfeWalletResponse;
+import com.kerosene.kfe.application.financial.FinancialApi;
+import com.kerosene.kfe.dto.KfeAddressResponse;
+import com.kerosene.kfe.dto.KfeColdWalletPsbtRequest;
+import com.kerosene.kfe.dto.KfeColdWalletPsbtResponse;
+import com.kerosene.kfe.dto.KfeCreateWalletRequest;
+import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
+import com.kerosene.kfe.dto.KfeUtxoResponse;
+import com.kerosene.kfe.dto.KfeWalletNameOption;
+import com.kerosene.kfe.dto.KfeWalletResponse;
 
 import java.util.List;
 import java.util.UUID;

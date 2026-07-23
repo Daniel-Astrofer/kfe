@@ -1,4 +1,4 @@
-package source.kfe.runtime;
+package com.kerosene.kfe.runtime;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

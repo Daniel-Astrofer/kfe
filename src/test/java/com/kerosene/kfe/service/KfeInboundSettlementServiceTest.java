@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -6,18 +6,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import source.common.financial.FinancialNotificationPort;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.model.KfeIdempotencyEntity;
-import source.kfe.model.KfeIdempotencyId;
-import source.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeIdempotencyEntity;
+import com.kerosene.kfe.model.KfeIdempotencyId;
+import com.kerosene.kfe.model.KfeRail;
 
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfeExecutionOutboxRepository;
-import source.kfe.repository.KfeIdempotencyRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.repository.KfeIdempotencyRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -78,11 +78,11 @@ class KfeInboundSettlementServiceTest {
     @BeforeEach
     void setUp() {
         @SuppressWarnings("unchecked")
-        org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
+        org.springframework.beans.factory.ObjectProvider<com.kerosene.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
                 org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
         org.mockito.Mockito.lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
         @SuppressWarnings("unchecked")
-        org.springframework.beans.factory.ObjectProvider<source.kfe.service.KfeBalanceMetrics> metrics =
+        org.springframework.beans.factory.ObjectProvider<com.kerosene.kfe.service.KfeBalanceMetrics> metrics =
                 org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
         org.mockito.Mockito.lenient().when(metrics.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient()
@@ -193,7 +193,7 @@ class KfeInboundSettlementServiceTest {
         tx.setGrossAmountSats(1000L);
         tx.setReceiverAmountSats(1000L);
         tx.setRail(KfeRail.ONCHAIN);
-        tx.setDirection(source.kfe.model.KfeDirection.INBOUND);
+        tx.setDirection(com.kerosene.kfe.model.KfeDirection.INBOUND);
         
         tx.setIdempotencyKey("idem123");
 

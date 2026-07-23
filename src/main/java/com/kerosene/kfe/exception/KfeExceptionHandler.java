@@ -1,4 +1,4 @@
-package source.kfe.exception;
+package com.kerosene.kfe.exception;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

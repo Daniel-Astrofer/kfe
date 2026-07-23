@@ -1,17 +1,17 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.application.channel.ChannelDecisionResult;
-import source.kfe.application.channel.ChannelFlagEvaluation;
-import source.kfe.application.channel.ChannelDecisionFlag;
-import source.kfe.application.channel.KfeChannelDecisionService;
-import source.kfe.dto.KfeChannelDecisionResponse;
-import source.kfe.dto.KfeOpenChannelRequest;
-import source.kfe.model.KfeChannelCapacityJobEntity;
-import source.kfe.model.KfeChannelOperationType;
-import source.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.application.channel.ChannelDecisionResult;
+import com.kerosene.kfe.application.channel.ChannelFlagEvaluation;
+import com.kerosene.kfe.application.channel.ChannelDecisionFlag;
+import com.kerosene.kfe.application.channel.KfeChannelDecisionService;
+import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
+import com.kerosene.kfe.dto.KfeOpenChannelRequest;
+import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
+import com.kerosene.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.rail.LightningChannelGateway;
 
 import java.time.LocalDateTime;
 import java.util.List;

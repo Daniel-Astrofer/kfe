@@ -1,9 +1,9 @@
-package source.kfe.application.transaction;
+package com.kerosene.kfe.application.transaction;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
-import source.kfe.model.KfeBalanceMovementEntity;
-import source.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.model.KfeBalanceMovementEntity;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
 import java.util.UUID;
 

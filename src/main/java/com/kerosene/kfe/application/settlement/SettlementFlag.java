@@ -1,4 +1,4 @@
-package source.kfe.application.settlement;
+package com.kerosene.kfe.application.settlement;
 
 /**
  * Binary settlement flags (doc: Motor KFE — liquidação binária).

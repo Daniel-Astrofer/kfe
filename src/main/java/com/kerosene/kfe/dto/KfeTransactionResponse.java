@@ -1,8 +1,8 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
-import source.kfe.model.KfeDirection;
-import source.kfe.model.KfeRail;
-import source.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.model.KfeTransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;

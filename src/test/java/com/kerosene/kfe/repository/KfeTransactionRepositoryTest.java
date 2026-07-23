@@ -1,4 +1,4 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jpa.repository.Query;

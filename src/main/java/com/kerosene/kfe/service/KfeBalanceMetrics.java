@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
-import source.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletKind;
 
 /**
  * Micrometer counters/gauges for balance consistency (PR3).

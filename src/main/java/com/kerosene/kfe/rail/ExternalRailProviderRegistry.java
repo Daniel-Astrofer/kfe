@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.util.ClassUtils;
-import source.kfe.rail.KfeOnchainPaymentGateway;
+import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
 
 public class ExternalRailProviderRegistry {
 

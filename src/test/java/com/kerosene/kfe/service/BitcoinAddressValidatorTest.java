@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.bitcoinj.core.LegacyAddress;
 import org.bitcoinj.core.SegwitAddress;
@@ -7,7 +7,7 @@ import org.bitcoinj.params.RegTestParams;
 import org.bitcoinj.params.TestNet3Params;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;

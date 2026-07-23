@@ -1,4 +1,4 @@
-package source.kfe.dto;
+package com.kerosene.kfe.dto;
 
 public record KfeChannelSnapshotResponse(
         String channelPoint,

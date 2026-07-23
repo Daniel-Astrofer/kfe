@@ -1,8 +1,8 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeBalanceEntity;
-import source.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeBalanceEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
 
 import java.util.UUID;
 

@@ -1,4 +1,4 @@
-package source.kfe.config;
+package com.kerosene.kfe.config;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.DefaultApplicationArguments;

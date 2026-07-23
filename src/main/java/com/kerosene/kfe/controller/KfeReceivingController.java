@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -7,8 +7,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import source.common.dto.ApiResponse;
-import source.kfe.application.financial.FinancialApi;
-import source.kfe.dto.KfeReceivingCapabilitiesResponse;
+import com.kerosene.kfe.application.financial.FinancialApi;
+import com.kerosene.kfe.dto.KfeReceivingCapabilitiesResponse;
 
 @RestController
 @RequestMapping("/kfe")

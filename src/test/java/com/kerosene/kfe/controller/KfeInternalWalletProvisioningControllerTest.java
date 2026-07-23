@@ -1,9 +1,9 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 import source.common.financial.FinancialWalletProvisioningRequest;
-import source.kfe.integration.KfeFinancialWalletProvisioningAdapter;
+import com.kerosene.kfe.integration.KfeFinancialWalletProvisioningAdapter;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;

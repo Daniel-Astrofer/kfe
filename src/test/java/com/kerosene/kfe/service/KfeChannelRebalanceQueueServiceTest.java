@@ -1,12 +1,12 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeBalanceEntity;
-import source.kfe.model.KfeBalanceId;
-import source.kfe.model.KfeChannelRebalanceJobEntity;
-import source.kfe.model.KfeChannelRebalanceJobStatus;
-import source.kfe.repository.KfeChannelRebalanceJobRepository;
+import com.kerosene.kfe.model.KfeBalanceEntity;
+import com.kerosene.kfe.model.KfeBalanceId;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobEntity;
+import com.kerosene.kfe.model.KfeChannelRebalanceJobStatus;
+import com.kerosene.kfe.repository.KfeChannelRebalanceJobRepository;
 
 import java.util.EnumSet;
 import java.util.Optional;

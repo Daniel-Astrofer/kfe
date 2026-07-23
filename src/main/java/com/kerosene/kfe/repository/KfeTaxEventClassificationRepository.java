@@ -1,8 +1,8 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import source.kfe.model.KfeTaxEventClassificationEntity;
+import com.kerosene.kfe.model.KfeTaxEventClassificationEntity;
 
 import java.util.List;
 import java.util.Optional;

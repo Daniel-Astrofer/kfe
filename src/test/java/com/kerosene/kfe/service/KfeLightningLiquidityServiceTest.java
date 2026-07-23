@@ -1,13 +1,13 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.model.KfeLightningLiquidityReservationEntity;
-import source.kfe.model.KfeLiquidityReservationStatus;
-import source.kfe.rail.LightningClient;
-import source.kfe.rail.LightningPaymentGateway;
-import source.kfe.repository.KfeLightningLiquidityReservationRepository;
+import com.kerosene.kfe.model.KfeLightningLiquidityReservationEntity;
+import com.kerosene.kfe.model.KfeLiquidityReservationStatus;
+import com.kerosene.kfe.rail.LightningClient;
+import com.kerosene.kfe.rail.LightningPaymentGateway;
+import com.kerosene.kfe.repository.KfeLightningLiquidityReservationRepository;
 
 import java.util.Optional;
 import java.util.UUID;

@@ -1,11 +1,11 @@
-package source.kfe.runtime;
+package com.kerosene.kfe.runtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.kfe.rail.BitcoinCoreRpcClient;
-import source.kfe.service.KfeSystemWalletService;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.service.KfeSystemWalletService;
 
 import java.util.UUID;
 

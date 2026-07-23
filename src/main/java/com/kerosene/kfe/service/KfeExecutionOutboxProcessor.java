@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import source.kfe.rail.CustodyGateway;
-import source.kfe.rail.KfeOnchainPaymentGateway;
-import source.kfe.rail.LightningPaymentGateway;
-import source.kfe.rail.LightningPaymentInFlightException;
+import com.kerosene.kfe.rail.CustodyGateway;
+import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
+import com.kerosene.kfe.rail.LightningPaymentGateway;
+import com.kerosene.kfe.rail.LightningPaymentInFlightException;
 
 import java.util.List;
 import java.util.UUID;
@@ -81,13 +81,13 @@ public class KfeExecutionOutboxProcessor {
         // LND permanent payment/invoice errors often arrive as IllegalStateException
         // wrappers; classify by message so txs do not spin EXECUTING forever.
         String message = safeMessage(exception);
-        if (source.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(message)) {
+        if (com.kerosene.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(message)) {
             return false;
         }
         Throwable cause = exception.getCause();
         while (cause != null) {
             String causeMessage = cause.getMessage();
-            if (source.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(causeMessage)) {
+            if (com.kerosene.kfe.rail.LndRestLightningClient.isPermanentLightningClientError(causeMessage)) {
                 return false;
             }
             if (cause instanceof IllegalArgumentException || cause instanceof UnsupportedOperationException) {

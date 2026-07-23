@@ -1,11 +1,11 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import source.common.service.AddressDerivationService;
-import source.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletEntity;
 
 import java.util.Locale;
 import java.util.regex.Matcher;

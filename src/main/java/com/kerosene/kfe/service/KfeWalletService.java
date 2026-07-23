@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import java.time.ZoneOffset;
 
@@ -10,22 +10,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.service.AddressDerivationService;
-import source.kfe.dto.KfeAddressResponse;
-import source.kfe.dto.KfeCreateWalletRequest;
-import source.kfe.dto.KfeUpdateWalletRequest;
-import source.kfe.dto.KfeWalletNameOption;
-import source.kfe.dto.KfeWalletResponse;
-import source.kfe.model.KfeWalletAddressEntity;
-import source.kfe.model.KfeWalletAddressRole;
-import source.kfe.model.KfeWalletAddressStatus;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletName;
-import source.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.dto.KfeAddressResponse;
+import com.kerosene.kfe.dto.KfeCreateWalletRequest;
+import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
+import com.kerosene.kfe.dto.KfeWalletNameOption;
+import com.kerosene.kfe.dto.KfeWalletResponse;
+import com.kerosene.kfe.model.KfeWalletAddressEntity;
+import com.kerosene.kfe.model.KfeWalletAddressRole;
+import com.kerosene.kfe.model.KfeWalletAddressStatus;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletName;
+import com.kerosene.kfe.model.KfeWalletStatus;
 import source.common.exception.FinancialProviderUnavailableException;
-import source.kfe.rail.BitcoinCoreRpcClient;
-import source.kfe.repository.KfeWalletAddressRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.repository.KfeWalletAddressRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Map;

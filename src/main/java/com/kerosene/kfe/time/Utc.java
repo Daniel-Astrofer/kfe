@@ -1,4 +1,4 @@
-package source.kfe.time;
+package com.kerosene.kfe.time;
 
 import java.time.Instant;
 import java.time.LocalDateTime;

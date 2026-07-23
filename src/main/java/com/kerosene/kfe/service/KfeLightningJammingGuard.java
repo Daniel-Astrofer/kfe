@@ -1,9 +1,9 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import source.kfe.rail.LightningClient;
+import com.kerosene.kfe.rail.LightningClient;
 
 import java.util.Arrays;
 import java.util.Locale;

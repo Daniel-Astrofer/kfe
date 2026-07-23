@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,17 +11,17 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import source.kfe.model.KfeBalanceMovementEntity;
-import source.kfe.model.KfeExecutionOutboxEntity;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeTransactionStatus;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.repository.KfeBalanceMovementRepository;
-import source.kfe.repository.KfeExecutionOutboxRepository;
-import source.kfe.repository.KfeIdempotencyRepository;
-import source.kfe.repository.KfeTransactionRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.model.KfeBalanceMovementEntity;
+import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
+import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
+import com.kerosene.kfe.repository.KfeIdempotencyRepository;
+import com.kerosene.kfe.repository.KfeTransactionRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -52,7 +52,7 @@ public class KfeExecutionTransactionHelper {
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService;
     private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService;
-    private final ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+    private final ObjectProvider<com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
             platformOnchainDestinationRouter;
     private final ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService;
     private final int maxRetryAttempts;
@@ -74,7 +74,7 @@ public class KfeExecutionTransactionHelper {
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService,
             ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
-            ObjectProvider<source.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
+            ObjectProvider<com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
                     platformOnchainDestinationRouter,
             ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService,
             @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
@@ -902,7 +902,7 @@ public class KfeExecutionTransactionHelper {
     }
 
     private void updateIdempotency(KfeTransactionEntity tx) {
-        idempotencyRepository.findById(new source.kfe.model.KfeIdempotencyId(tx.getUserId(), tx.getIdempotencyKey())).ifPresent(entity -> {
+        idempotencyRepository.findById(new com.kerosene.kfe.model.KfeIdempotencyId(tx.getUserId(), tx.getIdempotencyKey())).ifPresent(entity -> {
             entity.setStatus(tx.getStatus().name());
             idempotencyRepository.save(entity);
         });

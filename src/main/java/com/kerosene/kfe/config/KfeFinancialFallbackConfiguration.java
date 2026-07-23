@@ -1,4 +1,4 @@
-package source.kfe.config;
+package com.kerosene.kfe.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;

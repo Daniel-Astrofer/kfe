@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 /**
  * Payment left LND in a non-terminal state — must not settle or permanently fail the reserve.

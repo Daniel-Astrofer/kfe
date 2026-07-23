@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;

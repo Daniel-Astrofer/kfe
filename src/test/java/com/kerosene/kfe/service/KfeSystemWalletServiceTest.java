@@ -1,10 +1,10 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletStatus;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.Optional;
 import java.util.UUID;

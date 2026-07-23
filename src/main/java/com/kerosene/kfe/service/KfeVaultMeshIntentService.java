@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +13,7 @@ import java.util.UUID;
 
 /**
  * Fire-and-forget bridge: builds a vault-mesh Intent and submits via the port.
- * Does not replace rail executors / mpc-sidecar (F4 dual-path safe).
+ * On-chain mesh-only spends use Intent-gated PSBT signing in the rail executor instead.
  */
 @Service
 public class KfeVaultMeshIntentService {
@@ -22,14 +22,17 @@ public class KfeVaultMeshIntentService {
 
     private final VaultMeshSettlementPort settlementPort;
     private final boolean submitOnOutbound;
+    private final boolean meshOnly;
     private final String defaultBucket;
 
     public KfeVaultMeshIntentService(
             VaultMeshSettlementPort settlementPort,
             @Value("${kfe.vaultmesh.submit-on-outbound:false}") boolean submitOnOutbound,
+            @Value("${kfe.vaultmesh.mesh-only:false}") boolean meshOnly,
             @Value("${kfe.vaultmesh.default-bucket:USERS}") String defaultBucket) {
         this.settlementPort = settlementPort;
         this.submitOnOutbound = submitOnOutbound;
+        this.meshOnly = meshOnly;
         this.defaultBucket = defaultBucket;
     }
 
@@ -56,5 +59,9 @@ public class KfeVaultMeshIntentService {
 
     public boolean isSubmitOnOutboundEnabled() {
         return submitOnOutbound;
+    }
+
+    public boolean isMeshOnly() {
+        return meshOnly;
     }
 }

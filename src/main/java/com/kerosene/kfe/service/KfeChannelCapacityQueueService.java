@@ -1,14 +1,14 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.model.KfeChannelCapacityIntent;
-import source.kfe.model.KfeChannelCapacityJobEntity;
-import source.kfe.model.KfeChannelCapacityJobStatus;
-import source.kfe.repository.KfeChannelCapacityJobRepository;
+import com.kerosene.kfe.model.KfeChannelCapacityIntent;
+import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
+import com.kerosene.kfe.model.KfeChannelCapacityJobStatus;
+import com.kerosene.kfe.repository.KfeChannelCapacityJobRepository;
 
 import java.util.EnumSet;
 import java.util.List;

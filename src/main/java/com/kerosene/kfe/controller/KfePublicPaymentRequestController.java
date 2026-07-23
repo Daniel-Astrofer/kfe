@@ -1,4 +1,4 @@
-package source.kfe.controller;
+package com.kerosene.kfe.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,9 +10,9 @@ import org.springframework.web.bind.annotation.RestController;
 import source.common.dto.ApiResponse;
 import source.common.exception.ErrorCodes;
 import source.common.exception.StructuredPlatformException;
-import source.kfe.dto.KfePaymentRequestResponse;
-import source.kfe.service.KfePaymentRequestService;
-import source.kfe.service.KfePlatformLightningPolicy;
+import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.service.KfePaymentRequestService;
+import com.kerosene.kfe.service.KfePlatformLightningPolicy;
 
 @RestController
 @RequestMapping("/api/public/kfe/payment-requests")

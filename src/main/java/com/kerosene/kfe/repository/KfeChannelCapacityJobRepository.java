@@ -1,10 +1,10 @@
-package source.kfe.repository;
+package com.kerosene.kfe.repository;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import source.kfe.model.KfeChannelCapacityIntent;
-import source.kfe.model.KfeChannelCapacityJobEntity;
-import source.kfe.model.KfeChannelCapacityJobStatus;
+import com.kerosene.kfe.model.KfeChannelCapacityIntent;
+import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
+import com.kerosene.kfe.model.KfeChannelCapacityJobStatus;
 
 import java.util.Collection;
 import java.util.List;

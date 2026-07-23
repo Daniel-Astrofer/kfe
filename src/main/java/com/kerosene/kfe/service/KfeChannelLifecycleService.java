@@ -1,21 +1,21 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.application.channel.ChannelDecisionResult;
-import source.kfe.application.channel.KfeChannelDecisionService;
-import source.kfe.dto.KfeChannelDecisionResponse;
-import source.kfe.dto.KfeChannelSnapshotResponse;
-import source.kfe.dto.KfeCloseChannelRequest;
-import source.kfe.dto.KfeOpenChannelRequest;
-import source.kfe.dto.KfePpmAdjustRequest;
-import source.kfe.dto.KfeRebalanceChannelRequest;
-import source.kfe.model.KfeChannelOperationDecisionEntity;
-import source.kfe.model.KfeChannelOperationType;
-import source.kfe.rail.LightningChannelGateway;
-import source.kfe.repository.KfeChannelOperationDecisionRepository;
+import com.kerosene.kfe.application.channel.ChannelDecisionResult;
+import com.kerosene.kfe.application.channel.KfeChannelDecisionService;
+import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
+import com.kerosene.kfe.dto.KfeChannelSnapshotResponse;
+import com.kerosene.kfe.dto.KfeCloseChannelRequest;
+import com.kerosene.kfe.dto.KfeOpenChannelRequest;
+import com.kerosene.kfe.dto.KfePpmAdjustRequest;
+import com.kerosene.kfe.dto.KfeRebalanceChannelRequest;
+import com.kerosene.kfe.model.KfeChannelOperationDecisionEntity;
+import com.kerosene.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.repository.KfeChannelOperationDecisionRepository;
 
 import java.util.List;
 import java.util.Map;
@@ -148,7 +148,7 @@ public class KfeChannelLifecycleService {
     }
 
     @Transactional(readOnly = true)
-    public java.util.List<source.kfe.model.KfeChannelRebalanceJobEntity> pendingRebalances(int limit) {
+    public java.util.List<com.kerosene.kfe.model.KfeChannelRebalanceJobEntity> pendingRebalances(int limit) {
         return rebalanceQueueService.pending(limit);
     }
 

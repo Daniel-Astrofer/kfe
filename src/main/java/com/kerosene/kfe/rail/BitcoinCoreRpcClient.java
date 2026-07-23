@@ -1,4 +1,4 @@
-package source.kfe.rail;
+package com.kerosene.kfe.rail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -247,12 +247,30 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             long amountSats,
             Integer confirmationTarget,
             Long feeRateSatsPerVbyte) {
+        return createFundedPsbt(
+                destinationAddress, amountSats, confirmationTarget, feeRateSatsPerVbyte, "bech32");
+    }
+
+    /**
+     * Funds a custodial PSBT. Prefer explicit {@code feeRateSatsPerVbyte} (user-selected tier);
+     * otherwise fall back to Bitcoin Core {@code conf_target}.
+     *
+     * @param changeType Core {@code change_type} (e.g. {@code bech32} or {@code bech32m} for Taproot)
+     */
+    public FundedPsbt createFundedPsbt(
+            String destinationAddress,
+            long amountSats,
+            Integer confirmationTarget,
+            Long feeRateSatsPerVbyte,
+            String changeType) {
         Map<String, Object> output = new LinkedHashMap<>();
         output.put(destinationAddress, satsToBtc(amountSats));
 
         Map<String, Object> options = new LinkedHashMap<>();
         options.put("includeWatching", true);
-        options.put("change_type", "bech32");
+        options.put(
+                "change_type",
+                changeType == null || changeType.isBlank() ? "bech32" : changeType.trim());
         boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
         if (explicitFeeRate) {
             // Bitcoin Core: fee_rate = sat/vB ; feeRate (legacy) = BTC/kvB.

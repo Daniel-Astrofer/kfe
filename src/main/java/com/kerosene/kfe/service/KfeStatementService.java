@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -10,9 +10,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import source.kfe.model.KfeTransactionEntity;
-import source.kfe.model.KfeUserStatementEntity;
-import source.kfe.repository.KfeUserStatementRepository;
+import com.kerosene.kfe.model.KfeTransactionEntity;
+import com.kerosene.kfe.model.KfeUserStatementEntity;
+import com.kerosene.kfe.repository.KfeUserStatementRepository;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;

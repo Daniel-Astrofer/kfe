@@ -1,4 +1,4 @@
-package source.kfe.service;
+package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,15 +9,15 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import source.common.service.AddressDerivationService;
-import source.kfe.dto.KfeCreateWalletRequest;
-import source.kfe.dto.KfeUpdateWalletRequest;
-import source.kfe.dto.KfeWalletResponse;
-import source.kfe.model.KfeWalletEntity;
-import source.kfe.model.KfeWalletKind;
-import source.kfe.model.KfeWalletStatus;
-import source.kfe.rail.BitcoinCoreRpcClient;
-import source.kfe.repository.KfeWalletAddressRepository;
-import source.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.dto.KfeCreateWalletRequest;
+import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
+import com.kerosene.kfe.dto.KfeWalletResponse;
+import com.kerosene.kfe.model.KfeWalletEntity;
+import com.kerosene.kfe.model.KfeWalletKind;
+import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.repository.KfeWalletAddressRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -80,15 +80,15 @@ class KfeWalletServiceTest {
     void setUp() {
         lenient().when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(null);
         @SuppressWarnings("unchecked")
-        ObjectProvider<source.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
+        ObjectProvider<com.kerosene.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
                 mock(ObjectProvider.class);
         lenient().when(onchainSync.getIfAvailable()).thenReturn(null);
         @SuppressWarnings("unchecked")
-        ObjectProvider<source.kfe.service.KfeColdWalletObservationService> coldObs =
+        ObjectProvider<com.kerosene.kfe.service.KfeColdWalletObservationService> coldObs =
                 mock(ObjectProvider.class);
         lenient().when(coldObs.getIfAvailable()).thenReturn(null);
         @SuppressWarnings("unchecked")
-        ObjectProvider<source.kfe.service.KfeMonitoredChainAddressIndex> addressIndex =
+        ObjectProvider<com.kerosene.kfe.service.KfeMonitoredChainAddressIndex> addressIndex =
                 mock(ObjectProvider.class);
         lenient().when(addressIndex.getIfAvailable()).thenReturn(null);
         service = new KfeWalletService(
