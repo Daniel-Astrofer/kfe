@@ -24,7 +24,7 @@ class KfeVaultMeshIntentServiceTest {
                     "proof",
                     1L);
         };
-        KfeVaultMeshIntentService service = new KfeVaultMeshIntentService(port, false, "USERS");
+        KfeVaultMeshIntentService service = new KfeVaultMeshIntentService(port, false, false, "USERS");
         UUID txId = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
         VaultMeshReceipt receipt = service.submitOutboundIntent(txId, "bc1qdest", 99L, "policy");

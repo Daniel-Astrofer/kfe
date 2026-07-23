@@ -33,6 +33,7 @@ import source.kfe.service.KfeLightningLiquidityService;
 import source.kfe.service.KfeNetworkFeeEstimateService;
 import source.kfe.service.KfePricingService;
 import source.kfe.service.KfeResponseMapper;
+import source.kfe.service.KfeVaultMeshIntentService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -71,6 +72,7 @@ public class KfeSubmitTransactionUseCase {
     private final FinancialNotificationPort notificationPort;
     private final KfeExecutionOutboxService outboxService;
     private final KfeExecutionOutboxProcessor outboxProcessor;
+    private final KfeVaultMeshIntentService vaultMeshIntentService;
     private final boolean lightningSyncOnSubmit;
     private final boolean onchainSyncOnSubmit;
     private final TransactionTemplate transactionTemplate;
@@ -100,6 +102,7 @@ public class KfeSubmitTransactionUseCase {
             FinancialNotificationPort notificationPort,
             KfeExecutionOutboxService outboxService,
             KfeExecutionOutboxProcessor outboxProcessor,
+            KfeVaultMeshIntentService vaultMeshIntentService,
             @Value("${kfe.execution.lightning.sync-on-submit:true}") boolean lightningSyncOnSubmit,
             @Value("${kfe.execution.onchain.sync-on-submit:true}") boolean onchainSyncOnSubmit,
             PlatformTransactionManager transactionManager) {
@@ -127,6 +130,7 @@ public class KfeSubmitTransactionUseCase {
         this.notificationPort = notificationPort;
         this.outboxService = outboxService;
         this.outboxProcessor = outboxProcessor;
+        this.vaultMeshIntentService = vaultMeshIntentService;
         this.lightningSyncOnSubmit = lightningSyncOnSubmit;
         this.onchainSyncOnSubmit = onchainSyncOnSubmit;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -348,11 +352,39 @@ public class KfeSubmitTransactionUseCase {
                 tx.getRail().name(),
                 tx.getGrossAmountSats());
 
+        maybeNotifyVaultMesh(tx, request);
+
         if (request.direction() == KfeDirection.OUTBOUND
                 && (request.rail() == KfeRail.LIGHTNING || request.rail() == KfeRail.ONCHAIN)) {
             return outboxId;
         }
         return null;
+    }
+
+    /**
+     * Optional dual-path notify (default off). Does not replace rail executors / mpc-sidecar.
+     */
+    private void maybeNotifyVaultMesh(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {
+        if (!vaultMeshIntentService.isSubmitOnOutboundEnabled()) {
+            return;
+        }
+        if (request.direction() != KfeDirection.OUTBOUND) {
+            return;
+        }
+        // On-chain mesh-only spends are Intent-gated in /v1/bitcoin/sign-psbt; skip DTO-hash
+        // notify to avoid anti-nonce collisions with the PSBT session.
+        if (request.rail() == KfeRail.ONCHAIN && vaultMeshIntentService.isMeshOnly()) {
+            return;
+        }
+        try {
+            vaultMeshIntentService.submitOutboundIntent(
+                    tx.getId(),
+                    tx.getExternalReference(),
+                    tx.getGrossAmountSats(),
+                    tx.getId() == null ? "" : tx.getId().toString());
+        } catch (RuntimeException ex) {
+            log.warn("vault_mesh_intent_notify_failed txId={} reason={}", tx.getId(), ex.toString());
+        }
     }
 
     private KfeTransactionResponse completePublishAndRespond(

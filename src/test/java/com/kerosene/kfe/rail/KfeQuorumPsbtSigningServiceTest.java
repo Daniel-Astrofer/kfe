@@ -1,6 +1,9 @@
 package source.kfe.rail;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.client.RestTemplate;
@@ -29,7 +32,7 @@ class KfeQuorumPsbtSigningServiceTest {
 
     @Test
     void rejectsFundedPsbtBeforeSigningWhenActualFeeExceedsReservedLimit() {
-        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null))
+        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null, "bech32"))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 500L));
 
         assertThatThrownBy(() -> service.preflight(command(499L)))
@@ -41,7 +44,7 @@ class KfeQuorumPsbtSigningServiceTest {
 
     @Test
     void acceptsFundedPsbtWhenActualFeeFitsReservedLimit() {
-        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null))
+        when(bitcoinCore.createFundedPsbt("bcrt1qdestination", 100_000L, 6, null, "bech32"))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 500L));
 
         var preflight = service.preflight(command(500L));
@@ -69,7 +72,8 @@ class KfeQuorumPsbtSigningServiceTest {
                         org.mockito.ArgumentMatchers.eq("bcrt1qdestination"),
                         org.mockito.ArgumentMatchers.eq(100_000L),
                         org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any()))
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq("bech32")))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 200L));
         when(bitcoinCore.walletProcessPsbt("funded-psbt")).thenReturn("signed-psbt");
         when(bitcoinCore.combinePsbt(org.mockito.ArgumentMatchers.anyList())).thenReturn("combined-psbt");
@@ -110,6 +114,68 @@ class KfeQuorumPsbtSigningServiceTest {
         assertThatThrownBy(() -> none.preflight(command(500L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("No quorum PSBT signer");
+    }
+
+    @Test
+    void meshOnlyUsesVaultMeshSignerAndSkipsLocalCore() {
+        VaultMeshSettlementPort mesh = new VaultMeshSettlementPort() {
+            @Override
+            public VaultMeshReceipt submitIntent(com.kerosene.common.vaultmesh.VaultMeshIntent intent) {
+                return new VaultMeshReceipt(
+                        intent.intentId(), VaultMeshReceipt.Status.REJECTED, "UNUSED", null, 1L);
+            }
+
+            @Override
+            public VaultMeshPsbtReceipt signPsbt(com.kerosene.common.vaultmesh.VaultMeshPsbtRequest request) {
+                return new VaultMeshPsbtReceipt(
+                        request.intentId(),
+                        VaultMeshReceipt.Status.ACCEPTED,
+                        null,
+                        "mesh-signed-psbt",
+                        "sig-proof",
+                        1L);
+            }
+        };
+        KfeQuorumPsbtSigningService meshOnly = new KfeQuorumPsbtSigningService(
+                bitcoinCoreProvider,
+                mock(RestTemplate.class),
+                new ObjectMapper(),
+                mesh,
+                true,
+                "USERS",
+                2,
+                6,
+                "",
+                "",
+                "",
+                false,
+                true,
+                "bitcoin-core-wallet");
+
+        when(bitcoinCore.createFundedPsbt(
+                        org.mockito.ArgumentMatchers.eq("tb1qdestination"),
+                        org.mockito.ArgumentMatchers.eq(50_000L),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq("bech32m")))
+                .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 150L));
+        when(bitcoinCore.finalizePsbt("mesh-signed-psbt"))
+                .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("cafebabe", true));
+        when(bitcoinCore.sendRawTransaction("cafebabe")).thenReturn("txid-mesh");
+
+        var execution = meshOnly.execute(new KfeOnchainPaymentGateway.OnchainPaymentCommand(
+                7L,
+                null,
+                "wallet",
+                "tb1qdestination",
+                50_000L,
+                500L,
+                "memo",
+                "idem-mesh",
+                "proof"));
+
+        assertThat(execution.txid()).isEqualTo("txid-mesh");
+        assertThat(execution.acceptedSigners()).containsExactly("vault-mesh");
     }
 
     private KfeOnchainPaymentGateway.OnchainPreflightCommand command(long maxFeeSats) {

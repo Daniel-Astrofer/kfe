@@ -29,6 +29,22 @@ configurations.configureEach {
     exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
 }
 
+// Package-rename WIP left a duplicate tree under com/kerosene with the same
+// source.kfe package declarations. Compile the canonical source/ tree only;
+// tests remain under com/kerosene (also package source.kfe).
+sourceSets {
+    main {
+        java {
+            setSrcDirs(listOf("src/main/java/source"))
+        }
+    }
+    test {
+        java {
+            setSrcDirs(listOf("src/test/java/com"))
+        }
+    }
+}
+
 dependencies {
     api(project(":kerosene-contracts"))
     implementation(project(":kerosene-shared"))

@@ -2,6 +2,10 @@ package source.kfe.rail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
+import com.kerosene.common.vaultmesh.VaultMeshReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,13 +30,15 @@ import java.util.Map;
  *
  * <p>Signers may be:
  * <ul>
+ *   <li>Vault mesh Taproot FROST ({@code kfe.vaultmesh.mesh-only=true}) — Intent-gated
+ *       {@code /v1/bitcoin/sign-psbt}; no mpc fallback</li>
  *   <li>Remote HTTP endpoints ({@code quorum.psbt.signer-urls}) — multiparty HSM/sidecar nodes</li>
  *   <li>Local Bitcoin Core wallet ({@code quorum.psbt.local-core-signer-enabled}) via
  *       {@code walletprocesspsbt} — first-class when keys live in Core (or as one quorum seat)</li>
  * </ul>
  *
  * Quorum requires {@code required-signatures} distinct successful signatures before
- * combine → finalize → broadcast.
+ * combine → finalize → broadcast (mesh-only path treats the mesh as the sole signer seat).
  */
 @Service
 public class KfeQuorumPsbtSigningService {
@@ -42,6 +48,9 @@ public class KfeQuorumPsbtSigningService {
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final VaultMeshSettlementPort vaultMeshSettlementPort;
+    private final boolean meshOnly;
+    private final String meshBucket;
     private final int requiredSignatures;
     private final int fundingConfirmationTarget;
     private final List<String> signerUrls;
@@ -55,6 +64,9 @@ public class KfeQuorumPsbtSigningService {
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
             @Qualifier("custodyRestTemplate") RestTemplate restTemplate,
             ObjectMapper objectMapper,
+            VaultMeshSettlementPort vaultMeshSettlementPort,
+            @Value("${kfe.vaultmesh.mesh-only:false}") boolean meshOnly,
+            @Value("${kfe.vaultmesh.default-bucket:USERS}") String meshBucket,
             @Value("${quorum.psbt.required-signatures:2}") int requiredSignatures,
             @Value("${quorum.psbt.funding-confirmation-target:6}") int fundingConfirmationTarget,
             @Value("${quorum.psbt.signer-urls:}") String signerUrls,
@@ -66,25 +78,66 @@ public class KfeQuorumPsbtSigningService {
         this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
+        this.vaultMeshSettlementPort = vaultMeshSettlementPort;
+        this.meshOnly = meshOnly;
+        this.meshBucket = meshBucket == null || meshBucket.isBlank() ? "USERS" : meshBucket.trim();
         this.requiredSignatures = Math.max(1, requiredSignatures);
         this.fundingConfirmationTarget = Math.max(1, fundingConfirmationTarget);
         this.signerUrls = splitCsv(signerUrls);
         this.signerApiKeys = splitCsv(signerApiKeys);
         this.signerIds = splitCsv(signerIds);
         this.requireSignerIdentity = requireSignerIdentity;
-        this.localCoreSignerEnabled = localCoreSignerEnabled;
+        // Mesh-only cutover: never fall back to Core/mpc/local wallets for signing.
+        this.localCoreSignerEnabled = meshOnly ? false : localCoreSignerEnabled;
         this.localCoreSignerId = firstNonBlank(localCoreSignerId, "bitcoin-core-wallet");
+    }
+
+    /** Test helper matching legacy constructor args (mesh disabled). */
+    KfeQuorumPsbtSigningService(
+            ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
+            RestTemplate restTemplate,
+            ObjectMapper objectMapper,
+            int requiredSignatures,
+            int fundingConfirmationTarget,
+            String signerUrls,
+            String signerApiKeys,
+            String signerIds,
+            boolean requireSignerIdentity,
+            boolean localCoreSignerEnabled,
+            String localCoreSignerId) {
+        this(
+                bitcoinCoreRpcClient,
+                restTemplate,
+                objectMapper,
+                intent -> new VaultMeshReceipt(
+                        intent == null ? null : intent.intentId(),
+                        VaultMeshReceipt.Status.REJECTED,
+                        "MESH_DISABLED",
+                        null,
+                        System.currentTimeMillis()),
+                false,
+                "USERS",
+                requiredSignatures,
+                fundingConfirmationTarget,
+                signerUrls,
+                signerApiKeys,
+                signerIds,
+                requireSignerIdentity,
+                localCoreSignerEnabled,
+                localCoreSignerId);
     }
 
     public OnchainFundingPreflight preflight(KfeOnchainPaymentGateway.OnchainPreflightCommand command) {
         BitcoinCoreRpcClient bitcoinCore = requireBitcoinCore();
         requireSignerCapacity();
 
+        String changeType = meshOnly ? "bech32m" : "bech32";
         BitcoinCoreRpcClient.FundedPsbt fundedPsbt = bitcoinCore.createFundedPsbt(
                 command.destinationAddress(),
                 command.amountSats(),
                 fundingConfirmationTarget,
-                null);
+                null,
+                changeType);
         validateFundedPsbt(fundedPsbt, command.maxFeeSats());
         return new OnchainFundingPreflight(
                 fundedPsbt.feeSats(),
@@ -103,23 +156,31 @@ public class KfeQuorumPsbtSigningService {
                 ? command.feeRateSatsPerVbyte()
                 : null;
 
+        // Mesh Taproot path: prefer bech32m change so funded PSBTs stay P2TR-compatible.
+        String changeType = meshOnly ? "bech32m" : "bech32";
         BitcoinCoreRpcClient.FundedPsbt fundedPsbt = bitcoinCore.createFundedPsbt(
                 command.destinationAddress(),
                 command.amountSats(),
                 confTarget,
-                feeRate);
+                feeRate,
+                changeType);
         validateFundedPsbt(fundedPsbt, command.maxFeeSats());
         String fundedPsbtHash = sha256(fundedPsbt.psbt());
 
         log.info(
-                "[KFE-PSBT] event=PSBT_CREATED userRef={} destinationRef={} walletNameRef={} amountSats={} feeRateSatVb={} confTarget={} fundedFeeSats={}",
+                "[KFE-PSBT] event=PSBT_CREATED userRef={} destinationRef={} walletNameRef={} amountSats={} feeRateSatVb={} confTarget={} fundedFeeSats={} meshOnly={}",
                 LogSanitizer.fingerprint(String.valueOf(command.userId())),
                 LogSanitizer.fingerprint(command.destinationAddress()),
                 LogSanitizer.fingerprint(command.walletName()),
                 command.amountSats(),
                 feeRate,
                 confTarget,
-                fundedPsbt.feeSats());
+                fundedPsbt.feeSats(),
+                meshOnly);
+
+        if (meshOnly) {
+            return executeMeshSigned(bitcoinCore, command, fundedPsbt, fundedPsbtHash);
+        }
 
         List<String> partialPsbts = new ArrayList<>();
         partialPsbts.add(fundedPsbt.psbt());
@@ -180,6 +241,61 @@ public class KfeQuorumPsbtSigningService {
         }
 
         String combinedPsbt = bitcoinCore.combinePsbt(partialPsbts);
+        return finalizeAndBroadcast(
+                bitcoinCore,
+                command,
+                fundedPsbt,
+                fundedPsbtHash,
+                combinedPsbt,
+                acceptedSigners);
+    }
+
+    private OnchainExecution executeMeshSigned(
+            BitcoinCoreRpcClient bitcoinCore,
+            KfeOnchainPaymentGateway.OnchainPaymentCommand command,
+            BitcoinCoreRpcClient.FundedPsbt fundedPsbt,
+            String fundedPsbtHash) {
+        String intentId = firstNonBlank(command.idempotencyKey(), "onchain-" + System.currentTimeMillis());
+        String sessionId = "btc-psbt-" + intentId;
+        VaultMeshPsbtReceipt receipt = vaultMeshSettlementPort.signPsbt(new VaultMeshPsbtRequest(
+                intentId,
+                sessionId,
+                meshBucket,
+                command.destinationAddress(),
+                command.amountSats(),
+                fundedPsbt.psbt()));
+        if (receipt.status() == VaultMeshReceipt.Status.FAIL_STOP) {
+            throw new IllegalStateException(
+                    "Vault mesh fail-stop during PSBT sign: " + receipt.reasonCode());
+        }
+        if (receipt.status() != VaultMeshReceipt.Status.ACCEPTED
+                || receipt.signedPsbt() == null
+                || receipt.signedPsbt().isBlank()) {
+            throw new IllegalStateException(
+                    "Vault mesh refused PSBT sign (mesh-only, no mpc fallback): "
+                            + receipt.reasonCode());
+        }
+        log.info(
+                "[KFE-PSBT] event=PSBT_MESH_SIGNED userRef={} intentRef={} proofRef={}",
+                LogSanitizer.fingerprint(String.valueOf(command.userId())),
+                LogSanitizer.fingerprint(intentId),
+                LogSanitizer.fingerprint(receipt.signatureProof()));
+        return finalizeAndBroadcast(
+                bitcoinCore,
+                command,
+                fundedPsbt,
+                fundedPsbtHash,
+                receipt.signedPsbt(),
+                List.of("vault-mesh"));
+    }
+
+    private OnchainExecution finalizeAndBroadcast(
+            BitcoinCoreRpcClient bitcoinCore,
+            KfeOnchainPaymentGateway.OnchainPaymentCommand command,
+            BitcoinCoreRpcClient.FundedPsbt fundedPsbt,
+            String fundedPsbtHash,
+            String combinedPsbt,
+            List<String> acceptedSigners) {
         String combinedPsbtHash = sha256(combinedPsbt);
         BitcoinCoreRpcClient.FinalizedPsbt finalizedPsbt = bitcoinCore.finalizePsbt(combinedPsbt);
         if (!finalizedPsbt.complete() || finalizedPsbt.hex() == null || finalizedPsbt.hex().isBlank()) {
@@ -220,11 +336,12 @@ public class KfeQuorumPsbtSigningService {
         }
 
         log.info(
-                "[KFE-PSBT] event=PSBT_BROADCAST userRef={} txidRef={} signedBy={} destinationRef={}",
+                "[KFE-PSBT] event=PSBT_BROADCAST userRef={} txidRef={} signedBy={} destinationRef={} meshOnly={}",
                 LogSanitizer.fingerprint(String.valueOf(command.userId())),
                 LogSanitizer.fingerprint(txid),
                 acceptedSigners.size(),
-                LogSanitizer.fingerprint(command.destinationAddress()));
+                LogSanitizer.fingerprint(command.destinationAddress()),
+                meshOnly);
 
         return new OnchainExecution(
                 txid,
@@ -291,6 +408,9 @@ public class KfeQuorumPsbtSigningService {
     }
 
     private void requireSignerCapacity() {
+        if (meshOnly) {
+            return;
+        }
         int seats = configuredSignerCount();
         if (seats == 0) {
             throw new IllegalStateException(
@@ -305,6 +425,9 @@ public class KfeQuorumPsbtSigningService {
     }
 
     private int configuredSignerCount() {
+        if (meshOnly) {
+            return 1;
+        }
         int remote = signerUrls.size();
         if (localCoreSignerEnabled && bitcoinCoreRpcClient.getIfAvailable() != null) {
             return remote + 1;
@@ -375,15 +498,16 @@ public class KfeQuorumPsbtSigningService {
             String txid,
             String status) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("provider", "BITCOIN_CORE_QUORUM");
+        metadata.put("provider", meshOnly ? "BITCOIN_CORE_VAULT_MESH" : "BITCOIN_CORE_QUORUM");
         metadata.put("status", status);
         metadata.put("fundedPsbtHash", fundedPsbtHash);
         metadata.put("combinedPsbtHash", combinedPsbtHash);
         metadata.put("rawTxHash", rawTxHash);
         metadata.put("acceptedSigners", acceptedSigners);
         metadata.put("acceptedSignerCount", acceptedSigners.size());
-        metadata.put("requiredSignatures", requiredSignatures);
+        metadata.put("requiredSignatures", meshOnly ? 1 : requiredSignatures);
         metadata.put("localCoreSignerEnabled", localCoreSignerEnabled);
+        metadata.put("meshOnly", meshOnly);
         metadata.put("feeSats", feeSats);
         metadata.put("txid", txid);
         try {
