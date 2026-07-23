@@ -22,6 +22,11 @@ public class FailClosedChannelsMeshInjectGateway implements ChannelsMeshInjectGa
     }
 
     @Override
+    public FundResult fundOpen(String intentId, long amountSats, String lndFundingAddress) {
+        return FundResult.refuse(REASON);
+    }
+
+    @Override
     public InjectResult releaseOpen(String intentId, long amountSats, String peerPubkey) {
         return InjectResult.refuse(REASON);
     }

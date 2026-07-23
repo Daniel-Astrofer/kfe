@@ -112,4 +112,45 @@ class VaultMeshChannelsMeshInjectGatewayTest {
         verify(port).commitIntent("intent-1");
         verify(port, never()).submitIntent(any());
     }
+
+    @Test
+    void fundOpenBindsLndAddressFailClosedOnInvalid() {
+        VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
+        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+
+        assertThat(gateway.fundOpen("intent-1", 100L, " ").authorized()).isFalse();
+        assertThat(gateway.fundOpen("intent-1", 100L, "not-an-address").authorized()).isFalse();
+        assertThat(gateway.fundOpen("intent-1", 100L, "mailto:x").authorized()).isFalse();
+        ChannelsMeshInjectGateway.FundResult ok =
+                gateway.fundOpen("intent-1", 100L, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
+        assertThat(ok.authorized()).isTrue();
+        assertThat(ok.reasonCode().toUpperCase(Locale.ROOT)).contains("CHANNELS_INJECT_FUND_BOUND");
+        verify(port, never()).signPsbt(any());
+    }
+
+    @Test
+    void reserveAndCommitAreIdempotentOnReplayReasons() {
+        VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
+        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+
+        when(port.reserveIntent(any()))
+                .thenReturn(
+                        new VaultMeshReceipt(
+                                "intent-1",
+                                VaultMeshReceipt.Status.REJECTED,
+                                "intent replay: intent-1",
+                                null,
+                                Instant.now().toEpochMilli()));
+        when(port.commitIntent(eq("intent-1")))
+                .thenReturn(
+                        new VaultMeshReceipt(
+                                "intent-1",
+                                VaultMeshReceipt.Status.REJECTED,
+                                "intent replay: intent-1",
+                                null,
+                                Instant.now().toEpochMilli()));
+
+        assertThat(gateway.reserveOpen("intent-1", 100L, "02ab").authorized()).isTrue();
+        assertThat(gateway.commitOpen("intent-1").authorized()).isTrue();
+    }
 }

@@ -48,6 +48,25 @@ public class KfeChannelOperationDecisionEntity {
     @Column(name = "provider_reference", length = 255)
     private String providerReference;
 
+    /** Stable mesh Intent id ({@code channels-inject-open-<decisionId>}). */
+    @Column(name = "mesh_intent_id", length = 160)
+    private String meshIntentId;
+
+    /**
+     * Inject phase: {@code RESERVED}, {@code FUNDED}, {@code OPENED_COMMIT_PENDING},
+     * {@code COMMITTED}, {@code RELEASED}.
+     */
+    @Column(name = "mesh_inject_phase", length = 40)
+    private String meshInjectPhase;
+
+    /** LND wallet address bound to this CHANNELS withdraw / open. */
+    @Column(name = "lnd_funding_address", length = 128)
+    private String lndFundingAddress;
+
+    /** Optional on-chain fund txid when mesh→LND PSBT lands; null for bind-only slice. */
+    @Column(name = "mesh_fund_txid", length = 128)
+    private String meshFundTxid;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -130,6 +149,38 @@ public class KfeChannelOperationDecisionEntity {
 
     public void setProviderReference(String providerReference) {
         this.providerReference = providerReference;
+    }
+
+    public String getMeshIntentId() {
+        return meshIntentId;
+    }
+
+    public void setMeshIntentId(String meshIntentId) {
+        this.meshIntentId = meshIntentId;
+    }
+
+    public String getMeshInjectPhase() {
+        return meshInjectPhase;
+    }
+
+    public void setMeshInjectPhase(String meshInjectPhase) {
+        this.meshInjectPhase = meshInjectPhase;
+    }
+
+    public String getLndFundingAddress() {
+        return lndFundingAddress;
+    }
+
+    public void setLndFundingAddress(String lndFundingAddress) {
+        this.lndFundingAddress = lndFundingAddress;
+    }
+
+    public String getMeshFundTxid() {
+        return meshFundTxid;
+    }
+
+    public void setMeshFundTxid(String meshFundTxid) {
+        this.meshFundTxid = meshFundTxid;
     }
 
     public LocalDateTime getCreatedAt() {

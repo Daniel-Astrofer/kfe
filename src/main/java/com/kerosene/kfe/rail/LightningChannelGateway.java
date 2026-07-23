@@ -14,6 +14,31 @@ public interface LightningChannelGateway {
 
     List<ChannelSnapshot> listChannels();
 
+    /**
+     * Pending open / pending force-close / waiting-close channels (LND
+     * {@code PendingChannels}). Default empty — adapters that omit pending
+     * inventory must not claim double-open safety.
+     */
+    default List<PendingChannelSnapshot> listPendingChannels() {
+        return List.of();
+    }
+
+    /**
+     * Fresh on-chain address in the LND wallet, used to bind a CHANNELS mesh
+     * withdraw target to a specific open decision. Default unsupported.
+     */
+    default String newOnchainAddress(String label) {
+        throw new UnsupportedOperationException(
+                "newOnchainAddress unsupported by " + providerName());
+    }
+
+    /**
+     * Confirmed LND wallet (on-chain) balance in sats, or {@code -1} when unknown.
+     */
+    default long confirmedOnchainBalanceSats() {
+        return -1L;
+    }
+
     OpenChannelResult openChannel(OpenChannelCommand command);
 
     CloseChannelResult closeChannel(CloseChannelCommand command);
@@ -92,6 +117,17 @@ public interface LightningChannelGateway {
     }
 
     record UpdatePolicyResult(boolean ok, String rawPayload) {
+    }
+
+    /**
+     * @param status e.g. {@code PENDING_OPEN}, {@code PENDING_FORCE_CLOSE},
+     *     {@code WAITING_CLOSE}
+     */
+    record PendingChannelSnapshot(
+            String remotePubkey,
+            String channelPoint,
+            String status,
+            long capacitySats) {
     }
 
     record ChannelSnapshot(

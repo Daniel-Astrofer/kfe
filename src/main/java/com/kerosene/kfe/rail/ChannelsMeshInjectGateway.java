@@ -4,7 +4,7 @@ package com.kerosene.kfe.rail;
  * Mesh CHANNELS bucket → LND channel-funding inject.
  *
  * <p>Decision-gate ({@link #authorizeOpen}) must not mutate the ledger. Execution uses
- * two-phase reserve → LND open → commit (or release on open failure).
+ * reserve → fund-bind (LND address) → LND open → commit (or release on open failure).
  */
 public interface ChannelsMeshInjectGateway {
 
@@ -18,6 +18,9 @@ public interface ChannelsMeshInjectGateway {
      * Soft-reserve CHANNELS capital for a specific open decision. Destination is the
      * mesh allowlist tag {@code ln-channel-rebalance} (not the LN peer pubkey).
      *
+     * <p>Must be idempotent for the same {@code intentId} while the reservation is live
+     * (crash after reserve / before open retries the same decision).
+     *
      * @param intentId stable id (typically {@code channels-inject-open-<decisionId>})
      */
     default DebitResult reserveOpen(String intentId, long amountSats, String peerPubkey) {
@@ -29,6 +32,16 @@ public interface ChannelsMeshInjectGateway {
     }
 
     /**
+     * Bind a mesh CHANNELS withdraw to an LND wallet address for this open.
+     * Largest shipped slice: ledger reservation + address binding (fail-closed if
+     * address missing/invalid). Full CHANNELS on-chain PSBT → LND is not available
+     * until per-bucket Taproot keys exist (shared key is USERS-only).
+     */
+    default FundResult fundOpen(String intentId, long amountSats, String lndFundingAddress) {
+        return FundResult.refuse("CHANNELS_INJECT_FUND_UNSUPPORTED");
+    }
+
+    /**
      * Release a soft reservation after LND {@code openChannel} failure.
      */
     default InjectResult releaseOpen(String intentId, long amountSats, String peerPubkey) {
@@ -37,9 +50,24 @@ public interface ChannelsMeshInjectGateway {
 
     /**
      * Durable-consume reservation after successful LND open.
+     * Idempotent when the Intent was already committed (commit-retry / outbox).
      */
     default InjectResult commitOpen(String intentId) {
         return InjectResult.refuse("CHANNELS_INJECT_COMMIT_UNSUPPORTED");
+    }
+
+    record FundResult(boolean authorized, String fundingTxid, String reasonCode) {
+        public static FundResult refuse(String reasonCode) {
+            return new FundResult(
+                    false, null, reasonCode == null ? "CHANNELS_INJECT_FUND_REFUSED" : reasonCode);
+        }
+
+        public static FundResult ok(String fundingTxid, String reasonCode) {
+            return new FundResult(
+                    true,
+                    fundingTxid,
+                    reasonCode == null ? "CHANNELS_INJECT_FUND_OK" : reasonCode);
+        }
     }
 
     record InjectResult(boolean authorized, String reasonCode) {

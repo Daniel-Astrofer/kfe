@@ -296,6 +296,63 @@ public class LndRestLightningClient
     }
 
     @Override
+    public List<PendingChannelSnapshot> listPendingChannels() {
+        requireLive();
+        JsonNode response = get("/v1/channels/pending");
+        List<PendingChannelSnapshot> out = new ArrayList<>();
+        appendPending(out, response.path("pending_open_channels"), "PENDING_OPEN");
+        appendPending(out, response.path("pending_force_closing_channels"), "PENDING_FORCE_CLOSE");
+        appendPending(out, response.path("waiting_close_channels"), "WAITING_CLOSE");
+        appendPending(out, response.path("pending_closing_channels"), "PENDING_CLOSING");
+        return List.copyOf(out);
+    }
+
+    private void appendPending(
+            List<PendingChannelSnapshot> out, JsonNode arr, String status) {
+        if (arr == null || !arr.isArray()) {
+            return;
+        }
+        for (JsonNode item : arr) {
+            JsonNode channel = item.path("channel");
+            if (channel.isMissingNode() || channel.isNull()) {
+                channel = item;
+            }
+            String remote = text(channel, "remote_node_pub");
+            if (remote == null || remote.isBlank()) {
+                remote = text(channel, "remote_pubkey");
+            }
+            String point = text(channel, "channel_point");
+            long capacity = longField(channel, "capacity");
+            out.add(new PendingChannelSnapshot(remote, point, status, capacity));
+        }
+    }
+
+    @Override
+    public String newOnchainAddress(String label) {
+        requireLive();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        // WITNESS_PUBKEY_HASH (p2wkh) — standard LND wallet receive for funding.
+        payload.put("type", 0);
+        JsonNode response = post("/v1/newaddress", payload);
+        String address = text(response, "address");
+        if (address == null || address.isBlank()) {
+            throw new IllegalStateException("LND newaddress returned empty address.");
+        }
+        return address.trim();
+    }
+
+    @Override
+    public long confirmedOnchainBalanceSats() {
+        requireLive();
+        JsonNode response = get("/v1/balance/blockchain");
+        long confirmed = nestedLong(response, "confirmed_balance", "sat", "value");
+        if (confirmed > 0L) {
+            return confirmed;
+        }
+        return longField(response, "confirmed_balance");
+    }
+
+    @Override
     public OpenChannelResult openChannel(OpenChannelCommand command) {
         requireLive();
         if (command.peerPubkey() == null || command.peerPubkey().isBlank()) {
