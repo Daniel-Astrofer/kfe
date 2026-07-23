@@ -24,6 +24,8 @@ import com.kerosene.kfe.model.KfeWalletName;
 import com.kerosene.kfe.model.KfeWalletStatus;
 import source.common.exception.FinancialProviderUnavailableException;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
+import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
 
@@ -58,6 +60,7 @@ public class KfeWalletService {
     private final KfeDashboardPublisher dashboardPublisher;
     private final AddressDerivationService addressDerivationService;
     private final KfeReceiveAddressIssuer receiveAddressIssuer;
+    private final ObjectProvider<VaultMeshSettlementPort> vaultMeshSettlementPort;
     private final TransactionTemplate transactionTemplate;
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
@@ -76,6 +79,7 @@ public class KfeWalletService {
             KfeDashboardPublisher dashboardPublisher,
             AddressDerivationService addressDerivationService,
             KfeReceiveAddressIssuer receiveAddressIssuer,
+            ObjectProvider<VaultMeshSettlementPort> vaultMeshSettlementPort,
             TransactionTemplate transactionTemplate,
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
@@ -92,6 +96,7 @@ public class KfeWalletService {
         this.dashboardPublisher = dashboardPublisher;
         this.addressDerivationService = addressDerivationService;
         this.receiveAddressIssuer = receiveAddressIssuer;
+        this.vaultMeshSettlementPort = vaultMeshSettlementPort;
         this.transactionTemplate = transactionTemplate;
         this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
@@ -658,6 +663,19 @@ public class KfeWalletService {
             if (!activeAddresses.isEmpty()) {
                 addressRepository.saveAll(activeAddresses);
             }
+        }
+
+        // USERS policy: WATCH_ONLY receiving addresses are sourced from the shared vault-mesh tb1p deposit only.
+        if (wallet.getKind() == KfeWalletKind.WATCH_ONLY && !hasText(wallet.getXpub())) {
+            VaultMeshSettlementPort port = vaultMeshSettlementPort.getIfAvailable();
+            if (port != null) {
+                VaultMeshDepositInfo dep = port.getUsersDepositAddress();
+                if (dep != null && hasText(dep.address())) {
+                    return saveAddress(wallet, dep.address(), "mesh-tb1p", null, "KFE_MESH_TB1P");
+                }
+            }
+            throw new IllegalStateException(
+                    "USERS deposit policy requires shared Taproot tb1p; vault-mesh deposit address unavailable.");
         }
 
         if (hasText(wallet.getXpub())) {

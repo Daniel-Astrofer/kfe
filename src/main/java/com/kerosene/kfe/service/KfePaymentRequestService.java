@@ -292,9 +292,10 @@ public class KfePaymentRequestService {
             return;
         }
         if (issueFreshAddress) {
-            throw new IllegalArgumentException("WATCH_ONLY wallets require an XPUB to issue fresh payment request addresses.");
+            return;
         }
-        throw new IllegalArgumentException("WATCH_ONLY wallets require an XPUB or active receiving address to create payment requests.");
+        throw new IllegalArgumentException(
+                "WATCH_ONLY wallets require a shared vault-mesh tb1p deposit address or an active receiving address to create payment requests.");
     }
 
     private void validateCreateRequest(KfeCreatePaymentRequest request) {

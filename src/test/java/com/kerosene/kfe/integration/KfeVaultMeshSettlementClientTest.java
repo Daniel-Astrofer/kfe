@@ -12,6 +12,7 @@ import org.springframework.web.client.RestTemplate;
 import com.kerosene.common.vaultmesh.VaultMeshDayAdvanceResult;
 import com.kerosene.common.vaultmesh.VaultMeshDayStatus;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
+import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshReshareResult;
 
@@ -102,6 +103,24 @@ class KfeVaultMeshSettlementClientTest {
                 "cHNidP8BAHic"));
         assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
         assertThat(receipt.reasonCode()).isEqualTo("MESH_BUCKET_NOT_SHARED_TAPROOT:CHANNELS");
+    }
+
+    @Test
+    void getUsersDepositAddressRejectsNonTb1p() throws Exception {
+        KfeVaultMeshSettlementClient client = client();
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+
+        server.expect(requestTo("http://vault.test:7701/v1/bitcoin/deposit"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        """
+                        {"network":"testnet3","address":"tb1qnotp","descriptor":"tr(x)","scheme":"frost-secp256k1-tr-v3","output_pubkey":"aa","xonly_pubkey":"bb"}
+                        """,
+                        MediaType.APPLICATION_JSON));
+
+        VaultMeshDepositInfo info = client.getUsersDepositAddress();
+        assertThat(info).isNull();
+        server.verify();
     }
 
     @Test

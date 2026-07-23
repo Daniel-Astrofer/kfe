@@ -18,6 +18,7 @@ import com.kerosene.kfe.model.KfeWalletStatus;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
+import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
 import java.util.List;
 import java.util.Optional;
@@ -74,11 +75,15 @@ class KfeWalletServiceTest {
     @Mock
     private ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
 
+    @Mock
+    private ObjectProvider<VaultMeshSettlementPort> vaultMeshSettlementPort;
+
     private KfeWalletService service;
 
     @BeforeEach
     void setUp() {
         lenient().when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(null);
+        lenient().when(vaultMeshSettlementPort.getIfAvailable()).thenReturn(null);
         @SuppressWarnings("unchecked")
         ObjectProvider<com.kerosene.kfe.service.KfeOnchainBalanceSyncService> onchainSync =
                 mock(ObjectProvider.class);
@@ -103,6 +108,7 @@ class KfeWalletServiceTest {
                 dashboardPublisher,
                 addressDerivationService,
                 receiveAddressIssuer,
+                vaultMeshSettlementPort,
                 transactionTemplate,
                 bitcoinCoreRpcClient,
                 onchainSync,

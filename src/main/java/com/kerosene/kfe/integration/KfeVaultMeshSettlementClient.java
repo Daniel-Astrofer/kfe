@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.vaultmesh.VaultMeshDayAdvanceResult;
 import com.kerosene.common.vaultmesh.VaultMeshDayStatus;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
+import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
@@ -163,6 +164,38 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             return rejected("MESH_HTTP_" + ex.getStatusCode().value(), intent.intentId());
         } catch (Exception ex) {
             return rejected("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName(), intent.intentId());
+        }
+    }
+
+    @Override
+    public VaultMeshDepositInfo getUsersDepositAddress() {
+        String path = baseUrl + "/v1/bitcoin/deposit";
+        try {
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response =
+                    restTemplate.exchange(
+                            path, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body == null) {
+                return null;
+            }
+            String address = body.get("address") == null ? null : String.valueOf(body.get("address"));
+            if (address == null || address.isBlank()) {
+                return null;
+            }
+            // Enforce USERS deposit policy: shared Taproot tb1p only.
+            if (!address.trim().toLowerCase(Locale.ROOT).startsWith("tb1p")) {
+                return null;
+            }
+            return new VaultMeshDepositInfo(
+                    address.trim(),
+                    body.get("descriptor") == null ? null : String.valueOf(body.get("descriptor")),
+                    body.get("scheme") == null ? null : String.valueOf(body.get("scheme")),
+                    body.get("output_pubkey") == null ? null : String.valueOf(body.get("output_pubkey")),
+                    body.get("xonly_pubkey") == null ? null : String.valueOf(body.get("xonly_pubkey")),
+                    body.get("network") == null ? null : String.valueOf(body.get("network")));
+        } catch (Exception ex) {
+            return null;
         }
     }
 
