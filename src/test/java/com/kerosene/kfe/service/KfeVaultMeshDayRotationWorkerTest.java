@@ -48,7 +48,7 @@ class KfeVaultMeshDayRotationWorkerTest {
         assertThat(out.kind()).isEqualTo(KfeVaultMeshDayRotationWorker.Outcome.Kind.ADVANCED);
         assertThat(out.reshared()).isTrue();
         assertThat(out.dayEpoch()).isEqualTo(TODAY);
-        assertThat(port.votes).containsExactly(new Vote("kfe", TODAY));
+        assertThat(port.votes).containsExactly(new Vote("", TODAY));
         assertThat(port.advances.get()).isEqualTo(1);
         assertThat(port.reshares).containsExactly("kfe-day-rotation");
     }

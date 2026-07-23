@@ -233,13 +233,17 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     @Override
     public VaultMeshDayAdvanceResult voteDay(String voter, String dayEpoch) {
-        if (voter == null || voter.isBlank() || dayEpoch == null || dayEpoch.isBlank()) {
+        if (dayEpoch == null || dayEpoch.isBlank()) {
             return VaultMeshDayAdvanceResult.failed("INVALID_VOTE");
         }
         String path = baseUrl + "/v1/day/vote";
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("voter", voter.trim());
+            // Voter is derived server-side from authenticated vault identity.
+            // Do not spoof peer vault ids under shared lab token / mTLS binding.
+            if (voter != null && !voter.isBlank()) {
+                payload.put("voter", voter.trim());
+            }
             payload.put("day_epoch", dayEpoch.trim());
             String json = objectMapper.writeValueAsString(payload);
             @SuppressWarnings("rawtypes")

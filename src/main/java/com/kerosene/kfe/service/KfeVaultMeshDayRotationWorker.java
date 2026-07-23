@@ -95,12 +95,12 @@ public class KfeVaultMeshDayRotationWorker {
                 ? utcToday
                 : status.neededDayEpoch().trim();
         log.info(
-                "[KFE VaultMesh Day] advancing meshDay={} → target={} (voter={})",
+                "[KFE VaultMesh Day] advancing meshDay={} → target={} (vault derives voter; legacy voter-id={})",
                 status.dayEpoch(),
                 target,
                 voterId);
 
-        VaultMeshDayAdvanceResult vote = settlementPort.voteDay(voterId, target);
+        VaultMeshDayAdvanceResult vote = settlementPort.voteDay(/* voter derived by vault */ "", target);
         if (!vote.ok()) {
             log.warn("[KFE VaultMesh Day] vote failed: {}", vote.error());
             return Outcome.failed(vote.error());
