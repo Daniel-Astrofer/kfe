@@ -3,6 +3,8 @@ package source.kfe.integration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
@@ -34,19 +36,22 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final String baseUrl;
+    private final String apiToken;
 
     public KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
             @Value("${kfe.vaultmesh.base-url:http://127.0.0.1:7701}") String baseUrl,
             @Value("${kfe.vaultmesh.connect-timeout-ms:2000}") long connectTimeoutMs,
-            @Value("${kfe.vaultmesh.read-timeout-ms:5000}") long readTimeoutMs) {
+            @Value("${kfe.vaultmesh.read-timeout-ms:5000}") long readTimeoutMs,
+            @Value("${kfe.vaultmesh.api-token:}") String apiToken) {
         this.restTemplate = restTemplateBuilder
                 .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
                 .setReadTimeout(Duration.ofMillis(readTimeoutMs))
                 .build();
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
+        this.apiToken = apiToken == null ? "" : apiToken.trim();
     }
 
     @Override
@@ -58,8 +63,11 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         String sessionId = UriUtils.encodePathSegment(intent.intentId().trim(), StandardCharsets.UTF_8);
         String path = baseUrl + "/sign/" + sessionId + "/" + messageHash;
         try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Vault-Token", apiToken);
             @SuppressWarnings("rawtypes")
-            ResponseEntity<Map> response = restTemplate.postForEntity(path, null, Map.class);
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(path, new HttpEntity<>(headers), Map.class);
             return toReceipt(intent.intentId(), response.getBody());
         } catch (RestClientResponseException ex) {
             Map<?, ?> body = parseBody(ex.getResponseBodyAsString());

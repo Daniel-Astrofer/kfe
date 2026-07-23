@@ -14,6 +14,7 @@ import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import java.lang.reflect.Field;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -31,6 +32,7 @@ class KfeVaultMeshSettlementClientTest {
 
         server.expect(requestTo("http://vault.test:7701/sign/intent-1/" + hash))
                 .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-Vault-Token", "test-vault-token"))
                 .andRespond(withSuccess(
                         """
                         {"session_id":"intent-1","message_hash":"%s","value":42,"scheme":"lab-shamir-threshold-v1"}
@@ -81,7 +83,8 @@ class KfeVaultMeshSettlementClientTest {
                 new ObjectMapper(),
                 "http://vault.test:7701",
                 1000L,
-                1000L);
+                1000L,
+                "test-vault-token");
     }
 
     private static RestTemplate restTemplate(KfeVaultMeshSettlementClient client) throws Exception {
