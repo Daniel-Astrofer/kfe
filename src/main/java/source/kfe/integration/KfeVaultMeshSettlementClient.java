@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -13,10 +15,13 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.common.vaultmesh.VaultMeshDayAdvanceResult;
+import com.kerosene.common.vaultmesh.VaultMeshDayStatus;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshReshareResult;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
 import javax.net.ssl.SSLContext;
@@ -25,13 +30,19 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * HTTP adapter from {@code kfe-service} to the vault-mesh lab/prod node.
- * Maps Intent → {@code POST /sign/{intentId}/{messageHash}} (F3 vault API).
+ * Maps Intent → {@code POST /sign/{intentId}/{messageHash}} (F3 vault API);
+ * day rotation → {@code /v1/day/*} + {@code /v1/reshare/trigger}.
  *
  * <p>Optional client mTLS via {@code kfe.vaultmesh.tls.*} (PEM or keystore/truststore).
  * When TLS is enabled, {@code X-Vault-Token} is omitted (vault mTLS mode refuses static tokens).
@@ -39,6 +50,10 @@ import java.util.Map;
 @Component
 @ConditionalOnProperty(name = "kfe.vaultmesh.enabled", havingValue = "true")
 public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
+
+    private static final Pattern DAY_STALE =
+            Pattern.compile("day_epoch stale:\\s*have\\s+(\\d{4}-\\d{2}-\\d{2}),\\s*need\\s+(\\d{4}-\\d{2}-\\d{2})",
+                    Pattern.CASE_INSENSITIVE);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -136,14 +151,9 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         String sessionId = UriUtils.encodePathSegment(intent.intentId().trim(), StandardCharsets.UTF_8);
         String path = baseUrl + "/sign/" + sessionId + "/" + messageHash;
         try {
-            HttpHeaders headers = new HttpHeaders();
-            // mTLS identity replaces X-Vault-Token; vault MutualTlsAuthAdapter refuses the header.
-            if (!tlsEnabled && !apiToken.isEmpty()) {
-                headers.set("X-Vault-Token", apiToken);
-            }
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
-                    restTemplate.postForEntity(path, new HttpEntity<>(headers), Map.class);
+                    restTemplate.postForEntity(path, new HttpEntity<>(authHeaders(false)), Map.class);
             return toReceipt(intent.intentId(), response.getBody());
         } catch (RestClientResponseException ex) {
             Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
@@ -166,12 +176,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         }
         String path = baseUrl + "/v1/bitcoin/sign-psbt";
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
-            if (!tlsEnabled && !apiToken.isEmpty()) {
-                headers.set("X-Vault-Token", apiToken);
-            }
-            Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("session_id", firstNonBlank(request.sessionId(), request.intentId()));
             payload.put("psbt", request.psbtBase64());
             payload.put("intent_id", request.intentId());
@@ -181,7 +186,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             String json = objectMapper.writeValueAsString(payload);
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
-                    restTemplate.postForEntity(path, new HttpEntity<>(json, headers), Map.class);
+                    restTemplate.postForEntity(path, new HttpEntity<>(json, authHeaders(true)), Map.class);
             return toPsbtReceipt(request.intentId(), response.getBody());
         } catch (RestClientResponseException ex) {
             Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
@@ -192,6 +197,140 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         } catch (Exception ex) {
             return psbtRejected("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName(), request.intentId());
         }
+    }
+
+    @Override
+    public VaultMeshDayStatus getDayStatus() {
+        String utcToday = LocalDate.now(ZoneOffset.UTC).toString();
+        String path = baseUrl + "/v1/day/current";
+        try {
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    path, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body == null || body.get("day_epoch") == null) {
+                return VaultMeshDayStatus.failed("EMPTY_DAY_RESPONSE");
+            }
+            String day = String.valueOf(body.get("day_epoch")).trim();
+            if (day.compareTo(utcToday) >= 0) {
+                return VaultMeshDayStatus.upToDate(day);
+            }
+            return VaultMeshDayStatus.stale(day, utcToday);
+        } catch (RestClientResponseException ex) {
+            Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
+            String err = body != null && body.get("error") != null
+                    ? String.valueOf(body.get("error"))
+                    : "MESH_HTTP_" + ex.getStatusCode().value();
+            Matcher stale = DAY_STALE.matcher(err);
+            if (stale.find()) {
+                return VaultMeshDayStatus.stale(stale.group(1), stale.group(2));
+            }
+            return VaultMeshDayStatus.failed(err);
+        } catch (Exception ex) {
+            return VaultMeshDayStatus.failed("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+    }
+
+    @Override
+    public VaultMeshDayAdvanceResult voteDay(String voter, String dayEpoch) {
+        if (voter == null || voter.isBlank() || dayEpoch == null || dayEpoch.isBlank()) {
+            return VaultMeshDayAdvanceResult.failed("INVALID_VOTE");
+        }
+        String path = baseUrl + "/v1/day/vote";
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("voter", voter.trim());
+            payload.put("day_epoch", dayEpoch.trim());
+            String json = objectMapper.writeValueAsString(payload);
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(path, new HttpEntity<>(json, authHeaders(true)), Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body != null && body.get("error") != null) {
+                return VaultMeshDayAdvanceResult.failed(String.valueOf(body.get("error")));
+            }
+            return VaultMeshDayAdvanceResult.ok(dayEpoch.trim(), false);
+        } catch (RestClientResponseException ex) {
+            return dayHttpFailure(ex);
+        } catch (Exception ex) {
+            return VaultMeshDayAdvanceResult.failed("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+    }
+
+    @Override
+    public VaultMeshDayAdvanceResult advanceDay() {
+        String path = baseUrl + "/v1/day/advance";
+        try {
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(path, new HttpEntity<>(authHeaders(false)), Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body == null) {
+                return VaultMeshDayAdvanceResult.failed("EMPTY_ADVANCE_RESPONSE");
+            }
+            if (body.get("error") != null) {
+                return VaultMeshDayAdvanceResult.failed(String.valueOf(body.get("error")));
+            }
+            String day = body.get("day_epoch") == null ? null : String.valueOf(body.get("day_epoch"));
+            boolean advanced = body.get("advanced") == null || Boolean.parseBoolean(String.valueOf(body.get("advanced")));
+            return VaultMeshDayAdvanceResult.ok(day, advanced);
+        } catch (RestClientResponseException ex) {
+            return dayHttpFailure(ex);
+        } catch (Exception ex) {
+            return VaultMeshDayAdvanceResult.failed("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+    }
+
+    @Override
+    public VaultMeshReshareResult triggerReshare(String reason) {
+        String path = baseUrl + "/v1/reshare/trigger";
+        String effectiveReason = reason == null || reason.isBlank() ? "kfe-day-rotation" : reason.trim();
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("reason", effectiveReason);
+            String json = objectMapper.writeValueAsString(payload);
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(path, new HttpEntity<>(json, authHeaders(true)), Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body == null) {
+                return VaultMeshReshareResult.failed("EMPTY_RESHARE_RESPONSE");
+            }
+            if (body.get("error") != null) {
+                return VaultMeshReshareResult.failed(String.valueOf(body.get("error")));
+            }
+            String policy = body.get("policy") == null ? null : String.valueOf(body.get("policy"));
+            String respReason = body.get("reason") == null ? effectiveReason : String.valueOf(body.get("reason"));
+            return VaultMeshReshareResult.ok(policy, respReason);
+        } catch (RestClientResponseException ex) {
+            Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
+            if (body != null && body.get("error") != null) {
+                return VaultMeshReshareResult.failed(String.valueOf(body.get("error")));
+            }
+            return VaultMeshReshareResult.failed("MESH_HTTP_" + ex.getStatusCode().value());
+        } catch (Exception ex) {
+            return VaultMeshReshareResult.failed("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName());
+        }
+    }
+
+    private HttpHeaders authHeaders(boolean json) {
+        HttpHeaders headers = new HttpHeaders();
+        if (json) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+        }
+        // mTLS identity replaces X-Vault-Token; vault MutualTlsAuthAdapter refuses the header.
+        if (!tlsEnabled && !apiToken.isEmpty()) {
+            headers.set("X-Vault-Token", apiToken);
+        }
+        return headers;
+    }
+
+    private VaultMeshDayAdvanceResult dayHttpFailure(RestClientResponseException ex) {
+        Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
+        if (body != null && body.get("error") != null) {
+            return VaultMeshDayAdvanceResult.failed(String.valueOf(body.get("error")));
+        }
+        return VaultMeshDayAdvanceResult.failed("MESH_HTTP_" + ex.getStatusCode().value());
     }
 
     private VaultMeshPsbtReceipt toPsbtReceipt(String intentId, Map<?, ?> body) {

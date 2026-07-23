@@ -9,8 +9,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
+import com.kerosene.common.vaultmesh.VaultMeshDayAdvanceResult;
+import com.kerosene.common.vaultmesh.VaultMeshDayStatus;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshReshareResult;
 
 import javax.net.ssl.SSLContext;
 import java.lang.reflect.Field;
@@ -85,6 +88,72 @@ class KfeVaultMeshSettlementClientTest {
                 new VaultMeshIntent(" ", "USERS", "x", 1L, "p", 1L));
         assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
         assertThat(receipt.reasonCode()).isEqualTo("INVALID_INTENT");
+    }
+
+    @Test
+    void getDayStatusMapsCurrentEpoch() throws Exception {
+        KfeVaultMeshSettlementClient client = client();
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        server.expect(requestTo("http://vault.test:7701/v1/day/current"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header("X-Vault-Token", "test-vault-token"))
+                .andRespond(withSuccess(
+                        "{\"day_epoch\":\"2099-01-01\"}", MediaType.APPLICATION_JSON));
+
+        VaultMeshDayStatus status = client.getDayStatus();
+
+        assertThat(status.upToDate()).isTrue();
+        assertThat(status.dayEpoch()).isEqualTo("2099-01-01");
+        server.verify();
+    }
+
+    @Test
+    void getDayStatusMapsStaleConflict() throws Exception {
+        KfeVaultMeshSettlementClient client = client();
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+        server.expect(requestTo("http://vault.test:7701/v1/day/current"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"day_epoch stale: have 2026-07-21, need 2026-07-22\"}"));
+
+        VaultMeshDayStatus status = client.getDayStatus();
+
+        assertThat(status.stale()).isTrue();
+        assertThat(status.upToDate()).isFalse();
+        assertThat(status.dayEpoch()).isEqualTo("2026-07-21");
+        assertThat(status.neededDayEpoch()).isEqualTo("2026-07-22");
+        server.verify();
+    }
+
+    @Test
+    void voteAdvanceAndReshareHitVaultEndpoints() throws Exception {
+        KfeVaultMeshSettlementClient client = client();
+        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
+
+        server.expect(requestTo("http://vault.test:7701/v1/day/vote"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-Vault-Token", "test-vault-token"))
+                .andRespond(withSuccess("{\"ok\":true}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://vault.test:7701/v1/day/advance"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(
+                        "{\"day_epoch\":\"2026-07-22\",\"advanced\":true}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://vault.test:7701/v1/reshare/trigger"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(
+                        "{\"reshared\":true,\"policy\":\"daily\",\"reason\":\"kfe-day-rotation\"}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThat(client.voteDay("kfe", "2026-07-22").ok()).isTrue();
+        VaultMeshDayAdvanceResult advanced = client.advanceDay();
+        assertThat(advanced.ok()).isTrue();
+        assertThat(advanced.dayEpoch()).isEqualTo("2026-07-22");
+        assertThat(advanced.advanced()).isTrue();
+        VaultMeshReshareResult reshare = client.triggerReshare("kfe-day-rotation");
+        assertThat(reshare.ok()).isTrue();
+        assertThat(reshare.policy()).isEqualTo("daily");
+        server.verify();
     }
 
     @Test
