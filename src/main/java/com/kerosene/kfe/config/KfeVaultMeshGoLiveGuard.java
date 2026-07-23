@@ -10,6 +10,10 @@ import org.springframework.stereotype.Component;
 /**
  * F8 clean cutover: mesh-only mode refuses boot if vault mesh is disabled or mpc signing remains on.
  * Rollback is fail-stop + runbook — not re-enabling mpc silently.
+ *
+ * <p>Does <strong>not</strong> require every vault to expose SEV/SGX ({@code tee_hw}). Domestic
+ * nodes with honest {@code attestation_mode=software} are valid mesh members; only dual-run
+ * mpc signing is refused under mesh-only.
  */
 @Component
 public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
@@ -43,6 +47,7 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
                     "kfe.vaultmesh.mesh-only=true requires kfe.mpc.signing-enabled=false (no dual-run mpc)");
         }
         log.warn(
-                "vault_mesh_go_live_guard active: mesh-only settlement; mpc signing disabled");
+                "vault_mesh_go_live_guard active: mesh-only settlement; mpc signing disabled"
+                        + " (domestic vault nodes OK; SEV/SGX preferred when present, not required)");
     }
 }
