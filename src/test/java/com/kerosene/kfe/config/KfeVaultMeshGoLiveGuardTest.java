@@ -8,27 +8,80 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class KfeVaultMeshGoLiveGuardTest {
 
+    private static KfeVaultMeshGoLiveGuard meshOnlyGuard(
+            boolean meshOnly,
+            boolean enabled,
+            boolean mpc,
+            boolean requireMtls,
+            boolean tlsEnabled,
+            String apiToken) {
+        return new KfeVaultMeshGoLiveGuard(
+                meshOnly,
+                enabled,
+                mpc,
+                requireMtls,
+                tlsEnabled,
+                apiToken,
+                requireMtls && tlsEnabled ? "/tmp/cert.pem" : "",
+                requireMtls && tlsEnabled ? "/tmp/key.pem" : "",
+                requireMtls && tlsEnabled ? "/tmp/ca.pem" : "",
+                "",
+                "");
+    }
+
     @Test
     void meshOnlyRequiresVaultMeshEnabled() {
-        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(true, false, false);
+        KfeVaultMeshGoLiveGuard guard = meshOnlyGuard(true, false, false, false, false, "");
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
     @Test
     void meshOnlyRequiresMpcSigningOff() {
-        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(true, true, true);
+        KfeVaultMeshGoLiveGuard guard = meshOnlyGuard(true, true, true, false, false, "");
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
     @Test
-    void meshOnlyHappyPath() {
-        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(true, true, false);
+    void meshOnlyHappyPathLabTokenOkWhenMtlsNotRequired() {
+        KfeVaultMeshGoLiveGuard guard =
+                meshOnlyGuard(true, true, false, false, false, "kerosene-vault-lab-only");
         assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
     }
 
     @Test
     void dualPathStillAllowedWhenMeshOnlyOff() {
-        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(false, false, true);
+        KfeVaultMeshGoLiveGuard guard = meshOnlyGuard(false, false, true, false, false, "");
+        assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void requireMtlsRefusesApiToken() {
+        KfeVaultMeshGoLiveGuard guard =
+                new KfeVaultMeshGoLiveGuard(
+                        true, true, false, true, true, "lab-token", "/c", "/k", "/ca", "", "");
+        assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void requireMtlsRequiresTlsEnabled() {
+        KfeVaultMeshGoLiveGuard guard =
+                new KfeVaultMeshGoLiveGuard(
+                        true, true, false, true, false, "", "/c", "/k", "/ca", "", "");
+        assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void requireMtlsRequiresClientMaterials() {
+        KfeVaultMeshGoLiveGuard guard =
+                new KfeVaultMeshGoLiveGuard(true, true, false, true, true, "", "", "", "", "", "");
+        assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void requireMtlsHappyPathPem() {
+        KfeVaultMeshGoLiveGuard guard =
+                new KfeVaultMeshGoLiveGuard(
+                        true, true, false, true, true, "", "/c", "/k", "/ca", "", "");
         assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
     }
 }
