@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletAddressStatus;

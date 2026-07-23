@@ -2,7 +2,7 @@ package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
-import source.common.financial.FinancialRailHealthPort;
+import com.kerosene.common.financial.FinancialRailHealthPort;
 import com.kerosene.kfe.rail.CustodyGateway;
 import com.kerosene.kfe.rail.ExternalRailProviderRegistry;
 

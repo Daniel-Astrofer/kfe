@@ -3,8 +3,8 @@ package com.kerosene.kfe.controller;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.TestingAuthenticationToken;
-import source.common.exception.ErrorCodes;
-import source.common.exception.StructuredPlatformException;
+import com.kerosene.common.exception.ErrorCodes;
+import com.kerosene.common.exception.StructuredPlatformException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

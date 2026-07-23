@@ -2,7 +2,7 @@ package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.financial.FinancialWalletProvisioningRequest;
+import com.kerosene.common.financial.FinancialWalletProvisioningRequest;
 import com.kerosene.kfe.integration.KfeFinancialWalletProvisioningAdapter;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;

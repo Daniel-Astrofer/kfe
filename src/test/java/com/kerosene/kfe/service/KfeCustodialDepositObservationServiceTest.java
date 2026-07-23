@@ -4,7 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeTransactionEntity;

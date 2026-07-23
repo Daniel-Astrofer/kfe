@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import source.common.dto.ApiResponse;
+import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.kfe.dto.KfeClassifyTaxEventRequest;
 import com.kerosene.kfe.dto.KfeTaxEventResponse;
 import com.kerosene.kfe.dto.KfeTaxEventsExportResponse;

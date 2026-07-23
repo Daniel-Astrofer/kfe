@@ -8,7 +8,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreateWalletRequest;
 import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
 import com.kerosene.kfe.dto.KfeWalletResponse;

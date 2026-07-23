@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.model.KfeDirection;

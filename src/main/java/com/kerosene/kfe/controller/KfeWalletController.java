@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import source.common.dto.ApiResponse;
+import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.kfe.application.financial.FinancialApi;
 import com.kerosene.kfe.dto.KfeAddressResponse;
 import com.kerosene.kfe.dto.KfeColdWalletPsbtRequest;

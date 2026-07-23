@@ -2,8 +2,8 @@ package com.kerosene.kfe.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
-import source.common.exception.ErrorCodes;
-import source.common.exception.StructuredPlatformException;
+import com.kerosene.common.exception.ErrorCodes;
+import com.kerosene.common.exception.StructuredPlatformException;
 
 final class KfeAuthenticationSupport {
 

@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.model.KfeWalletEntity;
 
 import java.util.Locale;

@@ -1,7 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
 

@@ -11,7 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.model.KfeDirection;

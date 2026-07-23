@@ -12,7 +12,7 @@ import com.kerosene.kfe.dto.KfeSignedPsbtRequest;
 import com.kerosene.kfe.model.KfePsbtWorkflowEntity;
 import com.kerosene.kfe.model.KfePsbtWorkflowStatus;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
-import source.common.exception.FinancialProviderUnavailableException;
+import com.kerosene.common.exception.FinancialProviderUnavailableException;
 import com.kerosene.kfe.repository.KfePsbtWorkflowRepository;
 
 import java.math.BigDecimal;

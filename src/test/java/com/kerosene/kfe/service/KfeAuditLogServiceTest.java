@@ -3,9 +3,9 @@ package com.kerosene.kfe.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
-import source.common.audit.AuditEventType;
-import source.common.audit.AuditEventPayloadSanitizer;
-import source.common.audit.StructuredAuditLogger;
+import com.kerosene.common.audit.AuditEventType;
+import com.kerosene.common.audit.AuditEventPayloadSanitizer;
+import com.kerosene.common.audit.StructuredAuditLogger;
 import com.kerosene.kfe.model.KfeAuditLogEntity;
 import com.kerosene.kfe.repository.KfeAuditLogRepository;
 

@@ -12,10 +12,10 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
-import source.common.financial.FinancialDepositConfirmedNotificationRequest;
-import source.common.financial.FinancialNotificationPort;
-import source.common.financial.FinancialOutboundNotificationRequest;
-import source.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
+import com.kerosene.common.financial.FinancialDepositConfirmedNotificationRequest;
+import com.kerosene.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialOutboundNotificationRequest;
+import com.kerosene.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -167,7 +167,7 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
             UUID walletId,
             long amountSats) {
         post("/internal/kfe/notifications/internal-transfer-received",
-                new source.common.financial.FinancialInternalTransferNotificationRequest(
+                new com.kerosene.common.financial.FinancialInternalTransferNotificationRequest(
                         receiverUserId,
                         transactionId,
                         walletId,
@@ -181,7 +181,7 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
             UUID walletId,
             long amountSats) {
         post("/internal/kfe/notifications/internal-transfer-sent",
-                new source.common.financial.FinancialInternalTransferNotificationRequest(
+                new com.kerosene.common.financial.FinancialInternalTransferNotificationRequest(
                         senderUserId,
                         transactionId,
                         walletId,
@@ -196,7 +196,7 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
             String rail,
             long amountSats) {
         post("/internal/kfe/notifications/external-payment-sent",
-                new source.common.financial.FinancialExternalPaymentNotificationRequest(
+                new com.kerosene.common.financial.FinancialExternalPaymentNotificationRequest(
                         userId,
                         transactionId,
                         walletId,

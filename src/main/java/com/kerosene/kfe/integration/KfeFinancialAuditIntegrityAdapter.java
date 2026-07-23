@@ -1,7 +1,7 @@
 package com.kerosene.kfe.integration;
 
 import org.springframework.stereotype.Component;
-import source.common.financial.FinancialAuditIntegrityPort;
+import com.kerosene.common.financial.FinancialAuditIntegrityPort;
 import com.kerosene.kfe.dto.KfeAuditRootResponse;
 import com.kerosene.kfe.service.KfeAuditAdminService;
 

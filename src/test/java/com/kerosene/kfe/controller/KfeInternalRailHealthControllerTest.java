@@ -2,7 +2,7 @@ package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.financial.FinancialRailHealthPort;
+import com.kerosene.common.financial.FinancialRailHealthPort;
 import com.kerosene.kfe.integration.KfeFinancialRailHealthAdapter;
 
 import java.util.Map;

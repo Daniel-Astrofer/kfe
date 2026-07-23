@@ -7,9 +7,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.dto.ApiResponse;
-import source.common.exception.ErrorCodes;
-import source.common.exception.StructuredPlatformException;
+import com.kerosene.common.dto.ApiResponse;
+import com.kerosene.common.exception.ErrorCodes;
+import com.kerosene.common.exception.StructuredPlatformException;
 
 @RestControllerAdvice
 public class KfeExceptionHandler {

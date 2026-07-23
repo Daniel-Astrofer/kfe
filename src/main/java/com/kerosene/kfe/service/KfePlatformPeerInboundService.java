@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter;

@@ -2,7 +2,7 @@ package com.kerosene.kfe.config;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import source.common.financial.FinancialMpcKeyPort;
+import com.kerosene.common.financial.FinancialMpcKeyPort;
 
 import java.util.UUID;
 

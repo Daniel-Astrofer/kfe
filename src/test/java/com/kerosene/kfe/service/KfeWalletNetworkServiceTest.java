@@ -2,9 +2,9 @@ package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import source.common.financial.FinancialTransactionApprovalPort;
-import source.common.financial.FinancialUserDirectoryPort;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.financial.FinancialTransactionApprovalPort;
+import com.kerosene.common.financial.FinancialUserDirectoryPort;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeColdWalletPsbtRequest;
 import com.kerosene.kfe.dto.KfeColdWalletPsbtResponse;
 import com.kerosene.kfe.dto.KfeReceivingCapabilitiesResponse;

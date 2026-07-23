@@ -16,9 +16,9 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.dto.ApiResponse;
-import source.common.financial.FinancialUserDirectoryLookupRequest;
-import source.common.financial.FinancialUserDirectoryPort;
+import com.kerosene.common.dto.ApiResponse;
+import com.kerosene.common.financial.FinancialUserDirectoryLookupRequest;
+import com.kerosene.common.financial.FinancialUserDirectoryPort;
 
 import java.time.Duration;
 import java.util.Locale;

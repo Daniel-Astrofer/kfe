@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.financial.FinancialRailHealthPort;
+import com.kerosene.common.financial.FinancialRailHealthPort;
 import com.kerosene.kfe.integration.KfeFinancialRailHealthAdapter;
 
 import java.nio.charset.StandardCharsets;

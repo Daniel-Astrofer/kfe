@@ -1,9 +1,9 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Service;
-import source.common.financial.FinancialUserDirectoryPort;
+import com.kerosene.common.financial.FinancialUserDirectoryPort;
 import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
-import source.common.exception.FinancialSelfPaymentException;
+import com.kerosene.common.exception.FinancialSelfPaymentException;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeWalletEntity;

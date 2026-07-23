@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import source.common.dto.ApiResponse;
+import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.kfe.dto.KfeAuditEventResponse;
 import com.kerosene.kfe.dto.KfeAuditLatestResponse;
 import com.kerosene.kfe.dto.KfeAuditRootResponse;

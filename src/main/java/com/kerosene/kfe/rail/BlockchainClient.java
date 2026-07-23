@@ -2,7 +2,7 @@ package com.kerosene.kfe.rail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import source.common.validation.FinancialAmountValidator;
+import com.kerosene.common.validation.FinancialAmountValidator;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;

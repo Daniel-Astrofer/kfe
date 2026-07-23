@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.common.service.AddressDerivationService;
+import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
 import com.kerosene.kfe.dto.KfePaymentRequestResponse;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;

@@ -3,7 +3,7 @@ package com.kerosene.kfe.integration;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
-import source.common.financial.FinancialRailProductionSafetyPort;
+import com.kerosene.common.financial.FinancialRailProductionSafetyPort;
 import com.kerosene.kfe.rail.ConfigurableCustodyGateway;
 import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
 import com.kerosene.kfe.rail.LightningInvoiceGateway;

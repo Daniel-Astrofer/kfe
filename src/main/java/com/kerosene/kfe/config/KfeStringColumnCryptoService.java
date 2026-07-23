@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import source.common.security.StringColumnCryptoPort;
+import com.kerosene.common.security.StringColumnCryptoPort;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -21,7 +21,7 @@ import java.util.Base64;
  *
  * <p>The main auth server uses {@code CosignerSecretService} + Vault. KFE is a
  * separate process and only scans {@code com.kerosene.kfe}, so it needs its own port
- * or {@link source.common.persistence.StringCryptoConverter} fails with
+ * or {@link com.kerosene.common.persistence.StringCryptoConverter} fails with
  * "crypto port is not initialized".
  *
  * <p>Key resolution (first match):

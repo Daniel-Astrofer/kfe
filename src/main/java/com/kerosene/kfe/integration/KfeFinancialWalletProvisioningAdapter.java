@@ -3,7 +3,7 @@ package com.kerosene.kfe.integration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import source.common.financial.FinancialWalletProvisioningPort;
+import com.kerosene.common.financial.FinancialWalletProvisioningPort;
 import com.kerosene.kfe.dto.KfeCreateWalletRequest;
 import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.service.KfeWalletService;

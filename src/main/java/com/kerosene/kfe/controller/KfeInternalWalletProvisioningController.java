@@ -9,8 +9,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
-import source.common.dto.ApiResponse;
-import source.common.financial.FinancialWalletProvisioningRequest;
+import com.kerosene.common.dto.ApiResponse;
+import com.kerosene.common.financial.FinancialWalletProvisioningRequest;
 import com.kerosene.kfe.integration.KfeFinancialWalletProvisioningAdapter;
 
 import java.nio.charset.StandardCharsets;

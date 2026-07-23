@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeIdempotencyEntity;
 import com.kerosene.kfe.model.KfeIdempotencyId;

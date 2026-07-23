@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;

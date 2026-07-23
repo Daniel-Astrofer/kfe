@@ -2,8 +2,8 @@ package com.kerosene.kfe.service;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import source.common.exception.ErrorCodes;
-import source.common.exception.StructuredPlatformException;
+import com.kerosene.common.exception.ErrorCodes;
+import com.kerosene.common.exception.StructuredPlatformException;
 import com.kerosene.kfe.dto.KfePaymentRequestResponse;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;

@@ -2,7 +2,7 @@ package com.kerosene.kfe.application.transaction;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
-import source.common.financial.FinancialTickerPort;
+import com.kerosene.common.financial.FinancialTickerPort;
 import com.kerosene.kfe.application.settlement.BinarySettlementGate;
 import com.kerosene.kfe.application.settlement.SettlementGateCommand;
 import com.kerosene.kfe.application.settlement.SettlementGateResult;
@@ -15,7 +15,7 @@ import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.service.KfeBalanceService;
 import com.kerosene.kfe.service.KfeDashboardPublisher;
 import com.kerosene.kfe.service.KfeExecutionOutboxProcessor;

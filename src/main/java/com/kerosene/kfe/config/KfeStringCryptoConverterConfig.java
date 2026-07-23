@@ -4,8 +4,8 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
-import source.common.persistence.StringCryptoConverter;
-import source.common.security.StringColumnCryptoPort;
+import com.kerosene.common.persistence.StringCryptoConverter;
+import com.kerosene.common.security.StringColumnCryptoPort;
 
 /**
  * Wires {@link StringCryptoConverter}'s static crypto port for KFE standalone.

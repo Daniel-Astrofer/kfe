@@ -15,7 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import source.common.infra.logging.LogSanitizer;
+import com.kerosene.common.infra.logging.LogSanitizer;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

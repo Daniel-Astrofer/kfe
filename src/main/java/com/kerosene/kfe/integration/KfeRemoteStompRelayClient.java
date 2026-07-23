@@ -13,7 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
-import source.common.financial.StompUserPublishRequest;
+import com.kerosene.common.financial.StompUserPublishRequest;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;

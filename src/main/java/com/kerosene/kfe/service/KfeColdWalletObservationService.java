@@ -21,7 +21,7 @@ import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.model.KfeWalletStatus;
 import com.kerosene.kfe.rail.BlockchainClient;
-import source.common.financial.FinancialNotificationPort;
+import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;

@@ -50,7 +50,7 @@ class KfeColdWalletObservationServiceTest {
     private final ObjectProvider<KfeMonitoredChainAddressIndex> addressIndexProvider =
             mock(ObjectProvider.class);
     @SuppressWarnings("unchecked")
-    private final ObjectProvider<source.common.financial.FinancialNotificationPort>
+    private final ObjectProvider<com.kerosene.common.financial.FinancialNotificationPort>
             notificationPortProvider = mock(ObjectProvider.class);
 
     private KfeColdWalletObservationService service;

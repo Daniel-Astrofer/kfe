@@ -1,7 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
-import source.common.financial.FinancialMpcKeyPort;
+import com.kerosene.common.financial.FinancialMpcKeyPort;
 
 import java.util.UUID;
 

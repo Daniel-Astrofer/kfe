@@ -10,7 +10,7 @@ import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
-import source.common.persistence.StringCryptoConverter;
+import com.kerosene.common.persistence.StringCryptoConverter;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;

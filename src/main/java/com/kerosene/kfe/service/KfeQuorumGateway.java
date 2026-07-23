@@ -1,7 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
-import source.common.financial.FinancialQuorumPort;
+import com.kerosene.common.financial.FinancialQuorumPort;
 
 @Service
 public class KfeQuorumGateway {
