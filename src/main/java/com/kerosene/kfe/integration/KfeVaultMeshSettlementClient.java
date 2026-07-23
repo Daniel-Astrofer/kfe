@@ -6,6 +6,7 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
@@ -16,6 +17,7 @@ import com.kerosene.common.vaultmesh.VaultMeshIntent;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
+import javax.net.ssl.SSLContext;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -28,6 +30,9 @@ import java.util.Map;
 /**
  * HTTP adapter from {@code kfe-service} to the vault-mesh lab/prod node.
  * Maps Intent → {@code POST /sign/{intentId}/{messageHash}} (F3 vault API).
+ *
+ * <p>Optional client mTLS via {@code kfe.vaultmesh.tls.*} (PEM or keystore/truststore).
+ * When TLS is enabled, {@code X-Vault-Token} is omitted (vault mTLS mode refuses static tokens).
  */
 @Component
 @ConditionalOnProperty(name = "kfe.vaultmesh.enabled", havingValue = "true")
@@ -37,6 +42,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final ObjectMapper objectMapper;
     private final String baseUrl;
     private final String apiToken;
+    private final boolean tlsEnabled;
 
     public KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
@@ -44,14 +50,79 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             @Value("${kfe.vaultmesh.base-url:http://127.0.0.1:7701}") String baseUrl,
             @Value("${kfe.vaultmesh.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${kfe.vaultmesh.read-timeout-ms:5000}") long readTimeoutMs,
-            @Value("${kfe.vaultmesh.api-token:}") String apiToken) {
-        this.restTemplate = restTemplateBuilder
-                .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .setReadTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
+            @Value("${kfe.vaultmesh.api-token:}") String apiToken,
+            @Value("${kfe.vaultmesh.tls.enabled:false}") boolean tlsEnabled,
+            @Value("${kfe.vaultmesh.tls.cert-path:}") String tlsCertPath,
+            @Value("${kfe.vaultmesh.tls.key-path:}") String tlsKeyPath,
+            @Value("${kfe.vaultmesh.tls.ca-path:}") String tlsCaPath,
+            @Value("${kfe.vaultmesh.tls.keystore-path:}") String tlsKeystorePath,
+            @Value("${kfe.vaultmesh.tls.keystore-password:}") String tlsKeystorePassword,
+            @Value("${kfe.vaultmesh.tls.keystore-type:PKCS12}") String tlsKeystoreType,
+            @Value("${kfe.vaultmesh.tls.truststore-path:}") String tlsTruststorePath,
+            @Value("${kfe.vaultmesh.tls.truststore-password:}") String tlsTruststorePassword,
+            @Value("${kfe.vaultmesh.tls.truststore-type:PKCS12}") String tlsTruststoreType,
+            @Value("${kfe.vaultmesh.tls.hostname-verification:true}") boolean tlsHostnameVerification) {
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.apiToken = apiToken == null ? "" : apiToken.trim();
+        this.tlsEnabled = KfeVaultMeshTlsSupport.tlsConfigured(
+                tlsEnabled, tlsCertPath, tlsKeyPath, tlsCaPath, tlsKeystorePath, tlsTruststorePath);
+
+        RestTemplateBuilder builder = restTemplateBuilder
+                .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
+                .setReadTimeout(Duration.ofMillis(readTimeoutMs));
+        if (this.tlsEnabled) {
+            SSLContext sslContext = KfeVaultMeshTlsSupport.buildSslContext(
+                    tlsCertPath,
+                    tlsKeyPath,
+                    tlsCaPath,
+                    tlsKeystorePath,
+                    tlsKeystorePassword,
+                    tlsKeystoreType,
+                    tlsTruststorePath,
+                    tlsTruststorePassword,
+                    tlsTruststoreType);
+            ClientHttpRequestFactory factory = KfeVaultMeshTlsSupport.requestFactory(
+                    sslContext,
+                    tlsHostnameVerification,
+                    (int) Math.min(connectTimeoutMs, Integer.MAX_VALUE),
+                    (int) Math.min(readTimeoutMs, Integer.MAX_VALUE));
+            this.restTemplate = builder.requestFactory(() -> factory).build();
+        } else {
+            this.restTemplate = builder.build();
+        }
+    }
+
+    /** Test / lab helper: plaintext client (no mTLS). */
+    KfeVaultMeshSettlementClient(
+            RestTemplateBuilder restTemplateBuilder,
+            ObjectMapper objectMapper,
+            String baseUrl,
+            long connectTimeoutMs,
+            long readTimeoutMs,
+            String apiToken) {
+        this(
+                restTemplateBuilder,
+                objectMapper,
+                baseUrl,
+                connectTimeoutMs,
+                readTimeoutMs,
+                apiToken,
+                false,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "PKCS12",
+                "",
+                "",
+                "PKCS12",
+                true);
+    }
+
+    boolean tlsEnabled() {
+        return tlsEnabled;
     }
 
     @Override
@@ -64,7 +135,10 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         String path = baseUrl + "/sign/" + sessionId + "/" + messageHash;
         try {
             HttpHeaders headers = new HttpHeaders();
-            headers.set("X-Vault-Token", apiToken);
+            // mTLS identity replaces X-Vault-Token; vault MutualTlsAuthAdapter refuses the header.
+            if (!tlsEnabled && !apiToken.isEmpty()) {
+                headers.set("X-Vault-Token", apiToken);
+            }
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
                     restTemplate.postForEntity(path, new HttpEntity<>(headers), Map.class);
