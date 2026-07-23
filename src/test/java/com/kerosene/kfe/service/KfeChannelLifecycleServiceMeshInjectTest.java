@@ -97,7 +97,7 @@ class KfeChannelLifecycleServiceMeshInjectTest {
                 .thenAnswer(
                         inv ->
                                 ChannelsMeshInjectGateway.FundResult.ok(
-                                        null, "CHANNELS_INJECT_FUND_BOUND"));
+                                        "meshfundtxid", "CHANNELS_INJECT_FUNDED_ONCHAIN"));
     }
 
     private static KfeChannelOperationDecisionEntity entityWithId(UUID id) {
@@ -132,7 +132,8 @@ class KfeChannelLifecycleServiceMeshInjectTest {
                 new ObjectMapper(),
                 true,
                 80,
-                requireInject);
+                requireInject,
+                true);
     }
 
     private static KfeOpenChannelRequest openRequest() {
@@ -302,7 +303,7 @@ class KfeChannelLifecycleServiceMeshInjectTest {
                 .thenReturn(Optional.of(reserved));
         when(decisionRepository.findById(decisionId)).thenReturn(Optional.of(reserved));
         when(channelsMeshInject.fundOpen(anyString(), anyLong(), anyString()))
-                .thenReturn(ChannelsMeshInjectGateway.FundResult.ok(null, "BOUND"));
+                .thenReturn(ChannelsMeshInjectGateway.FundResult.ok("meshfundtxid", "FUNDED"));
         when(channelsMeshInject.commitOpen(anyString()))
                 .thenReturn(ChannelsMeshInjectGateway.InjectResult.ok("COMMITTED"));
         when(channelGateway.openChannel(any()))

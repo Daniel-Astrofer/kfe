@@ -1,8 +1,13 @@
 package com.kerosene.kfe.rail;
 
+import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -10,13 +15,11 @@ import java.time.Instant;
 import java.util.Locale;
 
 /**
- * Mesh CHANNELS inject: decision-gate is non-mutating; execution soft-reserves via
- * {@code POST /v1/intent/reserve} with allowlisted destination {@code ln-channel-rebalance},
- * binds an LND funding address, then commits after open.
+ * Mesh CHANNELS inject: soft-reserve → on-chain CHANNELS Taproot PSBT to LND address →
+ * openChannel → Intent commit.
  *
- * <p>On-chain CHANNELS→LND PSBT is not available (shared Taproot is USERS-only). The
- * fund step fail-closes only when the LND address is missing/invalid; residual: LND
- * wallet UTXOs still pay {@code openChannel}.
+ * <p>CHANNELS uses a <strong>dedicated</strong> Taproot key ({@code GET /v1/bitcoin/deposit?bucket=CHANNELS}),
+ * never the USERS omnibus {@code tb1p}.
  */
 @Component
 @ConditionalOnProperty(name = "kfe.vaultmesh.enabled", havingValue = "true")
@@ -27,9 +30,22 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
     static final String CHANNELS_DESTINATION = "ln-channel-rebalance";
 
     private final VaultMeshSettlementPort settlementPort;
+    private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+    private final int fundConfTarget;
+    private final long maxFundFeeSats;
+    private final Long fundFeeRateSatVb;
 
-    public VaultMeshChannelsMeshInjectGateway(VaultMeshSettlementPort settlementPort) {
+    public VaultMeshChannelsMeshInjectGateway(
+            VaultMeshSettlementPort settlementPort,
+            ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
+            @Value("${kfe.channel.mesh-inject-fund-conf-target:1}") int fundConfTarget,
+            @Value("${kfe.channel.mesh-inject-fund-max-fee-sats:50000}") long maxFundFeeSats,
+            @Value("${kfe.channel.mesh-inject-fund-fee-rate-sat-vb:0}") long fundFeeRateSatVb) {
         this.settlementPort = settlementPort;
+        this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
+        this.fundConfTarget = Math.max(1, fundConfTarget);
+        this.maxFundFeeSats = Math.max(0L, maxFundFeeSats);
+        this.fundFeeRateSatVb = fundFeeRateSatVb > 0L ? fundFeeRateSatVb : null;
     }
 
     @Override
@@ -40,7 +56,6 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
         if (peerPubkey == null || peerPubkey.isBlank()) {
             return InjectResult.refuse("CHANNELS_INJECT_MISSING_PEER");
         }
-        // Decision-gate only — no ledger mutation. Capital is reserved at open execution.
         return InjectResult.ok("CHANNELS_INJECT_READY");
     }
 
@@ -75,7 +90,6 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
             return DebitResult.refuse("CHANNELS_INJECT_NULL_RECEIPT");
         }
         if (receipt.status() != VaultMeshReceipt.Status.ACCEPTED) {
-            // Idempotent resume: same decision id already reserved (or committed).
             if (isIdempotentReserve(receipt.reasonCode())) {
                 return DebitResult.ok(
                         intentId.trim(),
@@ -103,33 +117,103 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
             return FundResult.refuse("CHANNELS_INJECT_MISSING_LND_ADDRESS");
         }
         String addr = lndFundingAddress.trim();
-        String lower = addr.toLowerCase(Locale.ROOT);
-        // Bech32 (bc1/tb1/bcrt1) or legacy base58 (1…/3… mainnet, m…/n…/2… testnet).
-        boolean bech32 =
-                lower.startsWith("bc1") || lower.startsWith("tb1") || lower.startsWith("bcrt1");
-        boolean legacy =
-                (lower.startsWith("1") || lower.startsWith("3") || lower.startsWith("m")
-                                || lower.startsWith("n") || lower.startsWith("2"))
-                        && lower.length() >= 26
-                        && lower.chars().allMatch(c ->
-                                (c >= '1' && c <= '9')
-                                        || (c >= 'a' && c <= 'z')
-                                        || (c >= 'A' && c <= 'Z'));
-        if (!bech32 && !legacy) {
+        if (!isPlausibleBitcoinAddress(addr)) {
             return FundResult.refuse("CHANNELS_INJECT_INVALID_LND_ADDRESS");
         }
-        // Reject obvious non-address tokens that only match a legacy prefix char.
-        if (!bech32 && (lower.contains("-") || lower.contains("_") || lower.contains(" "))) {
-            return FundResult.refuse("CHANNELS_INJECT_INVALID_LND_ADDRESS");
+
+        BitcoinCoreRpcClient bitcoinCore = bitcoinCoreRpcClient.getIfAvailable();
+        if (bitcoinCore == null) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_NO_BITCOIN_CORE");
         }
-        // Largest honest slice: bind withdraw target to reserved Intent. Residual:
-        // no CHANNELS on-chain PSBT into LND (per-bucket key not shipped).
+
+        VaultMeshDepositInfo channelsDeposit = settlementPort.getChannelsDepositAddress();
+        if (channelsDeposit == null
+                || channelsDeposit.address() == null
+                || channelsDeposit.address().isBlank()) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_NO_CHANNELS_DEPOSIT");
+        }
+        VaultMeshDepositInfo usersDeposit = settlementPort.getUsersDepositAddress();
+        if (usersDeposit != null
+                && usersDeposit.address() != null
+                && channelsDeposit.address().equalsIgnoreCase(usersDeposit.address().trim())) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_KEY_COLLISION_USERS");
+        }
+
+        try {
+            if (channelsDeposit.descriptor() != null && !channelsDeposit.descriptor().isBlank()) {
+                bitcoinCore.importWatchOnlyDescriptor(channelsDeposit.descriptor(), null);
+            }
+        } catch (RuntimeException ex) {
+            // Descriptor may already be imported; continue to PSBT build (fail later if unfunded).
+        }
+
+        BitcoinCoreRpcClient.FundedPsbt funded;
+        try {
+            funded = bitcoinCore.createFundedPsbt(
+                    addr, amountSats, fundConfTarget, fundFeeRateSatVb, "bech32m");
+        } catch (RuntimeException ex) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_PSBT_BUILD_FAILED:" + ex.getClass().getSimpleName());
+        }
+        if (funded == null || funded.psbt() == null || funded.psbt().isBlank()) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_EMPTY_PSBT");
+        }
+        if (funded.feeSats() > maxFundFeeSats) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_FEE_CAP:" + funded.feeSats() + ">" + maxFundFeeSats);
+        }
+
+        String sessionId = "btc-channels-fund-" + intentId.trim().toLowerCase(Locale.ROOT);
+        VaultMeshPsbtReceipt signed = settlementPort.signPsbt(
+                new VaultMeshPsbtRequest(
+                        intentId.trim(),
+                        sessionId,
+                        BUCKET_CHANNELS,
+                        addr,
+                        amountSats,
+                        funded.psbt(),
+                        Boolean.FALSE));
+        if (signed.status() == VaultMeshReceipt.Status.FAIL_STOP) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_MESH_FAIL_STOP:"
+                            + (signed.reasonCode() == null ? "UNKNOWN" : signed.reasonCode()));
+        }
+        if (signed.status() != VaultMeshReceipt.Status.ACCEPTED
+                || signed.signedPsbt() == null
+                || signed.signedPsbt().isBlank()) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_MESH_SIGN_REFUSED:"
+                            + (signed.reasonCode() == null ? "UNKNOWN" : signed.reasonCode()));
+        }
+
+        BitcoinCoreRpcClient.FinalizedPsbt finalized;
+        try {
+            finalized = bitcoinCore.finalizePsbt(signed.signedPsbt());
+        } catch (RuntimeException ex) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_FINALIZE_FAILED:" + ex.getClass().getSimpleName());
+        }
+        if (finalized == null
+                || !finalized.complete()
+                || finalized.hex() == null
+                || finalized.hex().isBlank()) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_FINALIZE_INCOMPLETE");
+        }
+
+        String txid;
+        try {
+            txid = bitcoinCore.sendRawTransaction(finalized.hex());
+        } catch (RuntimeException ex) {
+            return FundResult.refuse(
+                    "CHANNELS_INJECT_FUND_BROADCAST_FAILED:" + ex.getClass().getSimpleName());
+        }
+        if (txid == null || txid.isBlank()) {
+            return FundResult.refuse("CHANNELS_INJECT_FUND_BROADCAST_NO_TXID");
+        }
+
         return FundResult.ok(
-                null,
-                "CHANNELS_INJECT_FUND_BOUND:"
-                        + intentId.trim().toLowerCase(Locale.ROOT)
-                        + ":"
-                        + addr);
+                txid.trim(),
+                "CHANNELS_INJECT_FUNDED_ONCHAIN:" + txid.trim() + ":" + addr);
     }
 
     @Override
@@ -182,6 +266,27 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
         return InjectResult.ok("CHANNELS_INJECT_COMMITTED:" + intentId.trim());
     }
 
+    private static boolean isPlausibleBitcoinAddress(String addr) {
+        String lower = addr.toLowerCase(Locale.ROOT);
+        boolean bech32 =
+                lower.startsWith("bc1") || lower.startsWith("tb1") || lower.startsWith("bcrt1");
+        boolean legacy =
+                (lower.startsWith("1") || lower.startsWith("3") || lower.startsWith("m")
+                                || lower.startsWith("n") || lower.startsWith("2"))
+                        && lower.length() >= 26
+                        && lower.chars().allMatch(c ->
+                                (c >= '1' && c <= '9')
+                                        || (c >= 'a' && c <= 'z')
+                                        || (c >= 'A' && c <= 'Z'));
+        if (!bech32 && !legacy) {
+            return false;
+        }
+        if (!bech32 && (lower.contains("-") || lower.contains("_") || lower.contains(" "))) {
+            return false;
+        }
+        return true;
+    }
+
     private static boolean isIdempotentReserve(String reasonCode) {
         if (reasonCode == null || reasonCode.isBlank()) {
             return false;
@@ -198,7 +303,6 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
             return false;
         }
         String r = reasonCode.toLowerCase(Locale.ROOT);
-        // Already durable-consumed: commit retry is a no-op success.
         return r.contains("intent replay")
                 || r.contains("already consumed")
                 || r.contains("already_committed")

@@ -32,10 +32,9 @@ public interface ChannelsMeshInjectGateway {
     }
 
     /**
-     * Bind a mesh CHANNELS withdraw to an LND wallet address for this open.
-     * Largest shipped slice: ledger reservation + address binding (fail-closed if
-     * address missing/invalid). Full CHANNELS on-chain PSBT → LND is not available
-     * until per-bucket Taproot keys exist (shared key is USERS-only).
+     * Build + sign + broadcast CHANNELS Taproot PSBT to the bound LND funding address
+     * (amount + fees). Fail-closed if Bitcoin Core / mesh sign / broadcast fails.
+     * CHANNELS key ≠ USERS omnibus.
      */
     default FundResult fundOpen(String intentId, long amountSats, String lndFundingAddress) {
         return FundResult.refuse("CHANNELS_INJECT_FUND_UNSUPPORTED");

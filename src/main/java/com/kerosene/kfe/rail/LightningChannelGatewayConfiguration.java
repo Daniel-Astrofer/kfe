@@ -11,8 +11,8 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>CHANNELS→LND mesh inject defaults to {@link FailClosedChannelsMeshInjectGateway}
  * when vaultmesh is off. With {@code kfe.vaultmesh.enabled=true},
- * {@link VaultMeshChannelsMeshInjectGateway} soft-reserves CHANNELS capital, binds an
- * LND funding address, then commits after open.
+ * {@link VaultMeshChannelsMeshInjectGateway} soft-reserves CHANNELS capital, funds LND
+ * on-chain from the dedicated CHANNELS Taproot key (≠ USERS), then commits after open.
  */
 @Configuration
 public class LightningChannelGatewayConfiguration {

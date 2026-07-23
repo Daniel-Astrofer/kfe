@@ -92,17 +92,17 @@ class KfeVaultMeshSettlementClientTest {
     }
 
     @Test
-    void signPsbtRejectsNonUsersBucketOnSharedTaproot() {
+    void signPsbtRejectsInfraBucketOnTaproot() {
         KfeVaultMeshSettlementClient client = client();
         var receipt = client.signPsbt(new com.kerosene.common.vaultmesh.VaultMeshPsbtRequest(
-                "intent-ch",
-                "sess-ch",
-                "CHANNELS",
-                "ln-channel-rebalance",
+                "intent-infra",
+                "sess-infra",
+                "INFRA",
+                "tb1q-infra-ops",
                 1_000L,
                 "cHNidP8BAHic"));
         assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
-        assertThat(receipt.reasonCode()).isEqualTo("MESH_BUCKET_NOT_SHARED_TAPROOT:CHANNELS");
+        assertThat(receipt.reasonCode()).isEqualTo("MESH_BUCKET_NOT_SHARED_TAPROOT:INFRA");
     }
 
     @Test
@@ -110,7 +110,7 @@ class KfeVaultMeshSettlementClientTest {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
 
-        server.expect(requestTo("http://vault.test:7701/v1/bitcoin/deposit"))
+        server.expect(requestTo("http://vault.test:7701/v1/bitcoin/deposit?bucket=USERS"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(
                         """

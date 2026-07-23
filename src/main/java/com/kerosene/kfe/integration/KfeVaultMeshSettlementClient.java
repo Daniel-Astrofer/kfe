@@ -258,7 +258,16 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     @Override
     public VaultMeshDepositInfo getUsersDepositAddress() {
-        String path = baseUrl + "/v1/bitcoin/deposit";
+        return fetchDeposit("USERS");
+    }
+
+    @Override
+    public VaultMeshDepositInfo getChannelsDepositAddress() {
+        return fetchDeposit("CHANNELS");
+    }
+
+    private VaultMeshDepositInfo fetchDeposit(String bucket) {
+        String path = baseUrl + "/v1/bitcoin/deposit?bucket=" + bucket;
         try {
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
@@ -272,8 +281,9 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             if (address == null || address.isBlank()) {
                 return null;
             }
-            // Enforce USERS deposit policy: shared Taproot tb1p only.
-            if (!address.trim().toLowerCase(Locale.ROOT).startsWith("tb1p")) {
+            String lower = address.trim().toLowerCase(Locale.ROOT);
+            // Mesh Taproot deposits are bech32m (tb1p / bc1p / bcrt1p).
+            if (!(lower.startsWith("tb1p") || lower.startsWith("bc1p") || lower.startsWith("bcrt1p"))) {
                 return null;
             }
             return new VaultMeshDepositInfo(
@@ -296,12 +306,12 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         if (request.psbtBase64() == null || request.psbtBase64().isBlank()) {
             return psbtRejected("EMPTY_PSBT", request.intentId());
         }
-        // Shared Taproot deposit key is USERS-only until per-bucket keys exist.
-        // CHANNELS/INFRA must not escape via the same tr()/tb1p (vault assert_shared_taproot_bucket).
+        // USERS → shared Taproot; CHANNELS → dedicated CHANNELS Taproot (≠ USERS omnibus).
+        // Other buckets stay fail-closed on shared key escape.
         String bucket = request.bucket() == null || request.bucket().isBlank()
                 ? "USERS"
                 : request.bucket().trim().toUpperCase(Locale.ROOT);
-        if (!"USERS".equals(bucket)) {
+        if (!"USERS".equals(bucket) && !"CHANNELS".equals(bucket)) {
             return psbtRejected("MESH_BUCKET_NOT_SHARED_TAPROOT:" + bucket, request.intentId());
         }
         String path = baseUrl + "/v1/bitcoin/sign-psbt";
@@ -313,6 +323,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             payload.put("bucket", bucket);
             payload.put("destination", request.destination() == null ? "" : request.destination());
             payload.put("amount_sats", request.amountSats());
+            payload.put("commit_intent", request.shouldCommitIntent());
             String json = objectMapper.writeValueAsString(payload);
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =

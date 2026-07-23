@@ -29,9 +29,10 @@ import java.util.UUID;
  * Structural costs are attributed under SYSTEM_PROFIT policy (profit wallet must exist).
  *
  * <p>When {@code kfe.channel.require-channels-mesh-inject=true}, OPEN couples mesh CHANNELS
- * soft-reserve → LND address bind (fund) → LND {@code openChannel} → Intent commit
- * (release on open failure). Durable phase + stable Intent id enable crash resume and
- * commit-retry.
+ * soft-reserve → CHANNELS Taproot on-chain fund to LND address → LND {@code openChannel} →
+ * Intent commit (release on open/fund failure). Durable phase + stable Intent id enable crash
+ * resume and commit-retry. Open requires a mesh fund txid (no sole reliance on pre-existing
+ * LND wallet UTXOs).
  */
 @Service
 public class KfeChannelLifecycleService {
@@ -54,6 +55,7 @@ public class KfeChannelLifecycleService {
     private final boolean anchorsRequired;
     private final int defaultTimeLockDelta;
     private final boolean requireChannelsMeshInject;
+    private final boolean meshInjectFundZeroConfLab;
 
     public KfeChannelLifecycleService(
             KfeChannelDecisionService decisionService,
@@ -67,7 +69,9 @@ public class KfeChannelLifecycleService {
             ObjectMapper objectMapper,
             @Value("${kfe.channel.anchors-required:true}") boolean anchorsRequired,
             @Value("${kfe.channel.default-time-lock-delta:80}") int defaultTimeLockDelta,
-            @Value("${kfe.channel.require-channels-mesh-inject:false}") boolean requireChannelsMeshInject) {
+            @Value("${kfe.channel.require-channels-mesh-inject:false}") boolean requireChannelsMeshInject,
+            @Value("${kfe.channel.mesh-inject-fund-zero-conf-lab:false}")
+                    boolean meshInjectFundZeroConfLab) {
         this.decisionService = decisionService;
         this.channelGateway = channelGateway;
         this.channelsMeshInject = channelsMeshInject;
@@ -80,6 +84,7 @@ public class KfeChannelLifecycleService {
         this.anchorsRequired = anchorsRequired;
         this.defaultTimeLockDelta = Math.max(18, defaultTimeLockDelta);
         this.requireChannelsMeshInject = requireChannelsMeshInject;
+        this.meshInjectFundZeroConfLab = meshInjectFundZeroConfLab;
     }
 
     @Transactional(readOnly = true)
@@ -208,11 +213,19 @@ public class KfeChannelLifecycleService {
                                 ? "CHANNELS_INJECT_FUND_FAILED"
                                 : funded.reasonCode());
             }
-
-            long onchain = channelGateway.confirmedOnchainBalanceSats();
-            if (onchain >= 0L && onchain < request.localAmountSats()) {
+            // Fail-closed: mesh must broadcast CHANNELS→LND fund tx — do not open
+            // solely on pre-existing LND wallet UTXOs.
+            if (funded.fundingTxid() == null || funded.fundingTxid().isBlank()) {
                 compensateRelease(entity, request.localAmountSats(), request.peerPubkey());
-                return markReason(decisionId, "CHANNELS_INJECT_LND_WALLET_UNDERFUNDED");
+                return markReason(decisionId, "CHANNELS_INJECT_FUND_MISSING_TXID");
+            }
+
+            if (!meshInjectFundZeroConfLab) {
+                long onchain = channelGateway.confirmedOnchainBalanceSats();
+                if (onchain >= 0L && onchain < request.localAmountSats()) {
+                    compensateRelease(entity, request.localAmountSats(), request.peerPubkey());
+                    return markReason(decisionId, "CHANNELS_INJECT_LND_WALLET_UNDERFUNDED");
+                }
             }
 
             entity.setMeshFundTxid(funded.fundingTxid());
@@ -223,6 +236,10 @@ public class KfeChannelLifecycleService {
         }
 
         if (PHASE_FUNDED.equals(phase)) {
+            if (entity.getMeshFundTxid() == null || entity.getMeshFundTxid().isBlank()) {
+                compensateRelease(entity, request.localAmountSats(), request.peerPubkey());
+                return markReason(decisionId, "CHANNELS_INJECT_FUND_MISSING_TXID");
+            }
             LightningChannelGateway.OpenChannelResult result;
             try {
                 result = channelGateway.openChannel(
@@ -230,7 +247,8 @@ public class KfeChannelLifecycleService {
                                 request.peerPubkey(),
                                 request.localAmountSats(),
                                 Boolean.TRUE.equals(request.privateChannel()),
-                                Boolean.TRUE.equals(request.spendUnconfirmed())));
+                                Boolean.TRUE.equals(request.spendUnconfirmed())
+                                        || meshInjectFundZeroConfLab));
             } catch (RuntimeException ex) {
                 compensateRelease(entity, request.localAmountSats(), request.peerPubkey());
                 String suffix = PHASE_RELEASED.equals(entity.getMeshInjectPhase())

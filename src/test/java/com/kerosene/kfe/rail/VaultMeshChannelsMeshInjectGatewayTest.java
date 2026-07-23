@@ -1,9 +1,13 @@
 package com.kerosene.kfe.rail;
 
+import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshIntent;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
+import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Instant;
 import java.util.Locale;
@@ -22,7 +26,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
     @Test
     void authorizeOpenIsNonMutatingReadinessCheck() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         assertThat(gateway.authorizeOpen(0L, "02ab").authorized()).isFalse();
         assertThat(gateway.authorizeOpen(1L, " ").authorized()).isFalse();
@@ -36,7 +40,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
     @Test
     void reserveOpenAcceptsWhenVaultReceiptAccepted() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         when(port.reserveIntent(
                         argThat(
@@ -67,7 +71,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
     @Test
     void reserveOpenRefusesWhenVaultReceiptRejected() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         when(port.reserveIntent(argThat(i -> i.bucket().equals("CHANNELS"))))
                 .thenReturn(
@@ -87,7 +91,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
     @Test
     void releaseAndCommitDelegateToSettlementPort() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         when(port.releaseIntent(eq("intent-1"), eq("CHANNELS"), eq(500L)))
                 .thenReturn(
@@ -114,24 +118,107 @@ class VaultMeshChannelsMeshInjectGatewayTest {
     }
 
     @Test
-    void fundOpenBindsLndAddressFailClosedOnInvalid() {
+    void fundOpenFailClosedWithoutBitcoinCoreOrInvalidAddress() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         assertThat(gateway.fundOpen("intent-1", 100L, " ").authorized()).isFalse();
         assertThat(gateway.fundOpen("intent-1", 100L, "not-an-address").authorized()).isFalse();
-        assertThat(gateway.fundOpen("intent-1", 100L, "mailto:x").authorized()).isFalse();
+        assertThat(
+                        gateway
+                                .fundOpen(
+                                        "intent-1",
+                                        100L,
+                                        "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+                                .reasonCode())
+                .contains("CHANNELS_INJECT_FUND_NO_BITCOIN_CORE");
+        verify(port, never()).signPsbt(any());
+    }
+
+    @Test
+    void fundOpenBuildsSignsAndBroadcastsChannelsPsbt() {
+        VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
+        BitcoinCoreRpcClient core = mock(BitcoinCoreRpcClient.class);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, core);
+
+        when(port.getChannelsDepositAddress())
+                .thenReturn(
+                        new VaultMeshDepositInfo(
+                                "tb1pchannels0000000000000000000000000000000000000000000000000000",
+                                "tr(channelskey)",
+                                "frost-secp256k1-tr-v3",
+                                "cc",
+                                "dd",
+                                "testnet3"));
+        when(port.getUsersDepositAddress())
+                .thenReturn(
+                        new VaultMeshDepositInfo(
+                                "tb1pusers000000000000000000000000000000000000000000000000000000",
+                                "tr(userskey)",
+                                "frost-secp256k1-tr-v3",
+                                "aa",
+                                "bb",
+                                "testnet3"));
+        when(core.createFundedPsbt(any(), eq(100L), eq(1), eq(null), eq("bech32m")))
+                .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 250L));
+        when(port.signPsbt(any(VaultMeshPsbtRequest.class)))
+                .thenReturn(
+                        new VaultMeshPsbtReceipt(
+                                "intent-1",
+                                VaultMeshReceipt.Status.ACCEPTED,
+                                null,
+                                "signed-psbt",
+                                "proof",
+                                Instant.now().toEpochMilli()));
+        when(core.finalizePsbt("signed-psbt"))
+                .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("deadbeef", true));
+        when(core.sendRawTransaction("deadbeef")).thenReturn("broadcasttxid");
+
         ChannelsMeshInjectGateway.FundResult ok =
-                gateway.fundOpen("intent-1", 100L, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
+                gateway.fundOpen(
+                        "intent-1", 100L, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
+
         assertThat(ok.authorized()).isTrue();
-        assertThat(ok.reasonCode().toUpperCase(Locale.ROOT)).contains("CHANNELS_INJECT_FUND_BOUND");
+        assertThat(ok.fundingTxid()).isEqualTo("broadcasttxid");
+        assertThat(ok.reasonCode().toUpperCase(Locale.ROOT)).contains("CHANNELS_INJECT_FUNDED_ONCHAIN");
+        verify(port)
+                .signPsbt(
+                        argThat(
+                                (VaultMeshPsbtRequest r) ->
+                                        "CHANNELS".equals(r.bucket())
+                                                && !r.shouldCommitIntent()
+                                                && "funded-psbt".equals(r.psbtBase64())));
+        verify(core).sendRawTransaction("deadbeef");
+    }
+
+    @Test
+    void fundOpenRefusesUsersChannelsKeyCollision() {
+        VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
+        BitcoinCoreRpcClient core = mock(BitcoinCoreRpcClient.class);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, core);
+        VaultMeshDepositInfo same =
+                new VaultMeshDepositInfo(
+                        "tb1psame0000000000000000000000000000000000000000000000000000000",
+                        "tr(x)",
+                        "frost-secp256k1-tr-v3",
+                        "aa",
+                        "bb",
+                        "testnet3");
+        when(port.getChannelsDepositAddress()).thenReturn(same);
+        when(port.getUsersDepositAddress()).thenReturn(same);
+
+        ChannelsMeshInjectGateway.FundResult r =
+                gateway.fundOpen(
+                        "intent-1", 100L, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
+        assertThat(r.authorized()).isFalse();
+        assertThat(r.reasonCode()).contains("CHANNELS_INJECT_FUND_KEY_COLLISION_USERS");
         verify(port, never()).signPsbt(any());
     }
 
     @Test
     void reserveAndCommitAreIdempotentOnReplayReasons() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
-        VaultMeshChannelsMeshInjectGateway gateway = new VaultMeshChannelsMeshInjectGateway(port);
+        VaultMeshChannelsMeshInjectGateway gateway = gateway(port, null);
 
         when(port.reserveIntent(any()))
                 .thenReturn(
@@ -152,5 +239,13 @@ class VaultMeshChannelsMeshInjectGatewayTest {
 
         assertThat(gateway.reserveOpen("intent-1", 100L, "02ab").authorized()).isTrue();
         assertThat(gateway.commitOpen("intent-1").authorized()).isTrue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static VaultMeshChannelsMeshInjectGateway gateway(
+            VaultMeshSettlementPort port, BitcoinCoreRpcClient core) {
+        ObjectProvider<BitcoinCoreRpcClient> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(core);
+        return new VaultMeshChannelsMeshInjectGateway(port, provider, 1, 50_000L, 0L);
     }
 }
