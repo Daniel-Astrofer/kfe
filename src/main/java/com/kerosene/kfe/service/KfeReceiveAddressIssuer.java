@@ -16,6 +16,14 @@ public class KfeReceiveAddressIssuer {
     private final String platformMasterXpub;
     private final boolean bitcoinCoreWalletAddressEnabled;
 
+    /**
+     * Issues product custodial receive addresses from {@code bitcoin.platform.master-xpub}
+     * (BIP84 HD) or Bitcoin Core wallet.
+     *
+     * <p><b>Not</b> the vault-mesh treasury deposit: mesh deposit is Taproot
+     * {@code GET /v1/bitcoin/deposit} ({@code tr()} / {@code tb1p…}) from the FROST group
+     * verifying key. Do not treat this xpub path as the mesh omnibus address.
+     */
     public KfeReceiveAddressIssuer(
             AddressDerivationService addressDerivationService,
             KfeDerivationCursorService cursorService,

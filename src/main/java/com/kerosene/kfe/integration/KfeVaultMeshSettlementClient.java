@@ -174,13 +174,21 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         if (request.psbtBase64() == null || request.psbtBase64().isBlank()) {
             return psbtRejected("EMPTY_PSBT", request.intentId());
         }
+        // Shared Taproot deposit key is USERS-only until per-bucket keys exist.
+        // CHANNELS/INFRA must not escape via the same tr()/tb1p (vault assert_shared_taproot_bucket).
+        String bucket = request.bucket() == null || request.bucket().isBlank()
+                ? "USERS"
+                : request.bucket().trim().toUpperCase(Locale.ROOT);
+        if (!"USERS".equals(bucket)) {
+            return psbtRejected("MESH_BUCKET_NOT_SHARED_TAPROOT:" + bucket, request.intentId());
+        }
         String path = baseUrl + "/v1/bitcoin/sign-psbt";
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("session_id", firstNonBlank(request.sessionId(), request.intentId()));
             payload.put("psbt", request.psbtBase64());
             payload.put("intent_id", request.intentId());
-            payload.put("bucket", request.bucket() == null ? "USERS" : request.bucket());
+            payload.put("bucket", bucket);
             payload.put("destination", request.destination() == null ? "" : request.destination());
             payload.put("amount_sats", request.amountSats());
             String json = objectMapper.writeValueAsString(payload);

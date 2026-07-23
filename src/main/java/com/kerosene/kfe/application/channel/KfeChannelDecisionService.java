@@ -3,6 +3,7 @@ package com.kerosene.kfe.application.channel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.model.KfeChannelOperationType;
+import com.kerosene.kfe.rail.ChannelsMeshInjectGateway;
 import com.kerosene.kfe.rail.LightningChannelGateway;
 import com.kerosene.kfe.service.KfeLightningJammingGuard;
 import com.kerosene.kfe.service.KfeQuorumGateway;
@@ -25,6 +26,7 @@ public class KfeChannelDecisionService {
     private final KfeQuorumGateway quorumGateway;
     private final KfeSystemWalletService systemWalletService;
     private final KfeLightningJammingGuard jammingGuard;
+    private final ChannelsMeshInjectGateway channelsMeshInject;
     private final long minOpenCapitalSats;
     private final long maxOnchainFeeRateSatVb;
     private final double rebalanceDrainRatio;
@@ -32,21 +34,25 @@ public class KfeChannelDecisionService {
     private final long breakEvenPpm;
     private final Set<String> peerDenylist;
     private final boolean requireMpcForStructural;
+    private final boolean requireChannelsMeshInject;
 
     public KfeChannelDecisionService(
             KfeQuorumGateway quorumGateway,
             KfeSystemWalletService systemWalletService,
             KfeLightningJammingGuard jammingGuard,
+            ChannelsMeshInjectGateway channelsMeshInject,
             @Value("${kfe.channel.min-open-capital-sats:10000000}") long minOpenCapitalSats,
             @Value("${kfe.channel.max-onchain-fee-rate-sat-vb:50}") long maxOnchainFeeRateSatVb,
             @Value("${kfe.channel.rebalance-drain-ratio:0.20}") double rebalanceDrainRatio,
             @Value("${kfe.channel.drain-deterrent-ppm:5000}") long drainDeterrentPpm,
             @Value("${kfe.channel.break-even-ppm:1000}") long breakEvenPpm,
             @Value("${kfe.lightning.peer-denylist:}") String peerDenylistCsv,
-            @Value("${kfe.channel.require-mpc:true}") boolean requireMpcForStructural) {
+            @Value("${kfe.channel.require-mpc:true}") boolean requireMpcForStructural,
+            @Value("${kfe.channel.require-channels-mesh-inject:false}") boolean requireChannelsMeshInject) {
         this.quorumGateway = quorumGateway;
         this.systemWalletService = systemWalletService;
         this.jammingGuard = jammingGuard;
+        this.channelsMeshInject = channelsMeshInject;
         this.minOpenCapitalSats = Math.max(0L, minOpenCapitalSats);
         this.maxOnchainFeeRateSatVb = Math.max(1L, maxOnchainFeeRateSatVb);
         this.rebalanceDrainRatio = Math.min(1.0d, Math.max(0.0d, rebalanceDrainRatio));
@@ -54,6 +60,7 @@ public class KfeChannelDecisionService {
         this.breakEvenPpm = Math.max(0L, breakEvenPpm);
         this.peerDenylist = parseDenylist(peerDenylistCsv);
         this.requireMpcForStructural = requireMpcForStructural;
+        this.requireChannelsMeshInject = requireChannelsMeshInject;
     }
 
     public ChannelDecisionResult evaluateOpen(
@@ -80,6 +87,7 @@ public class KfeChannelDecisionService {
                 : ChannelFlagEvaluation.fail(ChannelDecisionFlag.V_SAIDA_ANCORA, "ANCHORS_REQUIRED"));
         flags.add(evaluateMpc(proposalHash));
         flags.add(evaluatePeerNotDenylisted(peerPubkey));
+        flags.add(evaluateChannelsMeshInject(localAmountSats, peerPubkey));
         return new ChannelDecisionResult(KfeChannelOperationType.OPEN, flags);
     }
 
@@ -194,6 +202,26 @@ public class KfeChannelDecisionService {
                     ChannelDecisionFlag.V_AUTORIZACAO_MPC,
                     "QUORUM_REJECTED:" + safe(ex));
         }
+    }
+
+    /**
+     * When enabled (mesh go-live), OPEN must be backed by a real CHANNELS→LND inject.
+     * Default adapter is fail-closed ({@code CHANNELS_MESH_INJECT_NOT_WIRED}) — LND wallet
+     * balance alone is not mesh CHANNELS capital.
+     */
+    private ChannelFlagEvaluation evaluateChannelsMeshInject(long amountSats, String peerPubkey) {
+        if (!requireChannelsMeshInject) {
+            return ChannelFlagEvaluation.pass(
+                    ChannelDecisionFlag.V_CHANNELS_MESH_INJECT, "CHANNELS_INJECT_NOT_REQUIRED");
+        }
+        ChannelsMeshInjectGateway.InjectResult result =
+                channelsMeshInject.authorizeOpen(amountSats, peerPubkey);
+        if (result.authorized()) {
+            return ChannelFlagEvaluation.pass(
+                    ChannelDecisionFlag.V_CHANNELS_MESH_INJECT, result.reasonCode());
+        }
+        return ChannelFlagEvaluation.fail(
+                ChannelDecisionFlag.V_CHANNELS_MESH_INJECT, result.reasonCode());
     }
 
     private ChannelFlagEvaluation evaluatePeerNotDenylisted(String peerPubkey) {

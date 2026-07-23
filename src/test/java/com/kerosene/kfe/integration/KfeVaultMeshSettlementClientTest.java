@@ -91,6 +91,20 @@ class KfeVaultMeshSettlementClientTest {
     }
 
     @Test
+    void signPsbtRejectsNonUsersBucketOnSharedTaproot() {
+        KfeVaultMeshSettlementClient client = client();
+        var receipt = client.signPsbt(new com.kerosene.common.vaultmesh.VaultMeshPsbtRequest(
+                "intent-ch",
+                "sess-ch",
+                "CHANNELS",
+                "ln-channel-rebalance",
+                1_000L,
+                "cHNidP8BAHic"));
+        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
+        assertThat(receipt.reasonCode()).isEqualTo("MESH_BUCKET_NOT_SHARED_TAPROOT:CHANNELS");
+    }
+
+    @Test
     void getDayStatusMapsCurrentEpoch() throws Exception {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));

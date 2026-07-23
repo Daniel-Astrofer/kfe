@@ -32,13 +32,15 @@ class KfeChannelDecisionServiceTest {
                 quorumGateway,
                 systemWalletService,
                 jammingGuard,
+                new com.kerosene.kfe.rail.FailClosedChannelsMeshInjectGateway(),
                 10_000_000L,
                 50L,
                 0.20d,
                 5_000L,
                 1_000L,
                 "badpeer",
-                true);
+                true,
+                false);
     }
 
     @Test
@@ -82,5 +84,34 @@ class KfeChannelDecisionServiceTest {
         ChannelDecisionResult result = service.evaluatePpm(2_000L, true);
         assertThat(result.passed()).isTrue();
         assertThat(service.recommendedPpm(2_000L, true)).isEqualTo(5_000L);
+    }
+
+    @Test
+    void openFailsClosedWhenChannelsMeshInjectRequired() {
+        KfeChannelDecisionService gated = new KfeChannelDecisionService(
+                quorumGateway,
+                systemWalletService,
+                jammingGuard,
+                new com.kerosene.kfe.rail.FailClosedChannelsMeshInjectGateway(),
+                10_000_000L,
+                50L,
+                0.20d,
+                5_000L,
+                1_000L,
+                "",
+                true,
+                true);
+        ChannelDecisionResult result = gated.evaluateOpen(
+                "goodpeer",
+                10_000_000L,
+                10L,
+                true,
+                "proposal-hash");
+        assertThat(result.passed()).isFalse();
+        assertThat(result.evaluations().stream()
+                        .filter(e -> !e.pass())
+                        .map(ChannelFlagEvaluation::reason)
+                        .anyMatch(r -> r.contains("CHANNELS_MESH_INJECT_NOT_WIRED")))
+                .isTrue();
     }
 }

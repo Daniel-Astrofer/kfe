@@ -10,6 +10,8 @@ public enum ChannelDecisionFlag {
     V_SAIDA_ANCORA,
     V_AUTORIZACAO_MPC,
     V_DENYLIST_PEER,
+    /** Mesh CHANNELS bucket → LND funding inject (fail-closed until wired). */
+    V_CHANNELS_MESH_INJECT,
     // REBALANCE
     V_LIMIAR_DRENAGEM,
     V_LUCRO_MATEMATICO,
