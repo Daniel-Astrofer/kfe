@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
@@ -12,6 +13,7 @@ import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.rail.CustodyGateway;
 import com.kerosene.kfe.rail.LightningInvoiceGateway;
 import com.kerosene.kfe.repository.KfePaymentRequestRepository;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
@@ -19,12 +21,14 @@ import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -58,7 +62,8 @@ class KfePaymentRequestServiceTest {
             auditLogService,
             dashboardPublisher,
             lightningInvoiceGateway,
-            transactionCancellationService);
+            transactionCancellationService,
+            new ObjectMapper());
 
     @Test
     void publicGetExpiresOverdueOpenRequestBeforeReturningIt() {
@@ -99,6 +104,7 @@ class KfePaymentRequestServiceTest {
         var response = service.create(7L, new KfeCreatePaymentRequest(
                 walletId,
                 KfeRail.ONCHAIN,
+                null,
                 10_000L,
                 null,
                 null,
@@ -139,6 +145,7 @@ class KfePaymentRequestServiceTest {
         var response = service.create(7L, new KfeCreatePaymentRequest(
                 walletId,
                 KfeRail.ONCHAIN,
+                null,
                 10_000L,
                 null,
                 null,
@@ -170,6 +177,7 @@ class KfePaymentRequestServiceTest {
         var response = service.create(7L, new KfeCreatePaymentRequest(
                 walletId,
                 KfeRail.INTERNAL,
+                null,
                 10_000L,
                 "Internal payment",
                 null,
@@ -221,6 +229,131 @@ class KfePaymentRequestServiceTest {
         assertThat(response.confirmations()).isZero();
         assertThat(response.grossAmountSats()).isEqualTo(11_000L);
         assertThat(response.receiverAmountSats()).isEqualTo(10_901L);
+    }
+
+    @Test
+    void createWithRailsListTriggersMultiRailInvoiceAndAddress() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = new KfeWalletEntity();
+        wallet.setId(walletId);
+        wallet.setUserId(7L);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setStatus(KfeWalletStatus.ACTIVE);
+        wallet.setLastDerivedIndex(-1);
+
+        when(walletRepository.findByIdAndUserId(walletId, 7L)).thenReturn(Optional.of(wallet));
+        when(receiveAddressIssuer.issue("kfe-payment-request-" + walletId))
+                .thenReturn(new KfeReceiveAddressIssuer.IssuedAddress(
+                        "tb1qonchain", "bitcoin-core-wallet:kfe", -1, "KFE_BITCOIN_CORE_WALLET"));
+        when(lightningInvoiceGateway.isLive()).thenReturn(true);
+        when(lightningInvoiceGateway.createLightningInvoice(any()))
+                .thenReturn(new CustodyGateway.GeneratedLightningInvoice(
+                        "lnbcrt1mocked_invoice", "aabb", null, null, null));
+        when(addressRepository.save(any(KfeWalletAddressEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentRequestRepository.findByPublicId(anyString())).thenReturn(Optional.empty());
+        when(paymentRequestRepository.save(any(KfePaymentRequestEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.create(7L, new KfeCreatePaymentRequest(
+                walletId,
+                null,
+                List.of(KfeRail.ONCHAIN, KfeRail.LIGHTNING),
+                10_000L,
+                "Multi-rail test",
+                "memo",
+                null,
+                null,
+                true));
+
+        assertThat(response.rail()).isEqualTo(KfeRail.ONCHAIN);
+        assertThat(response.rails()).isNotNull();
+        assertThat(response.rails()).hasSize(2);
+        assertThat(response.rails().get(0).rail()).isEqualTo(KfeRail.ONCHAIN);
+        assertThat(response.rails().get(0).address()).isEqualTo("tb1qonchain");
+        assertThat(response.rails().get(1).rail()).isEqualTo(KfeRail.LIGHTNING);
+        assertThat(response.rails().get(1).paymentRequest()).isEqualTo("lnbcrt1mocked_invoice");
+        assertThat(response.paymentRequest()).isEqualTo("lnbcrt1mocked_invoice");
+        assertThat(response.address()).isEqualTo("tb1qonchain");
+    }
+
+    @Test
+    void createFallsBackToLegacyRailWhenRailsListIsNull() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = new KfeWalletEntity();
+        wallet.setId(walletId);
+        wallet.setUserId(7L);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setStatus(KfeWalletStatus.ACTIVE);
+        wallet.setLastDerivedIndex(-1);
+
+        when(walletRepository.findByIdAndUserId(walletId, 7L)).thenReturn(Optional.of(wallet));
+        when(receiveAddressIssuer.issue("kfe-payment-request-" + walletId))
+                .thenReturn(new KfeReceiveAddressIssuer.IssuedAddress(
+                        "tb1qlegacy", "bitcoin-core-wallet:kfe", -1, "KFE_BITCOIN_CORE_WALLET"));
+        when(addressRepository.save(any(KfeWalletAddressEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentRequestRepository.findByPublicId(anyString())).thenReturn(Optional.empty());
+        when(paymentRequestRepository.save(any(KfePaymentRequestEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.create(7L, new KfeCreatePaymentRequest(
+                walletId,
+                KfeRail.ONCHAIN,
+                null,
+                10_000L,
+                null, null, null, null, true));
+
+        assertThat(response.rail()).isEqualTo(KfeRail.ONCHAIN);
+        assertThat(response.rails()).hasSize(1);
+        assertThat(response.rails().get(0).rail()).isEqualTo(KfeRail.ONCHAIN);
+    }
+
+    @Test
+    void railsDataUsesObjectMapperJsonAndIsRoundTrippable() {
+        UUID walletId = UUID.randomUUID();
+        KfeWalletEntity wallet = new KfeWalletEntity();
+        wallet.setId(walletId);
+        wallet.setUserId(7L);
+        wallet.setKind(KfeWalletKind.CUSTODIAL_ONCHAIN);
+        wallet.setStatus(KfeWalletStatus.ACTIVE);
+        wallet.setLastDerivedIndex(-1);
+
+        when(walletRepository.findByIdAndUserId(walletId, 7L)).thenReturn(Optional.of(wallet));
+        when(receiveAddressIssuer.issue(anyString()))
+                .thenReturn(new KfeReceiveAddressIssuer.IssuedAddress(
+                        "tb1qonchain", "bitcoin-core-wallet:kfe", -1, "KFE_BITCOIN_CORE_WALLET"));
+        when(lightningInvoiceGateway.isLive()).thenReturn(true);
+        when(lightningInvoiceGateway.createLightningInvoice(any()))
+                .thenReturn(new CustodyGateway.GeneratedLightningInvoice(
+                        "lnbcrt1roundtrip", "ccdd", null, null, null));
+        when(addressRepository.save(any(KfeWalletAddressEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentRequestRepository.findByPublicId(anyString())).thenReturn(Optional.empty());
+        final KfePaymentRequestEntity[] capturedEntity = new KfePaymentRequestEntity[1];
+        when(paymentRequestRepository.save(any(KfePaymentRequestEntity.class)))
+                .thenAnswer(invocation -> {
+                    KfePaymentRequestEntity entity = invocation.getArgument(0);
+                    capturedEntity[0] = entity;
+                    return entity;
+                });
+
+        var created = service.create(7L, new KfeCreatePaymentRequest(
+                walletId, null, List.of(KfeRail.ONCHAIN, KfeRail.LIGHTNING),
+                5_000L, "Roundtrip", null, null, null, true));
+
+        assertThat(created.rails()).hasSize(2);
+        assertThat(created.rails().get(1).paymentHash()).isEqualTo("ccdd");
+
+        // Verify the entity persisted and re-read correctly (mocked save preserves the entity).
+        when(paymentRequestRepository.findByIdAndUserId(any(), eq(7L)))
+                .thenReturn(Optional.ofNullable(capturedEntity[0]));
+        var received = service.get(7L, created.id());
+        assertThat(received.rails()).hasSize(2);
+        assertThat(received.rails().get(0).rail()).isEqualTo(KfeRail.ONCHAIN);
+        assertThat(received.rails().get(0).address()).contains("tb1q");
+        assertThat(received.rails().get(1).rail()).isEqualTo(KfeRail.LIGHTNING);
+        assertThat(received.rails().get(1).paymentRequest()).isEqualTo("lnbcrt1roundtrip");
     }
 
     private KfePaymentRequestEntity paymentRequest() {

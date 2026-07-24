@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,6 +35,7 @@ public class KfeVaultMeshDayRotationWorker {
     private final String reshareReason;
     private final Clock clock;
 
+    @Autowired
     public KfeVaultMeshDayRotationWorker(
             VaultMeshSettlementPort settlementPort,
             @Value("${kfe.vaultmesh.day-rotation.voter-id:kfe}") String voterId,

@@ -79,11 +79,15 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
         enforceCeremonyEnvHints();
         if (requireMtls) {
             enforceMtlsCutover();
+        } else {
+            log.warn("vault_mesh_go_live_guard: KFE_VAULTMESH_REQUIRE_MTLS=false — "
+                    + "mTLS is DISABLED. This is safe ONLY for local/dev."
+                    + " Remove or set to 'true' before promoting to staging/production.");
         }
 
         log.warn(
                 "vault_mesh_go_live_guard active: mesh-only settlement; mpc signing disabled"
-                        + (requireMtls ? "; mTLS required (static_token refused)" : "")
+                        + (requireMtls ? "; mTLS required (static_token refused)" : "; mTLS DISABLED (dev only)")
                         + " (domestic vault nodes OK; SEV/SGX preferred when present, not required)");
     }
 

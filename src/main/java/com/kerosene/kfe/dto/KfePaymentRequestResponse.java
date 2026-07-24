@@ -5,6 +5,7 @@ import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionStatus;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record KfePaymentRequestResponse(
@@ -13,11 +14,15 @@ public record KfePaymentRequestResponse(
         Long userId,
         UUID walletId,
         UUID addressId,
+        /** Legacy: primary on-chain address or ln:hash. */
         String address,
-        /** BOLT11 invoice when rail is LIGHTNING. */
+        /** BOLT11 invoice when primary rail is LIGHTNING. */
         String paymentRequest,
         String paymentHash,
+        /** Legacy: primary rail. */
         KfeRail rail,
+        /** All active rails with their respective receiving payloads. */
+        List<RailDetail> rails,
         KfePaymentRequestStatus status,
         Long amountSats,
         String description,
@@ -33,4 +38,8 @@ public record KfePaymentRequestResponse(
         Instant expiresAt,
         Instant createdAt,
         Instant updatedAt) {
+
+        public KfePaymentRequestResponse {
+                rails = rails == null || rails.isEmpty() ? List.of() : List.copyOf(rails);
+        }
 }

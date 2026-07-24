@@ -493,7 +493,6 @@ public class LndRestLightningClient
         requireLive();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("base_fee_msat", String.valueOf(Math.max(0L, command.baseFeeMsat())));
-        payload.put("fee_rate", command.feeRatePpm() / 1_000_000.0d);
         payload.put("fee_rate_ppm", String.valueOf(Math.max(0L, command.feeRatePpm())));
         payload.put("time_lock_delta", Math.max(18, command.timeLockDelta()));
         if (command.channelPoint() != null && !command.channelPoint().isBlank()) {
@@ -754,7 +753,7 @@ public class LndRestLightningClient
         }
     }
 
-    /** Invoice expired / wrong amt / invalid payreq — do not keep outbox retrying. */
+    /** Invoice expired / wrong amt / invalid payreq / auth failure — do not keep outbox retrying. */
     public static boolean isPermanentLightningClientError(String detail) {
         if (detail == null || detail.isBlank()) {
             return false;
@@ -775,7 +774,12 @@ public class LndRestLightningClient
                 || lower.contains("incorrect_or_unknown_payment_details")
                 || lower.contains("incorrect payment details")
                 || lower.contains("self-payments not allowed")
-                || lower.contains("self payment not allowed");
+                || lower.contains("self payment not allowed")
+                // Authentication/secrets errors — no retry possible without redeploy.
+                || lower.contains("encoding/hex: invalid byte")
+                || lower.contains("cannot set both feerate and feerateppm")
+                || lower.contains("permission denied")
+                || lower.contains("invalid macaroon");
     }
 
     private JsonNode delete(String path) {

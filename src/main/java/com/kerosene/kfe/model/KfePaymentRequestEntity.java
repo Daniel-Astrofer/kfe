@@ -11,7 +11,6 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
@@ -47,6 +46,10 @@ public class KfePaymentRequestEntity {
 
     @Column(name = "payment_hash", length = 128)
     private String paymentHash;
+
+    /** JSON array of RailDetail for multi-rail receiving payloads. */
+    @Column(name = "rails_data", columnDefinition = "TEXT")
+    private String railsData;
 
     @Column(name = "provider_reference", length = 128)
     private String providerReference;
@@ -124,151 +127,43 @@ public class KfePaymentRequestEntity {
         paidTransactionId = transactionId;
     }
 
-    public UUID getId() {
-        return id;
-    }
-
-    public String getPublicId() {
-        return publicId;
-    }
-
-    public void setPublicId(String publicId) {
-        this.publicId = publicId;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public UUID getWalletId() {
-        return walletId;
-    }
-
-    public void setWalletId(UUID walletId) {
-        this.walletId = walletId;
-    }
-
-    public UUID getAddressId() {
-        return addressId;
-    }
-
-    public void setAddressId(UUID addressId) {
-        this.addressId = addressId;
-    }
-
-    public String getAddress() {
-        return address;
-    }
-
-    public void setAddress(String address) {
-        this.address = address;
-    }
-
-    public String getPaymentRequest() {
-        return paymentRequest;
-    }
-
-    public void setPaymentRequest(String paymentRequest) {
-        this.paymentRequest = paymentRequest;
-    }
-
-    public String getPaymentHash() {
-        return paymentHash;
-    }
-
-    public void setPaymentHash(String paymentHash) {
-        this.paymentHash = paymentHash;
-    }
-
-    public String getProviderReference() {
-        return providerReference;
-    }
-
-    public void setProviderReference(String providerReference) {
-        this.providerReference = providerReference;
-    }
-
-    public KfeRail getRail() {
-        return rail;
-    }
-
-    public void setRail(KfeRail rail) {
-        this.rail = rail;
-    }
-
-    public KfePaymentRequestStatus getStatus() {
-        return status;
-    }
-
-    public void setStatus(KfePaymentRequestStatus status) {
-        this.status = status;
-    }
-
-    public Long getAmountSats() {
-        return amountSats;
-    }
-
-    public void setAmountSats(Long amountSats) {
-        this.amountSats = amountSats;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public String getMemo() {
-        return memo;
-    }
-
-    public void setMemo(String memo) {
-        this.memo = memo;
-    }
-
-    public String getPayerHint() {
-        return payerHint;
-    }
-
-    public void setPayerHint(String payerHint) {
-        this.payerHint = payerHint;
-    }
-
-    public UUID getPaidTransactionId() {
-        return paidTransactionId;
-    }
-
-    public void setPaidTransactionId(UUID paidTransactionId) {
-        this.paidTransactionId = paidTransactionId;
-    }
-
-    public LocalDateTime getExpiresAt() {
-        return expiresAt;
-    }
-
-    public void setExpiresAt(LocalDateTime expiresAt) {
-        this.expiresAt = expiresAt;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public LocalDateTime getHiddenAt() {
-        return hiddenAt;
-    }
-
-    public LocalDateTime getCancelledAt() {
-        return cancelledAt;
-    }
+    public UUID getId() { return id; }
+    public String getPublicId() { return publicId; }
+    public void setPublicId(String publicId) { this.publicId = publicId; }
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
+    public UUID getWalletId() { return walletId; }
+    public void setWalletId(UUID walletId) { this.walletId = walletId; }
+    public UUID getAddressId() { return addressId; }
+    public void setAddressId(UUID addressId) { this.addressId = addressId; }
+    public String getAddress() { return address; }
+    public void setAddress(String address) { this.address = address; }
+    public String getPaymentRequest() { return paymentRequest; }
+    public void setPaymentRequest(String paymentRequest) { this.paymentRequest = paymentRequest; }
+    public String getPaymentHash() { return paymentHash; }
+    public void setPaymentHash(String paymentHash) { this.paymentHash = paymentHash; }
+    public String getRailsData() { return railsData; }
+    public void setRailsData(String railsData) { this.railsData = railsData; }
+    public String getProviderReference() { return providerReference; }
+    public void setProviderReference(String providerReference) { this.providerReference = providerReference; }
+    public KfeRail getRail() { return rail; }
+    public void setRail(KfeRail rail) { this.rail = rail; }
+    public KfePaymentRequestStatus getStatus() { return status; }
+    public void setStatus(KfePaymentRequestStatus status) { this.status = status; }
+    public Long getAmountSats() { return amountSats; }
+    public void setAmountSats(Long amountSats) { this.amountSats = amountSats; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+    public String getMemo() { return memo; }
+    public void setMemo(String memo) { this.memo = memo; }
+    public String getPayerHint() { return payerHint; }
+    public void setPayerHint(String payerHint) { this.payerHint = payerHint; }
+    public UUID getPaidTransactionId() { return paidTransactionId; }
+    public void setPaidTransactionId(UUID paidTransactionId) { this.paidTransactionId = paidTransactionId; }
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public LocalDateTime getHiddenAt() { return hiddenAt; }
+    public LocalDateTime getCancelledAt() { return cancelledAt; }
 }

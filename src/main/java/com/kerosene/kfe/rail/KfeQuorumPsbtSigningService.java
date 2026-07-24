@@ -1,6 +1,7 @@
 package com.kerosene.kfe.rail;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtRequest;
@@ -60,6 +61,7 @@ public class KfeQuorumPsbtSigningService {
     private final boolean localCoreSignerEnabled;
     private final String localCoreSignerId;
 
+    @Autowired
     public KfeQuorumPsbtSigningService(
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient,
             @Qualifier("custodyRestTemplate") RestTemplate restTemplate,

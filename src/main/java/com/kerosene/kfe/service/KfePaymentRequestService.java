@@ -7,6 +7,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
 import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.dto.RailDetail;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
 import com.kerosene.kfe.model.KfeRail;
@@ -28,7 +32,9 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,6 +64,7 @@ public class KfePaymentRequestService {
     private final KfeDashboardPublisher dashboardPublisher;
     private final LightningInvoiceGateway lightningInvoiceGateway;
     private final KfeTransactionCancellationService transactionCancellationService;
+    private final ObjectMapper objectMapper;
 
     public KfePaymentRequestService(
             KfePaymentRequestRepository paymentRequestRepository,
@@ -71,7 +78,8 @@ public class KfePaymentRequestService {
             KfeDashboardPublisher dashboardPublisher,
             @Qualifier("kfeExternalLightningInvoiceGateway")
             LightningInvoiceGateway lightningInvoiceGateway,
-            KfeTransactionCancellationService transactionCancellationService) {
+            KfeTransactionCancellationService transactionCancellationService,
+            ObjectMapper objectMapper) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -83,6 +91,7 @@ public class KfePaymentRequestService {
         this.dashboardPublisher = dashboardPublisher;
         this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.transactionCancellationService = transactionCancellationService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -90,42 +99,59 @@ public class KfePaymentRequestService {
         validateCreateRequest(request);
         KfeWalletEntity wallet = walletRepository.findByIdAndUserId(request.walletId(), userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
-        KfeRail rail = resolveRail(request.rail());
-        requireReceivingWallet(wallet, request, rail);
+        List<KfeRail> rails = resolveRails(request);
+        requireReceivingWallet(wallet, request, rails);
 
-        KfeWalletAddressEntity address = rail == KfeRail.ONCHAIN
-                ? resolveReceivingAddress(userId, wallet, request)
-                : null;
-        CustodyGateway.GeneratedLightningInvoice lightningInvoice =
-                rail == KfeRail.LIGHTNING ? issueLightningInvoice(userId, wallet, request) : null;
+        KfeWalletAddressEntity onchainAddress = null;
+        CustodyGateway.GeneratedLightningInvoice lightningInvoice = null;
+        for (KfeRail r : rails) {
+            if (r == KfeRail.ONCHAIN && onchainAddress == null) {
+                onchainAddress = resolveReceivingAddress(userId, wallet, request);
+            }
+            if (r == KfeRail.LIGHTNING && lightningInvoice == null) {
+                lightningInvoice = issueLightningInvoice(userId, wallet, request);
+            }
+        }
 
-        KfePaymentRequestEntity paymentRequest = new KfePaymentRequestEntity();
-        paymentRequest.setPublicId(generatePublicId());
-        paymentRequest.setUserId(userId);
-        paymentRequest.setWalletId(wallet.getId());
-        paymentRequest.setAddressId(address == null ? null : address.getId());
+        KfeRail primaryRail = rails.stream()
+                .filter(r -> r != KfeRail.INTERNAL)
+                .findFirst()
+                .orElse(KfeRail.INTERNAL);
+
+        KfePaymentRequestEntity pr = new KfePaymentRequestEntity();
+        pr.setPublicId(generatePublicId());
+        pr.setUserId(userId);
+        pr.setWalletId(wallet.getId());
+        pr.setAddressId(onchainAddress == null ? null : onchainAddress.getId());
+
         if (lightningInvoice != null) {
             String hash = lightningInvoice.paymentHash();
-            paymentRequest.setAddress(shortLightningAddress(hash));
-            paymentRequest.setPaymentRequest(lightningInvoice.paymentRequest());
-            paymentRequest.setPaymentHash(hash);
-            paymentRequest.setProviderReference(lightningInvoice.providerReference());
+            pr.setPaymentRequest(lightningInvoice.paymentRequest());
+            pr.setPaymentHash(hash);
+            pr.setProviderReference(lightningInvoice.providerReference());
+            pr.setAddress(onchainAddress != null
+                    ? onchainAddress.getAddress()
+                    : shortLightningAddress(hash));
             if (request.expiresAt() == null && lightningInvoice.expiresAt() != null) {
-                paymentRequest.setExpiresAt(lightningInvoice.expiresAt());
+                pr.setExpiresAt(lightningInvoice.expiresAt());
             }
+        } else if (onchainAddress != null) {
+            pr.setAddress(onchainAddress.getAddress());
         } else {
-            paymentRequest.setAddress(address == null ? internalWalletReference(wallet) : address.getAddress());
+            pr.setAddress(internalWalletReference(wallet));
         }
-        paymentRequest.setRail(rail);
-        paymentRequest.setStatus(KfePaymentRequestStatus.OPEN);
-        paymentRequest.setAmountSats(request.amountSats());
-        paymentRequest.setDescription(clean(request.description()));
-        paymentRequest.setMemo(clean(request.memo()));
-        paymentRequest.setPayerHint(clean(request.payerHint()));
-        if (paymentRequest.getExpiresAt() == null) {
-            paymentRequest.setExpiresAt(request.expiresAt());
+
+        pr.setRail(primaryRail);
+        pr.setStatus(KfePaymentRequestStatus.OPEN);
+        pr.setAmountSats(request.amountSats());
+        pr.setDescription(clean(request.description()));
+        pr.setMemo(clean(request.memo()));
+        pr.setPayerHint(clean(request.payerHint()));
+        if (pr.getExpiresAt() == null) {
+            pr.setExpiresAt(request.expiresAt());
         }
-        paymentRequest = paymentRequestRepository.save(paymentRequest);
+        pr.setRailsData(serializeRailsData(rails, onchainAddress, lightningInvoice));
+        pr = paymentRequestRepository.save(pr);
 
         auditLogService.record(
                 "KFE_PAYMENT_REQUEST_CREATED",
@@ -134,11 +160,11 @@ public class KfePaymentRequestService {
                 null,
                 null,
                 Map.of(
-                        "paymentRequestId", paymentRequest.getId().toString(),
-                        "publicId", paymentRequest.getPublicId(),
+                        "paymentRequestId", pr.getId().toString(),
+                        "publicId", pr.getPublicId(),
                         "walletId", wallet.getId().toString(),
-                        "rail", paymentRequest.getRail().name()));
-        return toResponse(paymentRequest);
+                        "rail", pr.getRail().name()));
+        return toResponse(pr);
     }
 
     @Transactional
@@ -261,41 +287,37 @@ public class KfePaymentRequestService {
     private void requireReceivingWallet(
             KfeWalletEntity wallet,
             KfeCreatePaymentRequest request,
-            KfeRail rail) {
+            List<KfeRail> rails) {
         if (wallet.getStatus() != KfeWalletStatus.ACTIVE) {
             throw new IllegalStateException("KFE wallet must be active to create a payment request.");
         }
-        if (rail == KfeRail.INTERNAL) {
+        if (rails.size() == 1 && rails.get(0) == KfeRail.INTERNAL) {
             return;
         }
-        if (rail == KfeRail.LIGHTNING) {
+        boolean hasLightning = rails.contains(KfeRail.LIGHTNING);
+        boolean hasOnchain = rails.contains(KfeRail.ONCHAIN) || rails.contains(KfeRail.INTERNAL);
+        if (hasLightning) {
             if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
                 throw new IllegalArgumentException(
-                        "WATCH_ONLY wallets cannot create Lightning payment requests (pooled LN credits spendable wallets).");
+                        "WATCH_ONLY wallets cannot create Lightning payment requests.");
             }
             if (!wallet.isSpendable()) {
                 throw new IllegalStateException("Wallet is not spendable for Lightning receiving.");
             }
-            return;
         }
-        if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
+        if (!hasOnchain || wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
             return;
         }
         if (hasText(receivingXpub(wallet))) {
             return;
         }
-        boolean issueFreshAddress = request != null && Boolean.TRUE.equals(request.issueFreshAddress());
-        boolean hasActiveAddress = addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
-                wallet.getId(),
-                KfeWalletAddressStatus.ACTIVE).isPresent();
-        if (!issueFreshAddress && hasActiveAddress) {
-            return;
-        }
-        if (issueFreshAddress) {
-            return;
-        }
+        boolean fresh = request != null && Boolean.TRUE.equals(request.issueFreshAddress());
+        boolean active = addressRepository.findTopByWalletIdAndStatusOrderByCreatedAtDesc(
+                wallet.getId(), KfeWalletAddressStatus.ACTIVE).isPresent();
+        if (!fresh && active) return;
+        if (fresh) return;
         throw new IllegalArgumentException(
-                "WATCH_ONLY wallets require a shared vault-mesh tb1p deposit address or an active receiving address to create payment requests.");
+                "WATCH_ONLY wallets require an xpub or active receiving address to create payment requests.");
     }
 
     private void validateCreateRequest(KfeCreatePaymentRequest request) {
@@ -305,24 +327,32 @@ public class KfePaymentRequestService {
         if (request.amountSats() != null && request.amountSats() <= 0) {
             throw new IllegalArgumentException("KFE payment request amount must be positive when provided.");
         }
-        if (request.expiresAt() != null && request.expiresAt().isBefore(LocalDateTime.now(java.time.ZoneOffset.UTC))) {
+        if (request.expiresAt() != null && request.expiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
             throw new IllegalArgumentException("KFE payment request expiration must be in the future.");
         }
-        if (request.rail() != null
-                && request.rail() != KfeRail.ONCHAIN
-                && request.rail() != KfeRail.INTERNAL
-                && request.rail() != KfeRail.LIGHTNING) {
-            throw new IllegalArgumentException(
-                    "KFE payment requests support INTERNAL, ONCHAIN and LIGHTNING receiving.");
+        List<KfeRail> rails = resolveRails(request);
+        for (KfeRail r : rails) {
+            if (r != KfeRail.ONCHAIN && r != KfeRail.INTERNAL && r != KfeRail.LIGHTNING) {
+                throw new IllegalArgumentException(
+                        "KFE payment requests support INTERNAL, ONCHAIN and LIGHTNING receiving.");
+            }
         }
-        if (request.rail() == KfeRail.LIGHTNING
+        if (rails.contains(KfeRail.LIGHTNING)
                 && (request.amountSats() == null || request.amountSats() <= 0L)) {
             throw new IllegalArgumentException("LIGHTNING payment requests require a positive amountSats.");
         }
     }
 
-    private KfeRail resolveRail(KfeRail requested) {
-        return requested == null ? KfeRail.ONCHAIN : requested;
+    /** Resolves rails from the request: prefers {@code rails} (list), falls back to legacy {@code rail}. */
+    private List<KfeRail> resolveRails(KfeCreatePaymentRequest request) {
+        if (request.rails() != null && !request.rails().isEmpty()) {
+            List<KfeRail> unique = new ArrayList<>(EnumSet.copyOf(request.rails()));
+            return unique.isEmpty() ? List.of(KfeRail.ONCHAIN) : List.copyOf(unique);
+        }
+        if (request.rail() != null) {
+            return List.of(request.rail());
+        }
+        return List.of(KfeRail.ONCHAIN);
     }
 
     private CustodyGateway.GeneratedLightningInvoice issueLightningInvoice(
@@ -403,6 +433,7 @@ public class KfePaymentRequestService {
 
     private KfePaymentRequestResponse toResponse(KfePaymentRequestEntity entity) {
         KfeTransactionEntity settlementTx = findSettlementTransaction(entity).orElse(null);
+        List<RailDetail> railDetails = deserializeRailsData(entity);
         return new KfePaymentRequestResponse(
                 entity.getId(),
                 entity.getPublicId(),
@@ -413,6 +444,7 @@ public class KfePaymentRequestService {
                 entity.getPaymentRequest(),
                 entity.getPaymentHash(),
                 entity.getRail(),
+                railDetails,
                 entity.getStatus(),
                 entity.getAmountSats(),
                 entity.getDescription(),
@@ -436,6 +468,64 @@ public class KfePaymentRequestService {
         }
         return transactionRepository.findTopByIdempotencyKeyStartingWithOrderByCreatedAtDesc(
                 "payment-request:" + entity.getId() + ":");
+    }
+
+    /** Serializes multi-rail payloads to JSON via ObjectMapper (replaces manual string concat). */
+    private String serializeRailsData(
+            List<KfeRail> rails,
+            KfeWalletAddressEntity onchainAddress,
+            CustodyGateway.GeneratedLightningInvoice lightningInvoice) {
+        if (rails == null || rails.isEmpty()) return null;
+        List<RailDetail> details = new ArrayList<>();
+        for (KfeRail r : rails) {
+            if (r == KfeRail.INTERNAL) continue;
+            String addr = r == KfeRail.ONCHAIN && onchainAddress != null
+                    ? onchainAddress.getAddress() : null;
+            String pr = r == KfeRail.LIGHTNING && lightningInvoice != null
+                    ? lightningInvoice.paymentRequest() : null;
+            String hash = r == KfeRail.LIGHTNING && lightningInvoice != null
+                    ? lightningInvoice.paymentHash() : null;
+            details.add(new RailDetail(r, addr, pr, hash));
+        }
+        if (details.isEmpty()) return null;
+        try {
+            return objectMapper.writeValueAsString(details);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize rails data", e);
+            return null;
+        }
+    }
+
+    /** Deserializes RailsData JSON column back to RailDetail list. */
+    private List<RailDetail> deserializeRailsData(KfePaymentRequestEntity entity) {
+        String data = entity.getRailsData();
+        if (data == null || data.isBlank()) {
+            return legacyRailDetail(entity);
+        }
+        try {
+            List<RailDetail> details = objectMapper.readValue(data, new TypeReference<List<RailDetail>>() {});
+            if (details == null || details.isEmpty()) {
+                return legacyRailDetail(entity);
+            }
+            return details;
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to parse rails_data for payment request {}, falling back to legacy", entity.getId(), e);
+            return legacyRailDetail(entity);
+        }
+    }
+
+    private List<RailDetail> legacyRailDetail(KfePaymentRequestEntity e) {
+        KfeRail r = e.getRail();
+        if (r == KfeRail.ONCHAIN) {
+            return List.of(new RailDetail(KfeRail.ONCHAIN, e.getAddress(), null, null));
+        }
+        if (r == KfeRail.LIGHTNING) {
+            return List.of(new RailDetail(KfeRail.LIGHTNING,
+                    shortLightningAddress(e.getPaymentHash()),
+                    e.getPaymentRequest(),
+                    e.getPaymentHash()));
+        }
+        return List.of(new RailDetail(KfeRail.INTERNAL, e.getAddress(), null, null));
     }
 
     private String generatePublicId() {

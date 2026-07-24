@@ -1,6 +1,7 @@
 package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
@@ -62,6 +63,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final String apiToken;
     private final boolean tlsEnabled;
 
+    @Autowired
     public KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
