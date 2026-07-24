@@ -1,5 +1,7 @@
 package com.kerosene.kfe.runtime;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -22,6 +24,7 @@ import java.time.Duration;
 @ConditionalOnProperty(name = "kfe.standalone", havingValue = "true")
 public class KfeHttpClientConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(KfeHttpClientConfiguration.class);
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(20);
     /** scantxoutset over testnet UTXO set often exceeds 20s under load. */
@@ -57,6 +60,9 @@ public class KfeHttpClientConfiguration {
         RestTemplate template = externalRailTemplate(builder);
         if (tlsInsecure) {
             applyInsecureTls(template);
+            log.info("[LND REST] lndRestTemplate created with TLS_INSECURE=true — certificate verification disabled");
+        } else {
+            log.warn("[LND REST] lndRestTemplate created with TLS_INSECURE=false — certificate verification IS enabled");
         }
         return template;
     }

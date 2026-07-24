@@ -301,6 +301,7 @@ class KfeVaultMeshSettlementClientTest {
     private static Path locateGenScript() {
         Path cwd = Path.of("").toAbsolutePath().normalize();
         Path[] candidates = new Path[] {
+            cwd.resolve("scripts/vault/gen_lab_mtls_certs.sh"),
             cwd.resolve("backend/kerosene-vault/scripts/gen_lab_mtls_certs.sh"),
             cwd.resolve("../kerosene-vault/scripts/gen_lab_mtls_certs.sh"),
             cwd.resolve("../../kerosene-vault/scripts/gen_lab_mtls_certs.sh"),
