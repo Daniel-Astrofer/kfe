@@ -4,36 +4,65 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Locale;
 
 /**
  * Resolves LNURL-pay (LUD-06) and Lightning Address (LUD-16) to a BOLT11 invoice.
  *
- * <p>Uses the custody RestTemplate (clearnet, short timeouts). Tor-only egress is out of scope here.
+ * <p>SSRF-hardened: validates scheme, blocks private/reserved IPs,
+ * prevents cross-host redirects, limits response size.
+ * Uses a dedicated non-redirecting RestTemplate with strict timeouts.
  */
 @Component
 @ConditionalOnProperty(prefix = "lightning.lnd.rest", name = "enabled", havingValue = "true")
 public class LnurlPayResolver {
 
     private static final Logger log = LoggerFactory.getLogger(LnurlPayResolver.class);
+    private static final int MAX_REDIRECTS = 3;
+    private static final int MAX_RESPONSE_BYTES = 100_000;
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(10);
 
-    private final RestTemplate restTemplate;
+    private final RestTemplate lnurlRestTemplate;
     private final ObjectMapper objectMapper;
+    private final boolean allowTor;
 
     public LnurlPayResolver(
-            @Qualifier("custodyRestTemplate") RestTemplate restTemplate,
-            ObjectMapper objectMapper) {
-        this.restTemplate = restTemplate;
+            ObjectMapper objectMapper,
+            @Value("${kfe.lightning.lnurl.allow-tor:false}") boolean allowTor) {
+        this.lnurlRestTemplate = createLnurlRestTemplate();
         this.objectMapper = objectMapper;
+        this.allowTor = allowTor;
+    }
+
+    /**
+     * Creates a dedicated RestTemplate that does NOT follow redirects automatically.
+     */
+    private static RestTemplate createLnurlRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory() {
+            @Override
+            protected void prepareConnection(HttpURLConnection connection, String httpMethod) throws java.io.IOException {
+                super.prepareConnection(connection, httpMethod);
+                connection.setInstanceFollowRedirects(false);
+            }
+        };
+        factory.setConnectTimeout((int) CONNECT_TIMEOUT.toMillis());
+        factory.setReadTimeout((int) READ_TIMEOUT.toMillis());
+        return new RestTemplate(factory);
     }
 
     /**
@@ -58,6 +87,10 @@ public class LnurlPayResolver {
             throw new IllegalArgumentException("Could not decode LNURL / Lightning Address to a URL.");
         }
 
+        // SSRF: validate scheme and host BEFORE any network call
+        LnurlSslGuard.validateScheme(endpoint, allowTor);
+        LnurlSslGuard.validateRemoteHost(endpoint);
+
         JsonNode payRequest = httpGetJson(endpoint);
         String tag = text(payRequest, "tag");
         if (tag != null && !tag.isBlank() && !"payRequest".equalsIgnoreCase(tag)) {
@@ -78,6 +111,10 @@ public class LnurlPayResolver {
             throw new IllegalArgumentException(
                     "Amount above LNURL maxSendable (" + (maxSendable / 1000L) + " sats).");
         }
+
+        // SSRF: validate callback URL before fetching invoice
+        LnurlSslGuard.validateScheme(callback, allowTor);
+        LnurlSslGuard.validateRemoteHost(callback);
 
         String invoiceUrl = UriComponentsBuilder.fromUriString(callback)
                 .replaceQueryParam("amount", amountMsat)
@@ -124,21 +161,65 @@ public class LnurlPayResolver {
     }
 
     private JsonNode httpGetJson(String url) {
-        try {
-            URI uri = URI.create(url);
-            ResponseEntity<String> response = restTemplate.getForEntity(uri, String.class);
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+        URI originalUri = URI.create(url);
+        LnurlSslGuard.validatePort(originalUri);
+        URI currentUri = originalUri;
+
+        for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+            try {
+                ResponseEntity<byte[]> response = lnurlRestTemplate.exchange(
+                        currentUri, HttpMethod.GET, null, byte[].class);
+
+                HttpStatus statusCode = (HttpStatus) response.getStatusCode();
+
+                // Handle redirects manually
+                if (statusCode.is3xxRedirection()) {
+                    URI location = response.getHeaders().getLocation();
+                    if (location == null) {
+                        throw new IllegalArgumentException(
+                                "LNURL redirect without Location header from " + safeHost(currentUri.toString()));
+                    }
+                    String redirectUrl = location.toString();
+
+                    // SSRF checks on redirect target
+                    LnurlSslGuard.validateScheme(redirectUrl, allowTor);
+                    LnurlSslGuard.validateRemoteHost(redirectUrl);
+                    LnurlSslGuard.validateNoHostChange(originalUri, location);
+                    LnurlSslGuard.validatePort(location);
+
+                    currentUri = location;
+                    continue;
+                }
+
+                if (!statusCode.is2xxSuccessful()) {
+                    throw new IllegalArgumentException(
+                            "LNURL HTTP " + statusCode.value() + " for " + safeHost(url));
+                }
+
+                byte[] body = response.getBody();
+                if (body == null) {
+                    throw new IllegalArgumentException(
+                            "LNURL empty response body from " + safeHost(url));
+                }
+
+                // Limit response size
+                if (body.length > MAX_RESPONSE_BYTES) {
+                    throw new IllegalArgumentException(
+                            "LNURL response too large (" + body.length + " bytes) from " + safeHost(url));
+                }
+
+                return objectMapper.readTree(body);
+            } catch (RestClientException | IllegalArgumentException ex) {
                 throw new IllegalArgumentException(
-                        "LNURL HTTP " + response.getStatusCode().value() + " for " + safeHost(url));
+                        "LNURL fetch failed for " + safeHost(url) + ": " + ex.getMessage(), ex);
+            } catch (Exception ex) {
+                throw new IllegalArgumentException(
+                        "LNURL parse failed for " + safeHost(url) + ": " + ex.getMessage(), ex);
             }
-            return objectMapper.readTree(response.getBody());
-        } catch (RestClientException | IllegalArgumentException ex) {
-            throw new IllegalArgumentException(
-                    "LNURL fetch failed for " + safeHost(url) + ": " + ex.getMessage(), ex);
-        } catch (Exception ex) {
-            throw new IllegalArgumentException(
-                    "LNURL parse failed for " + safeHost(url) + ": " + ex.getMessage(), ex);
         }
+
+        throw new IllegalArgumentException(
+                "LNURL: too many redirects for " + safeHost(url));
     }
 
     private static String safeHost(String url) {

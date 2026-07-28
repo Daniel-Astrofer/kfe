@@ -33,7 +33,7 @@ class KfeInternalWalletProvisioningControllerTest {
     @Test
     void rejectsMissingUserId() {
         assertThrows(
-                ResponseStatusException.class,
-                () -> controller.ensurePrimaryWalletReady("credential", new FinancialWalletProvisioningRequest(null, null)));
+                IllegalArgumentException.class,
+                () -> new FinancialWalletProvisioningRequest(null, null));
     }
 }

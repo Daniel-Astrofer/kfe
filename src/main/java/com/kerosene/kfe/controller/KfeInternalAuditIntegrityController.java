@@ -31,7 +31,7 @@ public class KfeInternalAuditIntegrityController {
     public FinancialAuditIntegrityPort.AuditRoot root(
             @RequestHeader(name = "X-KFE-Internal-Secret", required = false) String credential) {
         verifyCredential(credential);
-        return auditIntegrityAdapter.root();
+        return auditIntegrityAdapter.currentRoot();
     }
 
     private void verifyCredential(String credential) {

@@ -81,6 +81,7 @@ class KfeCustodialDepositObservationServiceTest {
                 dashboardPublisher,
                 auditLogService,
                 notificationPort,
+                null, // KfeFinancialMetrics (null-safe)
                 onchainBalanceSync,
                 addressIndex,
                 transactionTemplate,

@@ -20,5 +20,7 @@ public record KfeCreatePaymentRequest(
         @Size(max = 255) String memo,
         @Size(max = 120) String payerHint,
         LocalDateTime expiresAt,
-        Boolean issueFreshAddress) {
+        Boolean issueFreshAddress,
+        /** Optional webhook URL for payment event delivery. Max 2048 chars. */
+        @Size(max = 2048) String webhookUrl) {
 }

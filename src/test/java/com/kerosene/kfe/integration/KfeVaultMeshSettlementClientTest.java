@@ -21,6 +21,7 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,7 +42,8 @@ class KfeVaultMeshSettlementClientTest {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
         VaultMeshIntent intent = new VaultMeshIntent(
-                "intent-1", "USERS", "bc1qtest", 12_345L, "policy-a", 1_700_000_000_000L);
+                "intent-1", "USERS", "bc1qtest", 12_345L, "policy-a", Instant.ofEpochMilli(1_700_000_000_000L),
+                null, null, null, null);
         String hash = KfeVaultMeshSettlementClient.messageHash(intent);
 
         server.expect(requestTo("http://vault.test:7701/sign/intent-1/" + hash))
@@ -66,7 +68,8 @@ class KfeVaultMeshSettlementClientTest {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
         VaultMeshIntent intent = new VaultMeshIntent(
-                "intent-2", "USERS", "bc1q", 1L, "p", 1L);
+                "intent-2", "USERS", "bc1q", 1L, "p", Instant.ofEpochMilli(1L),
+                null, null, null, null);
         String hash = KfeVaultMeshSettlementClient.messageHash(intent);
 
         server.expect(requestTo("http://vault.test:7701/sign/intent-2/" + hash))
@@ -84,11 +87,11 @@ class KfeVaultMeshSettlementClientTest {
 
     @Test
     void submitIntentRejectsBlankIntentId() {
-        KfeVaultMeshSettlementClient client = client();
-        VaultMeshReceipt receipt = client.submitIntent(
-                new VaultMeshIntent(" ", "USERS", "x", 1L, "p", 1L));
-        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
-        assertThat(receipt.reasonCode()).isEqualTo("INVALID_INTENT");
+        assertThatThrownBy(() ->
+                new VaultMeshIntent(" ", "USERS", "x", 1L, "p", Instant.ofEpochMilli(1L),
+                        null, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("intentId required");
     }
 
     @Test
@@ -209,11 +212,16 @@ class KfeVaultMeshSettlementClientTest {
                 "",
                 "",
                 "PKCS12",
-                true);
+                true,
+                "",
+                3,
+                2,
+                "https://vault.test:7701");
         assertThat(client.tlsEnabled()).isTrue();
 
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
-        VaultMeshIntent intent = new VaultMeshIntent("intent-tls", "USERS", "bc1q", 1L, "p", 1L);
+        VaultMeshIntent intent = new VaultMeshIntent("intent-tls", "USERS", "bc1q", 1L, "p", Instant.ofEpochMilli(1L),
+                null, null, null, null);
         String hash = KfeVaultMeshSettlementClient.messageHash(intent);
         server.expect(requestTo("https://vault.test:7701/sign/intent-tls/" + hash))
                 .andExpect(method(HttpMethod.POST))
@@ -275,7 +283,11 @@ class KfeVaultMeshSettlementClientTest {
                         "",
                         "",
                         "PKCS12",
-                        true))
+                        true,
+                        "",
+                        3,
+                        2,
+                        "https://vault.test:7701"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("kfe.vaultmesh.tls.enabled=true");
     }
@@ -302,6 +314,8 @@ class KfeVaultMeshSettlementClientTest {
         Path cwd = Path.of("").toAbsolutePath().normalize();
         Path[] candidates = new Path[] {
             cwd.resolve("scripts/vault/gen_lab_mtls_certs.sh"),
+            cwd.resolve("../../scripts/vault/gen_lab_mtls_certs.sh"),
+            cwd.resolve("../../../scripts/vault/gen_lab_mtls_certs.sh"),
             cwd.resolve("backend/kerosene-vault/scripts/gen_lab_mtls_certs.sh"),
             cwd.resolve("../kerosene-vault/scripts/gen_lab_mtls_certs.sh"),
             cwd.resolve("../../kerosene-vault/scripts/gen_lab_mtls_certs.sh"),

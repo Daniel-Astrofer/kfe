@@ -117,7 +117,7 @@ class KfeVaultMeshDayRotationWorkerTest {
         @Override
         public VaultMeshReceipt submitIntent(VaultMeshIntent intent) {
             return new VaultMeshReceipt(
-                    intent.intentId(), VaultMeshReceipt.Status.REJECTED, "UNUSED", null, 0L);
+                    intent.intentId(), VaultMeshReceipt.Status.REJECTED, "UNUSED", null, Instant.EPOCH);
         }
 
         @Override

@@ -15,13 +15,8 @@ public class KfeFinancialAuditIntegrityAdapter implements FinancialAuditIntegrit
     }
 
     @Override
-    public AuditRoot root() {
-        KfeAuditRootResponse root = auditAdminService.root();
-        return new AuditRoot(
-                root.merkleRoot(),
-                root.eventCount(),
-                root.fromSequence(),
-                root.toSequence(),
-                root.generatedAt());
+    public AuditRoot currentRoot() {
+        throw new UnsupportedOperationException(
+                "Signed audit roots are not available from the legacy audit store");
     }
 }

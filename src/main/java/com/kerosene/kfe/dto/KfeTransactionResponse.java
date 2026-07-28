@@ -13,6 +13,8 @@ public record KfeTransactionResponse(
         KfeTransactionStatus status,
         /** Coarse UI badge: PENDING | CONFIRMED | FAILED — stable identity stays {@code id}. */
         String displayStatus,
+        /** Canonical 7-state product status: PENDING | PROCESSING | CONFIRMING | COMPLETED | FAILED | NEEDS_REVIEW | REVERSED. */
+        String productStatus,
         KfeRail rail,
         KfeDirection direction,
         UUID walletId,
@@ -66,5 +68,8 @@ public record KfeTransactionResponse(
         /** Linked invoice / payment link when known. */
         UUID paymentRequestId,
         String paymentRequestPublicId,
-        String paymentRequestStatus) {
+        String paymentRequestStatus,
+        String businessStatus,
+        String networkStatus,
+        String accountingStatus) {
 }

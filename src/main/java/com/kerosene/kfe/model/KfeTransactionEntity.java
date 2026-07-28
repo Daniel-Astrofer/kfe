@@ -72,6 +72,9 @@ public class KfeTransactionEntity {
     @Column(name = "total_debit_sats", nullable = false)
     private long totalDebitSats;
 
+    @Column(name = "pricing_policy_version", nullable = false)
+    private int pricingPolicyVersion;
+
     @Column(name = "display_btc_usd", precision = 19, scale = 8)
     private BigDecimal displayBtcUsd;
 
@@ -111,11 +114,57 @@ public class KfeTransactionEntity {
     @Column(name = "confirmations", nullable = false)
     private int confirmations;
 
+    @Column(name = "business_status", length = 32)
+    private String businessStatus;
+
+    @Column(name = "network_status", length = 32)
+    private String networkStatus;
+
+    @Column(name = "accounting_status", length = 32)
+    private String accountingStatus;
+
     @Column(name = "failure_code", length = 64)
     private String failureCode;
 
     @Column(name = "failure_message", length = 255)
     private String failureMessage;
+
+    // ITEM 8: Network tracking for disappeared transactions
+    @Column(name = "network_first_seen_at")
+    private LocalDateTime networkFirstSeenAt;
+
+    @Column(name = "network_last_seen_at")
+    private LocalDateTime networkLastSeenAt;
+
+    @Column(name = "network_not_found_since")
+    private LocalDateTime networkNotFoundSince;
+
+    @Column(name = "network_not_found_count")
+    private int networkNotFoundCount;
+
+    @Column(name = "mempool_last_seen_at")
+    private LocalDateTime mempoolLastSeenAt;
+
+    @Column(name = "last_chain_probe_at")
+    private LocalDateTime lastChainProbeAt;
+
+    @Column(name = "last_chain_probe_status", length = 32)
+    private String lastChainProbeStatus;
+
+    // ITEM 14: Store raw tx hash at preparation for settlement verification
+    @Column(name = "prepared_raw_tx_hash", length = 64)
+    private String preparedRawTxHash;
+
+    // ITEM 8: Whether confirmation monitoring is active (for disappeared tx detection)
+    @Column(name = "confirmation_monitoring_active", nullable = false)
+    private boolean confirmationMonitoringActive = true;
+
+    // ITEM 4: Track when conflicted state was entered
+    @Column(name = "conflicted_at")
+    private LocalDateTime conflictedAt;
+
+    @Column(name = "replacement_txid", length = 128)
+    private String replacementTxid;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -252,6 +301,14 @@ public class KfeTransactionEntity {
         this.totalDebitSats = totalDebitSats;
     }
 
+    public int getPricingPolicyVersion() {
+        return pricingPolicyVersion;
+    }
+
+    public void setPricingPolicyVersion(int pricingPolicyVersion) {
+        this.pricingPolicyVersion = pricingPolicyVersion;
+    }
+
     public BigDecimal getDisplayBtcUsd() {
         return displayBtcUsd;
     }
@@ -356,6 +413,30 @@ public class KfeTransactionEntity {
         this.confirmations = confirmations;
     }
 
+    public String getBusinessStatus() {
+        return businessStatus;
+    }
+
+    public void setBusinessStatus(String businessStatus) {
+        this.businessStatus = businessStatus;
+    }
+
+    public String getNetworkStatus() {
+        return networkStatus;
+    }
+
+    public void setNetworkStatus(String networkStatus) {
+        this.networkStatus = networkStatus;
+    }
+
+    public String getAccountingStatus() {
+        return accountingStatus;
+    }
+
+    public void setAccountingStatus(String accountingStatus) {
+        this.accountingStatus = accountingStatus;
+    }
+
     public String getFailureCode() {
         return failureCode;
     }
@@ -371,6 +452,29 @@ public class KfeTransactionEntity {
     public void setFailureMessage(String failureMessage) {
         this.failureMessage = failureMessage;
     }
+
+    public LocalDateTime getNetworkFirstSeenAt() { return networkFirstSeenAt; }
+    public void setNetworkFirstSeenAt(LocalDateTime v) { this.networkFirstSeenAt = v; }
+    public LocalDateTime getNetworkLastSeenAt() { return networkLastSeenAt; }
+    public void setNetworkLastSeenAt(LocalDateTime v) { this.networkLastSeenAt = v; }
+    public LocalDateTime getNetworkNotFoundSince() { return networkNotFoundSince; }
+    public void setNetworkNotFoundSince(LocalDateTime v) { this.networkNotFoundSince = v; }
+    public int getNetworkNotFoundCount() { return networkNotFoundCount; }
+    public void setNetworkNotFoundCount(int v) { this.networkNotFoundCount = v; }
+    public LocalDateTime getMempoolLastSeenAt() { return mempoolLastSeenAt; }
+    public void setMempoolLastSeenAt(LocalDateTime v) { this.mempoolLastSeenAt = v; }
+    public LocalDateTime getLastChainProbeAt() { return lastChainProbeAt; }
+    public void setLastChainProbeAt(LocalDateTime v) { this.lastChainProbeAt = v; }
+    public String getLastChainProbeStatus() { return lastChainProbeStatus; }
+    public void setLastChainProbeStatus(String v) { this.lastChainProbeStatus = v; }
+    public String getPreparedRawTxHash() { return preparedRawTxHash; }
+    public void setPreparedRawTxHash(String v) { this.preparedRawTxHash = v; }
+    public boolean isConfirmationMonitoringActive() { return confirmationMonitoringActive; }
+    public void setConfirmationMonitoringActive(boolean v) { this.confirmationMonitoringActive = v; }
+    public LocalDateTime getConflictedAt() { return conflictedAt; }
+    public void setConflictedAt(LocalDateTime v) { this.conflictedAt = v; }
+    public String getReplacementTxid() { return replacementTxid; }
+    public void setReplacementTxid(String v) { this.replacementTxid = v; }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;

@@ -22,6 +22,6 @@ public class KfeVaultMeshConfiguration {
                 VaultMeshReceipt.Status.REJECTED,
                 "MESH_DISABLED",
                 null,
-                Instant.now().toEpochMilli());
+                Instant.now());
     }
 }

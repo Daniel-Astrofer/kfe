@@ -20,6 +20,9 @@ import com.kerosene.common.financial.FinancialCustodyTransferApprovalRequest;
 import com.kerosene.common.financial.FinancialLocalFactorApprovalRequest;
 import com.kerosene.common.financial.FinancialTransactionApprovalPort;
 import com.kerosene.common.financial.FinancialWalletOutboundApprovalRequest;
+import com.kerosene.common.financial.DeviceProof;
+import com.kerosene.common.financial.PasskeyAssertion;
+import com.kerosene.common.financial.RecoveryApproval;
 
 import java.time.Duration;
 import java.util.Map;
@@ -45,8 +48,8 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
         this.restTemplate = restTemplateBuilder
-                .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .setReadTimeout(Duration.ofMillis(readTimeoutMs))
+                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
+                .readTimeout(Duration.ofMillis(readTimeoutMs))
                 .build();
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
@@ -55,14 +58,14 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
 
     @Override
     public void approveLocalFactor(Long userId, String deviceRef, String factor) {
-        post("/internal/kfe/transaction-approval/local-factor",
-                new FinancialLocalFactorApprovalRequest(userId, deviceRef, factor));
+        throw new UnsupportedOperationException(
+                "Legacy string approval cannot be converted into a device-bound proof");
     }
 
     @Override
     public void approveCustodyTransfer(Long userId, String assertion) {
-        post("/internal/kfe/transaction-approval/custody-transfer",
-                new FinancialCustodyTransferApprovalRequest(userId, assertion));
+        throw new UnsupportedOperationException(
+                "Legacy custody assertion cannot be converted into a WebAuthn assertion");
     }
 
     @Override
@@ -72,12 +75,42 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
             String factorA,
             String factorB,
             String factorC) {
-        post("/internal/kfe/transaction-approval/wallet-outbound",
-                new FinancialWalletOutboundApprovalRequest(actorUserId, ownerUserId, factorA, factorB, factorC));
+        throw new UnsupportedOperationException(
+                "Legacy wallet factors cannot be converted into typed approval proofs");
     }
 
     @Override
     public void approveColdWalletPsbt(Long userId, String factor) {
+        throw new UnsupportedOperationException(
+                "Legacy cold-wallet factor cannot be converted into a device-bound proof");
+    }
+
+    @Override
+    public void approveLocalFactor(Long userId, String deviceRef, DeviceProof factor) {
+        post("/internal/kfe/transaction-approval/local-factor",
+                new FinancialLocalFactorApprovalRequest(userId, deviceRef, factor));
+    }
+
+    @Override
+    public void approveCustodyTransfer(Long userId, PasskeyAssertion assertion) {
+        post("/internal/kfe/transaction-approval/custody-transfer",
+                new FinancialCustodyTransferApprovalRequest(userId, assertion));
+    }
+
+    @Override
+    public void approveWalletOutbound(
+            Long actorUserId,
+            Long ownerUserId,
+            PasskeyAssertion passkeyAssertion,
+            RecoveryApproval recoveryApproval,
+            DeviceProof deviceProof) {
+        post("/internal/kfe/transaction-approval/wallet-outbound",
+                new FinancialWalletOutboundApprovalRequest(
+                        actorUserId, ownerUserId, passkeyAssertion, recoveryApproval, deviceProof));
+    }
+
+    @Override
+    public void approveColdWalletPsbt(Long userId, DeviceProof factor) {
         post("/internal/kfe/transaction-approval/cold-wallet-psbt",
                 new FinancialColdWalletPsbtApprovalRequest(userId, factor));
     }

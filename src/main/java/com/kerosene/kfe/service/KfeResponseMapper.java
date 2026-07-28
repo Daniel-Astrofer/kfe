@@ -3,6 +3,7 @@ package com.kerosene.kfe.service;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import com.kerosene.kfe.dto.KfeAddressResponse;
+import com.kerosene.kfe.dto.KfeProductStatusMapper;
 import com.kerosene.kfe.dto.KfeTransactionResponse;
 import com.kerosene.kfe.dto.KfeWalletResponse;
 import com.kerosene.kfe.model.KfeDirection;
@@ -89,6 +90,7 @@ public class KfeResponseMapper {
                 tx.getId(),
                 tx.getStatus(),
                 KfeTransactionStatus.displayStatusOf(tx.getStatus()),
+                KfeProductStatusMapper.toProductStatus(tx.getStatus()),
                 tx.getRail(),
                 tx.getDirection(),
                 perspectiveId,
@@ -127,7 +129,10 @@ public class KfeResponseMapper {
                 cancelHints.cancelTarget(),
                 cancelHints.paymentRequestId(),
                 cancelHints.paymentRequestPublicId(),
-                cancelHints.paymentRequestStatus());
+                cancelHints.paymentRequestStatus(),
+                tx.getBusinessStatus(),
+                tx.getNetworkStatus(),
+                tx.getAccountingStatus());
     }
 
     private KfeTransactionCancellationService.CancellationHints cancelHints(
@@ -165,6 +170,7 @@ public class KfeResponseMapper {
         payload.put("id", tx.getId() != null ? tx.getId().toString() : null);
         payload.put("status", tx.getStatus() != null ? tx.getStatus().name() : null);
         payload.put("displayStatus", KfeTransactionStatus.displayStatusOf(tx.getStatus()));
+        payload.put("productStatus", KfeProductStatusMapper.toProductStatus(tx.getStatus()));
         payload.put("rail", tx.getRail() != null ? tx.getRail().name() : null);
         payload.put("direction", tx.getDirection() != null ? tx.getDirection().name() : null);
         payload.put("walletId", perspectiveId != null ? perspectiveId.toString() : null);
@@ -178,6 +184,7 @@ public class KfeResponseMapper {
         payload.put("receiverAmountSats", tx.getReceiverAmountSats());
         payload.put("networkFeeSats", tx.getNetworkFeeSats());
         payload.put("keroseneFeeSats", tx.getKeroseneFeeSats());
+        payload.put("pricingPolicyVersion", tx.getPricingPolicyVersion());
         payload.put("totalDebitSats", tx.getTotalDebitSats());
         payload.put("displayBtcUsd", tx.getDisplayBtcUsd());
         payload.put("displayBtcEur", tx.getDisplayBtcEur());
@@ -192,6 +199,9 @@ public class KfeResponseMapper {
         payload.put("paymentHash", tx.getPaymentHash());
         payload.put("confirmations", displayConfirmations(tx));
         payload.put("failureCode", tx.getFailureCode());
+        payload.put("businessStatus", tx.getBusinessStatus());
+        payload.put("networkStatus", tx.getNetworkStatus());
+        payload.put("accountingStatus", tx.getAccountingStatus());
         payload.put("createdAt", toUtcInstant(tx.getCreatedAt()));
         payload.put("updatedAt", toUtcInstant(tx.getUpdatedAt()));
         return payload;

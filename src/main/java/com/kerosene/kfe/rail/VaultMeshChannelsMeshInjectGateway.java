@@ -76,7 +76,11 @@ public class VaultMeshChannelsMeshInjectGateway implements ChannelsMeshInjectGat
                         CHANNELS_DESTINATION,
                         amountSats,
                         "",
-                        Instant.now().toEpochMilli());
+                        Instant.now(),
+                        null,
+                        null,
+                        null,
+                        null);
 
         VaultMeshReceipt receipt;
         try {

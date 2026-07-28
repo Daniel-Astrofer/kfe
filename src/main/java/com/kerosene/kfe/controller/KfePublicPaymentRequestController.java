@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.common.exception.ErrorCodes;
 import com.kerosene.common.exception.StructuredPlatformException;
-import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.dto.KfePublicPaymentRequestResponse;
 import com.kerosene.kfe.service.KfePaymentRequestService;
 import com.kerosene.kfe.service.KfePlatformLightningPolicy;
 
@@ -33,7 +33,7 @@ public class KfePublicPaymentRequestController {
      * Used by clients to switch Lightning paste/scan to INTERNAL ledger settlement.
      */
     @GetMapping("/lookup")
-    public ResponseEntity<ApiResponse<KfePaymentRequestResponse>> lookup(
+    public ResponseEntity<ApiResponse<KfePublicPaymentRequestResponse>> lookup(
             @RequestParam("invoice") String invoice) {
         if (invoice == null || invoice.isBlank()) {
             throw new StructuredPlatformException(
@@ -42,7 +42,7 @@ public class KfePublicPaymentRequestController {
                     ErrorCodes.SYS_INVALID_ARGUMENTS,
                     null);
         }
-        KfePaymentRequestResponse found = platformLightningPolicy.resolvePlatformInvoice(invoice.trim())
+        KfePublicPaymentRequestResponse found = platformLightningPolicy.resolvePlatformInvoice(invoice.trim())
                 .orElseThrow(() -> new StructuredPlatformException(
                         "Not a platform Lightning invoice.",
                         HttpStatus.NOT_FOUND,
@@ -54,7 +54,7 @@ public class KfePublicPaymentRequestController {
     }
 
     @GetMapping("/{publicId}")
-    public ResponseEntity<ApiResponse<KfePaymentRequestResponse>> getPublic(@PathVariable String publicId) {
+    public ResponseEntity<ApiResponse<KfePublicPaymentRequestResponse>> getPublic(@PathVariable String publicId) {
         return ResponseEntity.ok(ApiResponse.success(
                 "KFE public payment request retrieved.",
                 paymentRequestService.publicGet(publicId)));

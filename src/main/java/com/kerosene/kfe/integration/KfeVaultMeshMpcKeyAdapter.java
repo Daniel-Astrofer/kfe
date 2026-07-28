@@ -69,19 +69,22 @@ public class KfeVaultMeshMpcKeyAdapter implements FinancialMpcKeyPort {
     }
 
     /**
-     * Prefer the raw x-only Taproot internal key, then the tweaked output pubkey, then
-     * the on-chain deposit address as a last-resort stable identifier. Any of these is a
-     * non-empty stable string tied to the shared USERS bucket custody key.
+     * Resolve the x-only Taproot internal key from the deposit info.
+     *
+     * <p>Requires {@code xonlyPubkeyHex} as a 32-byte x-only public key (exactly 64 hex chars).
+     * Falls back to {@code outputPubkeyHex} only if it's also a valid 64-char hex key.
+     * NEVER uses the on-chain address as a public key — they are different types.
      */
     private String resolvePublicKey(VaultMeshDepositInfo deposit) {
-        if (deposit.xonlyPubkeyHex() != null && !deposit.xonlyPubkeyHex().isBlank()) {
-            return deposit.xonlyPubkeyHex().trim();
+        String xonly = deposit.xonlyPubkeyHex();
+        if (xonly != null && !xonly.isBlank() && xonly.trim().matches("^[0-9a-fA-F]{64}$")) {
+            return xonly.trim().toLowerCase(java.util.Locale.ROOT);
         }
-        if (deposit.outputPubkeyHex() != null && !deposit.outputPubkeyHex().isBlank()) {
-            return deposit.outputPubkeyHex().trim();
-        }
-        if (deposit.address() != null && !deposit.address().isBlank()) {
-            return deposit.address().trim();
+        String output = deposit.outputPubkeyHex();
+        if (output != null && !output.isBlank() && output.trim().matches("^[0-9a-fA-F]{64}$")) {
+            log.warn("[KFE MPC] Using outputPubkeyHex as fallback for xonly pubkey; "
+                    + "mesh should provide xonly_pubkey field");
+            return output.trim().toLowerCase(java.util.Locale.ROOT);
         }
         return null;
     }

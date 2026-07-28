@@ -7,6 +7,7 @@ import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,7 +23,7 @@ class KfeVaultMeshIntentServiceTest {
                     VaultMeshReceipt.Status.ACCEPTED,
                     null,
                     "proof",
-                    1L);
+                    Instant.ofEpochMilli(1L));
         };
         KfeVaultMeshIntentService service = new KfeVaultMeshIntentService(port, false, false, "USERS");
         UUID txId = UUID.fromString("11111111-1111-1111-1111-111111111111");

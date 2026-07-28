@@ -59,7 +59,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.ACCEPTED,
                                 "RESERVED",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
 
         ChannelsMeshInjectGateway.DebitResult r =
                 gateway.reserveOpen("channels-inject-open-1", 12_345L, "02ABCD");
@@ -80,7 +80,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.REJECTED,
                                 "NO_CAPITAL",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
 
         ChannelsMeshInjectGateway.DebitResult r =
                 gateway.reserveOpen("intent-123", 1_000L, "02abcd");
@@ -100,7 +100,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.ACCEPTED,
                                 "RELEASED",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
         when(port.commitIntent(eq("intent-1")))
                 .thenReturn(
                         new VaultMeshReceipt(
@@ -108,7 +108,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.ACCEPTED,
                                 "COMMITTED",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
 
         assertThat(gateway.releaseOpen("intent-1", 500L, "02ab").authorized()).isTrue();
         assertThat(gateway.commitOpen("intent-1").authorized()).isTrue();
@@ -169,7 +169,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 null,
                                 "signed-psbt",
                                 "proof",
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
         when(core.finalizePsbt("signed-psbt"))
                 .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("deadbeef", true));
         when(core.sendRawTransaction("deadbeef")).thenReturn("broadcasttxid");
@@ -227,7 +227,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.REJECTED,
                                 "intent replay: intent-1",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
         when(port.commitIntent(eq("intent-1")))
                 .thenReturn(
                         new VaultMeshReceipt(
@@ -235,7 +235,7 @@ class VaultMeshChannelsMeshInjectGatewayTest {
                                 VaultMeshReceipt.Status.REJECTED,
                                 "intent replay: intent-1",
                                 null,
-                                Instant.now().toEpochMilli()));
+                                Instant.now()));
 
         assertThat(gateway.reserveOpen("intent-1", 100L, "02ab").authorized()).isTrue();
         assertThat(gateway.commitOpen("intent-1").authorized()).isTrue();

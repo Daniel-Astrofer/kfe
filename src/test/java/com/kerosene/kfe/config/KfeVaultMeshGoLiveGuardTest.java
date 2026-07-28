@@ -21,6 +21,8 @@ class KfeVaultMeshGoLiveGuardTest {
                 mpc,
                 requireMtls,
                 tlsEnabled,
+                false,
+                false,
                 apiToken,
                 requireMtls && tlsEnabled ? "/tmp/cert.pem" : "",
                 requireMtls && tlsEnabled ? "/tmp/key.pem" : "",
@@ -58,7 +60,8 @@ class KfeVaultMeshGoLiveGuardTest {
     void requireMtlsRefusesApiToken() {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
-                        true, true, false, true, true, "lab-token", "/c", "/k", "/ca", "", "");
+                        true, true, false, true, true, false, false,
+                        "lab-token", "/c", "/k", "/ca", "", "");
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
@@ -66,14 +69,16 @@ class KfeVaultMeshGoLiveGuardTest {
     void requireMtlsRequiresTlsEnabled() {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
-                        true, true, false, true, false, "", "/c", "/k", "/ca", "", "");
+                        true, true, false, true, false, false, false,
+                        "", "/c", "/k", "/ca", "", "");
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
     @Test
     void requireMtlsRequiresClientMaterials() {
         KfeVaultMeshGoLiveGuard guard =
-                new KfeVaultMeshGoLiveGuard(true, true, false, true, true, "", "", "", "", "", "");
+                new KfeVaultMeshGoLiveGuard(
+                        true, true, false, true, true, false, false, "", "", "", "", "", "");
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
@@ -81,7 +86,8 @@ class KfeVaultMeshGoLiveGuardTest {
     void requireMtlsHappyPathPem() {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
-                        true, true, false, true, true, "", "/c", "/k", "/ca", "", "");
+                        true, true, false, true, true, false, false,
+                        "", "/c", "/k", "/ca", "", "");
         assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
     }
 }

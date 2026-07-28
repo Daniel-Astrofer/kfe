@@ -9,8 +9,12 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 import com.kerosene.common.exception.ErrorCodes;
 import com.kerosene.common.exception.StructuredPlatformException;
+import com.kerosene.common.financial.PasskeyAssertion;
+import com.kerosene.common.financial.DeviceProof;
+import com.kerosene.common.financial.RecoveryApproval;
 
 import java.lang.reflect.Field;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,10 +36,20 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("X-KFE-Internal-Secret", "credential"))
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(content().json("{\"userId\":42,\"deviceRef\":\"device\",\"factor\":\"1234\"}"))
+                .andExpect(content().json("""
+                        {
+                          "userId":42,
+                          "deviceRef":"device",
+                          "factor":{
+                            "deviceId":"device",
+                            "proof":"proof",
+                            "challengeNonce":"challenge"
+                          }
+                        }
+                        """))
                 .andRespond(withSuccess());
 
-        client.approveLocalFactor(42L, "device", "1234");
+        client.approveLocalFactor(42L, "device", deviceProof());
 
         server.verify();
     }
@@ -52,14 +66,27 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
                         {
                           "actorUserId":41,
                           "ownerUserId":42,
-                          "factorA":"totp",
-                          "factorB":"assertion",
-                          "factorC":"phrase"
+                          "passkeyAssertion":{
+                            "credentialId":"credential",
+                            "clientDataJson":"client-data",
+                            "authenticatorData":"authenticator-data",
+                            "signature":"signature",
+                            "userHandle":"42"
+                          },
+                          "recoveryApproval":{
+                            "proof":"recovery-proof",
+                            "challengeNonce":"challenge"
+                          },
+                          "deviceProof":{
+                            "deviceId":"device",
+                            "proof":"proof",
+                            "challengeNonce":"challenge"
+                          }
                         }
                         """))
                 .andRespond(withSuccess());
 
-        client.approveWalletOutbound(41L, 42L, "totp", "assertion", "phrase");
+        client.approveWalletOutbound(41L, 42L, passkey(), recoveryApproval(), deviceProof());
 
         server.verify();
     }
@@ -68,7 +95,8 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
     void rejectsMissingInternalCredentialBeforeCallingAuthServer() {
         KfeRemoteFinancialTransactionApprovalClient client = client("");
 
-        assertThrows(IllegalStateException.class, () -> client.approveLocalFactor(42L, "device", "1234"));
+        assertThrows(IllegalStateException.class,
+                () -> client.approveLocalFactor(42L, "device", deviceProof()));
     }
 
     @Test
@@ -89,12 +117,29 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
 
         StructuredPlatformException exception = assertThrows(
                 StructuredPlatformException.class,
-                () -> client.approveCustodyTransfer(42L, null));
+                () -> client.approveCustodyTransfer(
+                        42L,
+                        passkey()));
 
         assertEquals(HttpStatus.PRECONDITION_REQUIRED, exception.getStatus());
         assertEquals(ErrorCodes.AUTH_PASSKEY_CHALLENGE, exception.getErrorCode());
         assertEquals("PASSKEY_CHALLENGE_REQUIRED:abcdef", exception.getMessage());
         server.verify();
+    }
+
+    private static PasskeyAssertion passkey() {
+        return new PasskeyAssertion(
+                "credential", "client-data", "authenticator-data", "signature", "42");
+    }
+
+    private static DeviceProof deviceProof() {
+        return new DeviceProof(
+                "device", "proof", "challenge", Instant.parse("2026-07-27T12:00:00Z"));
+    }
+
+    private static RecoveryApproval recoveryApproval() {
+        return new RecoveryApproval(
+                "recovery-proof", "challenge", Instant.parse("2026-07-27T12:00:00Z"));
     }
 
     private KfeRemoteFinancialTransactionApprovalClient client(String credential) {

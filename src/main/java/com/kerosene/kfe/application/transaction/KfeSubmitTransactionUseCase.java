@@ -345,7 +345,7 @@ public class KfeSubmitTransactionUseCase {
         transactionRepository.saveAndFlush(tx);
         statementRecorder.record(userId, tx, lock.statementWalletId(tx), request);
 
-        notificationPort.notifyExternalPaymentSent(
+        notificationPort.notifyPaymentInitiated(
                 userId,
                 tx.getId(),
                 lock.statementWalletId(tx),
@@ -462,6 +462,7 @@ public class KfeSubmitTransactionUseCase {
         tx.setNetworkFeeSats(quote.networkFeeSats());
         tx.setKeroseneFeeSats(quote.keroseneFeeSats());
         tx.setTotalDebitSats(quote.totalDebitSats());
+        tx.setPricingPolicyVersion(quote.pricingPolicyVersion());
         applyDisplaySnapshot(tx);
         transactionRepository.save(tx);
     }

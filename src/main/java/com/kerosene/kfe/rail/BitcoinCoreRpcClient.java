@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -118,6 +119,41 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
     public String sendRawTransaction(String hex) {
         JsonNode result = unwrapResult(executeRpc("sendrawtransaction", hex));
         return result != null && !result.isNull() ? result.asText() : null;
+    }
+
+    /**
+     * Validates a raw transaction against mempool policy without broadcasting.
+     * Returns the mempool acceptance result array from Bitcoin Core.
+     *
+     * @param rawHex fully-signed raw transaction hex
+     * @return the "result" array from {@code testmempoolaccept}; each entry has
+     *         {@code txid}, {@code allowed} (bool), and {@code reject-reason} on failure
+     */
+    public JsonNode testMempoolAccept(String rawHex) {
+        if (rawHex == null || rawHex.isBlank()) {
+            throw new IllegalArgumentException("rawHex is required for testmempoolaccept");
+        }
+        return unwrapResult(executeNodeRpc("testmempoolaccept", List.of(rawHex.trim())));
+    }
+
+    /**
+     * Validates mempool acceptance and throws on rejection.
+     * Returns true when all transactions are allowed.
+     */
+    public boolean requireMempoolAccept(String rawHex) {
+        JsonNode result = testMempoolAccept(rawHex);
+        if (result == null || !result.isArray() || result.isEmpty()) {
+            throw new IllegalStateException(
+                    "testmempoolaccept returned empty result for signed transaction.");
+        }
+        for (JsonNode entry : result) {
+            if (!entry.path("allowed").asBoolean(false)) {
+                String reason = entry.path("reject-reason").asText("unknown");
+                throw new IllegalStateException(
+                        "Transaction rejected by mempool policy before broadcast: " + reason);
+            }
+        }
+        return true;
     }
 
     @Override
@@ -448,7 +484,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             }
             int confs = 0;
             if (utxo.path("confirmations").isIntegralNumber()) {
-                confs = Math.max(0, utxo.path("confirmations").asInt());
+                confs = utxo.path("confirmations").asInt();
             } else if (utxo.path("height").isIntegralNumber() && tipHeight > 0L) {
                 long h = utxo.path("height").asLong();
                 if (h > 0L) {
@@ -677,8 +713,194 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
     }
 
     /**
+     * Full chain status for a transaction — preserves negative confirmations from Core.
+     * Never treat RPC unavailability as "transaction not found."
+     */
+    public record TransactionChainStatus(
+            ChainState state,
+            int confirmations,
+            @Nullable String blockHash,
+            @Nullable Integer blockHeight,
+            @Nullable String replacedByTxid
+    ) {
+        public enum ChainState {
+            MEMPOOL,    // 0 confirmations
+            CONFIRMED,  // > 0
+            CONFLICTED, // < 0 (negative from Core)
+            NOT_FOUND,  // RPC tx not found in wallet/mempool
+            ABANDONED,
+            UNKNOWN     // network error / RPC unavailable
+        }
+    }
+
+    /**
+     * Fetches transaction chain status with raw confirmations and block metadata.
+     * RPC errors are captured as UNKNOWN — never conflated with NOT_FOUND.
+     */
+    public TransactionChainStatus fetchTransactionChainStatus(String txid) {
+        if (txid == null || txid.isBlank()) {
+            return new TransactionChainStatus(TransactionChainStatus.ChainState.UNKNOWN, 0, null, null, null);
+        }
+        String id = txid.trim();
+        RuntimeException walletError = null;
+        try {
+            JsonNode walletTx = unwrapResult(executeRpc("gettransaction", id));
+            if (walletTx != null && !walletTx.isNull() && !walletTx.isMissingNode()) {
+                return parseChainStatus(walletTx, id);
+            }
+        } catch (RuntimeException e) {
+            walletError = e;
+        }
+        try {
+            JsonNode raw = getRawTransaction(id, true);
+            if (raw == null || raw.isNull() || raw.isMissingNode()) {
+                return new TransactionChainStatus(TransactionChainStatus.ChainState.NOT_FOUND,
+                        0, null, null, null);
+            }
+            return parseChainStatus(raw, id);
+        } catch (RuntimeException rawError) {
+            if (walletError != null) {
+                rawError.addSuppressed(walletError);
+            }
+            return new TransactionChainStatus(TransactionChainStatus.ChainState.UNKNOWN,
+                    0, null, null, null);
+        }
+    }
+
+    private TransactionChainStatus parseChainStatus(JsonNode tx, String txid) {
+        JsonNode confs = tx.path("confirmations");
+        int confirmations = confs.isIntegralNumber() ? confs.asInt() : 0;
+        String blockHash = textField(tx, "blockhash");
+        Integer blockHeight = tx.path("blockheight").isIntegralNumber()
+                ? tx.path("blockheight").asInt() : null;
+        String replacedBy = textField(tx, "replaced_by_txid");
+        if (replacedBy == null) {
+            replacedBy = textField(tx, "replacedbytxid");
+        }
+
+        TransactionChainStatus.ChainState state;
+        if (confirmations < 0) {
+            state = TransactionChainStatus.ChainState.CONFLICTED;
+        } else if (confirmations > 0) {
+            state = TransactionChainStatus.ChainState.CONFIRMED;
+        } else {
+            state = TransactionChainStatus.ChainState.MEMPOOL;
+        }
+        return new TransactionChainStatus(state, confirmations, blockHash, blockHeight, replacedBy);
+    }
+
+    private static String textField(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        return value.isMissingNode() || value.isNull() ? null : value.asText();
+    }
+
+    /**
+     * Queries an outpoint status via gettxout (include_mempool=true).
+     * Returns null when spent/unknown; returns the UTXO JSON when unspent.
+     */
+    public JsonNode queryOutpoint(String txid, int vout) {
+        if (txid == null || txid.isBlank() || vout < 0) {
+            return null;
+        }
+        try {
+            JsonNode raw = executeRpc("gettxout", txid.trim(), vout, true);
+            if (raw == null || raw.isNull() || raw.isMissingNode()) {
+                return null;
+            }
+            if (raw.has("result")) {
+                JsonNode result = raw.get("result");
+                if (result == null || result.isNull() || result.isMissingNode()) {
+                    return null;
+                }
+                return result;
+            }
+            return raw;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Searches for a replacement transaction by checking each input's spending status.
+     * Returns the replacement txid, or null if none found.
+     */
+    public String findReplacementTxid(String originalTxid) {
+        if (originalTxid == null || originalTxid.isBlank()) {
+            return null;
+        }
+        String id = originalTxid.trim();
+        try {
+            JsonNode raw = getRawTransaction(id, true);
+            if (raw == null || raw.isNull() || raw.isMissingNode()) {
+                return null;
+            }
+            JsonNode vin = raw.path("vin");
+            if (!vin.isArray()) {
+                return null;
+            }
+            for (JsonNode input : vin) {
+                String inTxid = textField(input, "txid");
+                JsonNode inVout = input.path("vout");
+                if (inTxid != null && !inTxid.isBlank() && inVout.isIntegralNumber()) {
+                    String spending = findSpendingTxid(inTxid, inVout.asInt());
+                    if (spending != null && !spending.isBlank() && !spending.equalsIgnoreCase(id)) {
+                        return spending.trim();
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            // Best-effort
+        }
+        return null;
+    }
+
+    /**
+     * Searches wallet transaction history for a replacement by looking at walletconflicts.
+     */
+    public String findReplacementInWallet(String originalTxid, long amountSats, String destinationAddress) {
+        if (originalTxid == null || originalTxid.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode txs = unwrapResult(executeRpc("listtransactions", "*", 200, 0, true));
+            if (txs == null || !txs.isArray()) {
+                return null;
+            }
+            String normalizedOriginal = originalTxid.trim().toLowerCase(java.util.Locale.ROOT);
+            for (JsonNode tx : txs) {
+                String txid = textField(tx, "txid");
+                if (txid == null || txid.equalsIgnoreCase(normalizedOriginal)) {
+                    continue;
+                }
+                JsonNode walletTx = unwrapResult(executeRpc("gettransaction", txid));
+                if (walletTx != null && !walletTx.isNull()) {
+                    JsonNode walletConflicts = walletTx.path("walletconflicts");
+                    if (walletConflicts.isArray()) {
+                        for (JsonNode conflict : walletConflicts) {
+                            if (normalizedOriginal.equals(conflict.asText().trim().toLowerCase(java.util.Locale.ROOT))) {
+                                return txid;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            // Best-effort
+        }
+        return null;
+    }
+
+    /**
      * Confirmation count for a wallet-known or mempool/chain transaction.
      * Empty when the transaction is not found; {@code 0} means in mempool (unconfirmed).
+     *
+     * <p>Negative values are preserved from Bitcoin Core and carry specific meaning:
+     * <ul>
+     *   <li>{@code -1}: CONFLICTED — double-spend or conflicting transaction exists</li>
+     *   <li>{@code -2}: REMOVED — transaction no longer in mempool (RBF replaced, evicted)</li>
+     *   <li>{@code -3} or lower: other Core-specific negative states</li>
+     * </ul>
+     * Callers must handle negative confirmations explicitly — conflating with zero hides reorgs.
      */
     public java.util.OptionalInt findTransactionConfirmations(String txid) {
         if (txid == null || txid.isBlank()) {
@@ -691,7 +913,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             if (walletTx != null && !walletTx.isNull() && !walletTx.isMissingNode()) {
                 JsonNode confirmations = walletTx.path("confirmations");
                 if (confirmations.isIntegralNumber()) {
-                    return java.util.OptionalInt.of(Math.max(0, confirmations.asInt()));
+                    return java.util.OptionalInt.of(confirmations.asInt());
                 }
             }
         } catch (RuntimeException ignored) {
@@ -704,7 +926,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             }
             JsonNode confirmations = raw.path("confirmations");
             if (confirmations.isIntegralNumber()) {
-                return java.util.OptionalInt.of(Math.max(0, confirmations.asInt()));
+                return java.util.OptionalInt.of(confirmations.asInt());
             }
             // Present in mempool/wallet without a confirmations field yet.
             return java.util.OptionalInt.of(0);

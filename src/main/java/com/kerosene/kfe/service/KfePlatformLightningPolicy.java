@@ -4,7 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import com.kerosene.common.exception.ErrorCodes;
 import com.kerosene.common.exception.StructuredPlatformException;
-import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.dto.KfePublicPaymentRequestResponse;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
 import com.kerosene.kfe.model.KfeRail;
@@ -37,7 +37,7 @@ public class KfePlatformLightningPolicy {
      * Looks up a platform payment request by BOLT11 or payment hash.
      * Returns empty when the destination is external (not ours).
      */
-    public Optional<KfePaymentRequestResponse> resolvePlatformInvoice(String invoiceOrHash) {
+    public Optional<KfePublicPaymentRequestResponse> resolvePlatformInvoice(String invoiceOrHash) {
         return findEntity(invoiceOrHash)
                 .map(entity -> paymentRequestService.publicGet(entity.getPublicId()));
     }

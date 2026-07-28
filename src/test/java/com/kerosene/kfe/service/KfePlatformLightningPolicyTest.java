@@ -4,7 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.kerosene.common.exception.ErrorCodes;
 import com.kerosene.common.exception.StructuredPlatformException;
-import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.dto.KfePublicPaymentRequestResponse;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
 import com.kerosene.kfe.model.KfeRail;
@@ -67,7 +67,7 @@ class KfePlatformLightningPolicyTest {
         KfePaymentRequestEntity entity = entity();
         when(repository.findFirstByPaymentRequestIgnoreCase(anyString())).thenReturn(Optional.empty());
         when(repository.findFirstByPaymentHashIgnoreCase(hash)).thenReturn(Optional.of(entity));
-        KfePaymentRequestResponse response = mock(KfePaymentRequestResponse.class);
+        KfePublicPaymentRequestResponse response = mock(KfePublicPaymentRequestResponse.class);
         when(paymentRequestService.publicGet("8ou3btbrv9wdqgipgcicxh8k")).thenReturn(response);
 
         assertThat(policy.resolvePlatformInvoice(hash)).contains(response);

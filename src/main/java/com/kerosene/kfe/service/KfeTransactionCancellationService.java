@@ -344,7 +344,9 @@ public class KfeTransactionCancellationService {
             case INTENT, VALIDATING, QUORUM_SYNC, LOCKED -> true;
             // EXECUTING on-chain after broadcast: only allow if no blockchain txid yet.
             case EXECUTING -> tx.getBlockchainTxid() == null || tx.getBlockchainTxid().isBlank();
-            case SETTLED, FAILED, REQUIRES_RECONCILIATION -> false;
+            case SETTLED, FAILED, CANCELLED, REQUIRES_RECONCILIATION, CONFLICTED,
+                 CONFLICTED_RECONCILING, CONFLICTED_REFUNDED, REORG_RECONCILIATION,
+                 BROADCAST, CONFIRMING, DROPPED, ABANDONED -> false;
         };
     }
 
@@ -353,7 +355,12 @@ public class KfeTransactionCancellationService {
             return false;
         }
         return tx.getStatus() != KfeTransactionStatus.SETTLED
-                && tx.getStatus() != KfeTransactionStatus.FAILED;
+                && tx.getStatus() != KfeTransactionStatus.FAILED
+                && tx.getStatus() != KfeTransactionStatus.CANCELLED
+                && tx.getStatus() != KfeTransactionStatus.CONFLICTED
+                && tx.getStatus() != KfeTransactionStatus.CONFLICTED_REFUNDED
+                && tx.getStatus() != KfeTransactionStatus.DROPPED
+                && tx.getStatus() != KfeTransactionStatus.ABANDONED;
     }
 
     private static String trim(String value, int max) {

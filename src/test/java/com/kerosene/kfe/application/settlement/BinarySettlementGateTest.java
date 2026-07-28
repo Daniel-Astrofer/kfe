@@ -7,15 +7,18 @@ import com.kerosene.kfe.model.KfeBalanceEntity;
 import com.kerosene.kfe.model.KfeBalanceId;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.repository.KfeBalanceRepository;
 import com.kerosene.kfe.service.KfeAuditLogService;
 import com.kerosene.kfe.service.KfeBalanceService;
 import com.kerosene.kfe.service.KfeLightningJammingGuard;
 import com.kerosene.kfe.service.KfeLightningLiquidityService;
 import com.kerosene.kfe.service.KfeCapacitySignalStore;
 import com.kerosene.kfe.service.KfeLightningOpsMetrics;
+import com.kerosene.kfe.service.KfeProofOfReservesService;
 import com.kerosene.kfe.service.KfeQuorumGateway;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,6 +35,8 @@ import static org.mockito.Mockito.when;
 class BinarySettlementGateTest {
 
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
+    private final KfeBalanceRepository balanceRepository = mock(KfeBalanceRepository.class);
+    private final KfeProofOfReservesService porService = mock(KfeProofOfReservesService.class);
     private final KfeQuorumGateway quorumGateway = mock(KfeQuorumGateway.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
     private final KfeLightningLiquidityService liquidityService = mock(KfeLightningLiquidityService.class);
@@ -56,8 +61,12 @@ class BinarySettlementGateTest {
                 .thenReturn(KfeLightningJammingGuard.JammingCheck.softPass("BETA_LIMITED:TEST"));
         when(opsMetrics.getIfAvailable()).thenReturn(null);
         when(capacitySignals.getIfAvailable()).thenReturn(null);
+        when(porService.isEnabled()).thenReturn(false);
+        when(balanceRepository.findAll()).thenReturn(java.util.List.of());
         gate = new BinarySettlementGate(
                 balanceService,
+                balanceRepository,
+                porService,
                 quorumGateway,
                 auditLogService,
                 liquidityService,
@@ -67,7 +76,9 @@ class BinarySettlementGateTest {
                 environment,
                 "beta-pass",
                 false,
-                false);
+                false,
+                3,
+                2);
     }
 
     @Test
@@ -91,6 +102,8 @@ class BinarySettlementGateTest {
         assertThat(result.evaluations()).hasSize(SettlementFlag.values().length);
         assertThat(result.byFlag().get(SettlementFlag.V_LIQUIDEZ).reason()).isEqualTo("NOT_APPLICABLE");
         assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).pass()).isTrue();
+        assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).reason())
+                .startsWith("QUORUM_THRESHOLD_MET:");
         assertThat(result.quorumAckCount()).isEqualTo(3);
         verify(balanceService, never()).requireForUpdate(any(), anyString());
     }
@@ -125,6 +138,8 @@ class BinarySettlementGateTest {
     void enforceModeFailsWhenLightningCapacityUnavailable() {
         gate = new BinarySettlementGate(
                 balanceService,
+                balanceRepository,
+                porService,
                 quorumGateway,
                 auditLogService,
                 liquidityService,
@@ -134,7 +149,9 @@ class BinarySettlementGateTest {
                 environment,
                 "enforce",
                 false,
-                false);
+                false,
+                3,
+                2);
         UUID walletId = UUID.randomUUID();
         when(balanceService.requireForUpdate(walletId, "BTC")).thenReturn(balance(walletId, 1_000_000L));
         when(quorumGateway.requireHealthyUnanimousConsensus("proposal"))
@@ -306,6 +323,50 @@ class BinarySettlementGateTest {
         assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).pass()).isFalse();
         assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).reason())
                 .startsWith("QUORUM_REJECTED:");
+    }
+
+    @Test
+    void mpcFailsWhenAcceptedBelowConstitutionThreshold() {
+        when(quorumGateway.requireHealthyUnanimousConsensus("proposal"))
+                .thenReturn(new KfeQuorumGateway.Result(1, 3));
+
+        SettlementGateResult result = gate.evaluate(command(
+                UUID.randomUUID(),
+                null,
+                KfeRail.INTERNAL,
+                KfeDirection.INTERNAL,
+                10L,
+                0L,
+                10L,
+                false,
+                "proposal"));
+
+        assertThat(result.passed()).isFalse();
+        assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).pass()).isFalse();
+        assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).reason())
+                .startsWith("QUORUM_THRESHOLD_NOT_MET:");
+    }
+
+    @Test
+    void mpcPassesWithExactlyThresholdAcceptances() {
+        when(quorumGateway.requireHealthyUnanimousConsensus("proposal"))
+                .thenReturn(new KfeQuorumGateway.Result(2, 3));
+
+        SettlementGateResult result = gate.evaluate(command(
+                UUID.randomUUID(),
+                null,
+                KfeRail.INTERNAL,
+                KfeDirection.INTERNAL,
+                10L,
+                0L,
+                10L,
+                false,
+                "proposal"));
+
+        assertThat(result.passed()).isTrue();
+        assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).pass()).isTrue();
+        assertThat(result.byFlag().get(SettlementFlag.V_ASSINATURA_MPC).reason())
+                .startsWith("QUORUM_THRESHOLD_MET:");
     }
 
     private static SettlementGateCommand command(

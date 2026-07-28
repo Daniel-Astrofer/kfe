@@ -35,7 +35,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -60,8 +64,13 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final String baseUrl;
+    private final List<String> vaultUrls;
     private final String apiToken;
     private final boolean tlsEnabled;
+    private final String constitutionHash;
+    private final int constitutionMemberCount;
+    private final int constitutionThreshold;
+    private final int minimumAgreement;
 
     @Autowired
     public KfeVaultMeshSettlementClient(
@@ -81,12 +90,21 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             @Value("${kfe.vaultmesh.tls.truststore-path:}") String tlsTruststorePath,
             @Value("${kfe.vaultmesh.tls.truststore-password:}") String tlsTruststorePassword,
             @Value("${kfe.vaultmesh.tls.truststore-type:PKCS12}") String tlsTruststoreType,
-            @Value("${kfe.vaultmesh.tls.hostname-verification:true}") boolean tlsHostnameVerification) {
+            @Value("${kfe.vaultmesh.tls.hostname-verification:true}") boolean tlsHostnameVerification,
+            @Value("${kfe.vaultmesh.constitution.hash:}") String constitutionHash,
+            @Value("${kfe.vaultmesh.constitution.member-count:3}") int constitutionMemberCount,
+            @Value("${kfe.vaultmesh.constitution.threshold:2}") int constitutionThreshold,
+            @Value("${kfe.vaultmesh.urls:}") String vaultUrlsCsv) {
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
+        this.vaultUrls = parseVaultUrls(vaultUrlsCsv, this.baseUrl);
         this.apiToken = apiToken == null ? "" : apiToken.trim();
         this.tlsEnabled = KfeVaultMeshTlsSupport.tlsConfigured(
                 tlsEnabled, tlsCertPath, tlsKeyPath, tlsCaPath, tlsKeystorePath, tlsTruststorePath);
+        this.constitutionHash = blankToEmpty(constitutionHash);
+        this.constitutionMemberCount = Math.max(1, constitutionMemberCount);
+        this.constitutionThreshold = Math.max(1, Math.min(constitutionThreshold, constitutionMemberCount));
+        this.minimumAgreement = this.constitutionThreshold;
 
         RestTemplateBuilder builder = restTemplateBuilder
                 .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
@@ -113,7 +131,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         }
     }
 
-    /** Test / lab helper: plaintext client (no mTLS). */
+    /** Test / lab helper: plaintext client (no mTLS, single vault). */
     KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
@@ -138,7 +156,11 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 "",
                 "",
                 "PKCS12",
-                true);
+                true,
+                "",
+                3,
+                2,
+                baseUrl);
     }
 
     boolean tlsEnabled() {
@@ -253,7 +275,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                     VaultMeshReceipt.Status.ACCEPTED,
                     status.isBlank() ? null : status.toUpperCase(Locale.ROOT),
                     null,
-                    Instant.now().toEpochMilli());
+                    Instant.now());
         }
         return rejected("UNEXPECTED_INTENT_STATUS:" + status, intentId);
     }
@@ -269,7 +291,14 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     }
 
     private VaultMeshDepositInfo fetchDeposit(String bucket) {
-        String path = baseUrl + "/v1/bitcoin/deposit?bucket=" + bucket;
+        if (vaultUrls.size() > 1) {
+            return fetchDepositMultiVault(bucket);
+        }
+        return fetchDepositFromUrl(baseUrl, bucket);
+    }
+
+    private VaultMeshDepositInfo fetchDepositFromUrl(String url, String bucket) {
+        String path = url + "/v1/bitcoin/deposit?bucket=" + bucket;
         try {
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
@@ -279,25 +308,49 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             if (body == null) {
                 return null;
             }
-            String address = body.get("address") == null ? null : String.valueOf(body.get("address"));
-            if (address == null || address.isBlank()) {
-                return null;
-            }
-            String lower = address.trim().toLowerCase(Locale.ROOT);
-            // Mesh Taproot deposits are bech32m (tb1p / bc1p / bcrt1p).
-            if (!(lower.startsWith("tb1p") || lower.startsWith("bc1p") || lower.startsWith("bcrt1p"))) {
-                return null;
-            }
-            return new VaultMeshDepositInfo(
-                    address.trim(),
-                    body.get("descriptor") == null ? null : String.valueOf(body.get("descriptor")),
-                    body.get("scheme") == null ? null : String.valueOf(body.get("scheme")),
-                    body.get("output_pubkey") == null ? null : String.valueOf(body.get("output_pubkey")),
-                    body.get("xonly_pubkey") == null ? null : String.valueOf(body.get("xonly_pubkey")),
-                    body.get("network") == null ? null : String.valueOf(body.get("network")));
+            return parseDepositInfo(body);
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    private VaultMeshDepositInfo fetchDepositMultiVault(String bucket) {
+        List<VaultMeshDepositInfo> results = new ArrayList<>();
+        for (String url : vaultUrls) {
+            VaultMeshDepositInfo info = fetchDepositFromUrl(url, bucket);
+            if (info != null) {
+                results.add(info);
+            }
+        }
+        if (results.size() < minimumAgreement) {
+            return null;
+        }
+        // Require consistent address across all responding vaults
+        String expectedAddress = results.get(0).address();
+        for (int i = 1; i < results.size(); i++) {
+            if (!expectedAddress.equals(results.get(i).address())) {
+                return null;
+            }
+        }
+        return results.get(0);
+    }
+
+    private VaultMeshDepositInfo parseDepositInfo(Map<?, ?> body) {
+        String address = body.get("address") == null ? null : String.valueOf(body.get("address"));
+        if (address == null || address.isBlank()) {
+            return null;
+        }
+        String lower = address.trim().toLowerCase(Locale.ROOT);
+        if (!isValidBech32mAddress(lower)) {
+            return null;
+        }
+        return new VaultMeshDepositInfo(
+                address.trim(),
+                body.get("descriptor") == null ? null : String.valueOf(body.get("descriptor")),
+                body.get("scheme") == null ? null : String.valueOf(body.get("scheme")),
+                body.get("output_pubkey") == null ? null : String.valueOf(body.get("output_pubkey")),
+                body.get("xonly_pubkey") == null ? null : String.valueOf(body.get("xonly_pubkey")),
+                body.get("network") == null ? null : String.valueOf(body.get("network")));
     }
 
     @Override
@@ -491,17 +544,70 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         if (signed == null || String.valueOf(signed).isBlank()) {
             return psbtRejected("MISSING_SIGNED_PSBT", intentId);
         }
-        Object proof = body.get("signature");
+
+        // Constitution-bound receipt verification
+        String respConstitutionHash = body.get("constitution_hash") == null
+                ? null : String.valueOf(body.get("constitution_hash"));
+        String respSessionId = body.get("session_id") == null
+                ? null : String.valueOf(body.get("session_id"));
+        String respTranscriptHash = body.get("transcript_hash") == null
+                ? null : String.valueOf(body.get("transcript_hash"));
+        String respSignature = body.get("signature") == null
+                ? null : String.valueOf(body.get("signature"));
+
+        // Verify constitution hash if configured
+        if (!constitutionHash.isEmpty()
+                && respConstitutionHash != null
+                && !constitutionHash.equals(respConstitutionHash.trim())) {
+            return psbtRejected(
+                    "CONSTITUTION_HASH_MISMATCH: expected="
+                            + constitutionHash + " got=" + respConstitutionHash, intentId);
+        }
+
+        // Verify threshold if response includes it
+        Object respThreshold = body.get("threshold");
+        if (respThreshold != null) {
+            int providedThreshold = Integer.parseInt(String.valueOf(respThreshold));
+            if (providedThreshold < constitutionThreshold) {
+                return psbtRejected(
+                        "THRESHOLD_BELOW_MINIMUM: provided=" + providedThreshold
+                                + " required=" + constitutionThreshold, intentId);
+            }
+        }
+
+        // Verify participant IDs are unique and count matches constitution
+        @SuppressWarnings("unchecked")
+        List<String> participants = (List<String>) body.get("participant_ids");
+        if (participants != null) {
+            long distinctCount = participants.stream().distinct().count();
+            if (distinctCount != participants.size()) {
+                return psbtRejected("DUPLICATE_PARTICIPANT_IDS", intentId);
+            }
+            if (participants.size() != constitutionMemberCount) {
+                return psbtRejected(
+                        "PARTICIPANT_COUNT_MISMATCH: provided=" + participants.size()
+                                + " required=" + constitutionMemberCount, intentId);
+            }
+        }
+
+        // Verify session ID matches if provided
+        if (respSessionId != null && !respSessionId.isBlank()
+                && !respSessionId.equals(intentId)) {
+            return psbtRejected("SESSION_ID_MISMATCH: expected=" + intentId
+                    + " got=" + respSessionId, intentId);
+        }
+
+        String proof = respSignature;
         if (proof == null) {
-            proof = body.get("session_id");
+            proof = respTranscriptHash;
         }
         return new VaultMeshPsbtReceipt(
                 intentId,
                 VaultMeshReceipt.Status.ACCEPTED,
                 null,
                 String.valueOf(signed),
-                proof == null ? null : String.valueOf(proof),
-                Instant.now().toEpochMilli());
+                proof,
+                Instant.now());
     }
 
     private static VaultMeshPsbtReceipt psbtMeshError(String intentId, String reason) {
@@ -513,7 +619,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                     reason,
                     null,
                     null,
-                    Instant.now().toEpochMilli());
+                    Instant.now());
         }
         return psbtRejected(reason, intentId);
     }
@@ -525,7 +631,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 reason,
                 null,
                 null,
-                Instant.now().toEpochMilli());
+                Instant.now());
     }
 
     private static String firstNonBlank(String primary, String fallback) {
@@ -549,7 +655,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 VaultMeshReceipt.Status.ACCEPTED,
                 null,
                 proof,
-                Instant.now().toEpochMilli());
+                Instant.now());
     }
 
     private Map<?, ?> parseBody(String raw) {
@@ -571,7 +677,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                     VaultMeshReceipt.Status.FAIL_STOP,
                     reason,
                     null,
-                    Instant.now().toEpochMilli());
+                    Instant.now());
         }
         return rejected(reason, intentId);
     }
@@ -584,7 +690,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 nullToEmpty(intent.destination()),
                 Long.toString(intent.amountSats()),
                 nullToEmpty(intent.policyHash()),
-                Long.toString(intent.createdAtEpochMs()));
+                Long.toString(intent.createdAt().toEpochMilli()));
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(material.getBytes(StandardCharsets.UTF_8));
@@ -600,7 +706,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 VaultMeshReceipt.Status.REJECTED,
                 reason,
                 null,
-                Instant.now().toEpochMilli());
+                Instant.now());
     }
 
     private static String trimTrailingSlash(String url) {
@@ -616,5 +722,88 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String blankToEmpty(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private static List<String> parseVaultUrls(String csv, String fallback) {
+        if (csv == null || csv.isBlank()) {
+            return Collections.singletonList(fallback);
+        }
+        return Arrays.stream(csv.split(","))
+                .map(s -> trimTrailingSlash(s.trim()))
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+    }
+
+    /** Full Bech32m validation including checksum, not just prefix match. */
+    private static boolean isValidBech32mAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return false;
+        }
+        String lower = address.trim().toLowerCase(Locale.ROOT);
+        // Taproot addresses: bc1p (mainnet), tb1p (testnet), bcrt1p (regtest)
+        if (!(lower.startsWith("bc1p") || lower.startsWith("tb1p") || lower.startsWith("bcrt1p"))) {
+            return false;
+        }
+        // Bech32m character set + length check
+        if (!lower.matches("^(bc|tb|bcrt)1p[a-z0-9]{58,}$")) {
+            return false;
+        }
+        // Verify Bech32m checksum
+        int sep = lower.lastIndexOf('1');
+        if (sep < 2) {
+            return false;
+        }
+        String hrp = lower.substring(0, sep);
+        String data = lower.substring(sep + 1);
+        if (!data.matches("[a-z0-9]+")) {
+            return false;
+        }
+        byte[] values = new byte[data.length()];
+        for (int i = 0; i < data.length(); i++) {
+            values[i] = bech32CharValue(data.charAt(i));
+        }
+        return verifyBech32mChecksum(hrp, values);
+    }
+
+    private static byte bech32CharValue(char c) {
+        if (c >= '0' && c <= '9') return (byte) (c - '0');
+        if (c >= 'a' && c <= 'z') return (byte) (c - 'a');
+        return -1;
+    }
+
+    private static final int[] BECH32M_GEN = {
+            0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3
+    };
+
+    private static boolean verifyBech32mChecksum(String hrp, byte[] data) {
+        int chk = 1;
+        for (int i = 0; i < hrp.length(); i++) {
+            int val = hrp.charAt(i) >> 5;
+            chk = polymodStep(chk) ^ val;
+        }
+        chk = polymodStep(chk);
+        for (int i = 0; i < hrp.length(); i++) {
+            int val = hrp.charAt(i) & 0x1f;
+            chk = polymodStep(chk) ^ val;
+        }
+        for (byte b : data) {
+            chk = polymodStep(chk) ^ (b & 0xff);
+        }
+        return chk == 0x2bc830a3;
+    }
+
+    private static int polymodStep(int chk) {
+        int b = chk >> 25;
+        return ((chk & 0x1ffffff) << 5)
+                ^ (-((b >> 0) & 1) & BECH32M_GEN[0])
+                ^ (-((b >> 1) & 1) & BECH32M_GEN[1])
+                ^ (-((b >> 2) & 1) & BECH32M_GEN[2])
+                ^ (-((b >> 3) & 1) & BECH32M_GEN[3])
+                ^ (-((b >> 4) & 1) & BECH32M_GEN[4]);
     }
 }

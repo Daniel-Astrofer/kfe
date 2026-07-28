@@ -23,6 +23,12 @@ public final class KfeLedgerMovementTypes {
             CREDIT,
             CREDIT_KEROSENE_FEE);
 
+    // ITEM 12: Reversal/correction movement types (create compensating movements, never UPDATE/DELETE)
+    public static final String REVERSAL_CREDIT = "REVERSAL_CREDIT";
+    public static final String REVERSAL_DEBIT = "REVERSAL_DEBIT";
+    public static final String CORRECTION_CREDIT = "CORRECTION_CREDIT";
+    public static final String CORRECTION_DEBIT = "CORRECTION_DEBIT";
+
     /** User wallet available credits (excludes system fee). */
     public static final List<String> USER_AVAILABLE_CREDIT_TYPES = List.of(
             CREDIT_INBOUND,

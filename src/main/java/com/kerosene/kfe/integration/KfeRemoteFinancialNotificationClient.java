@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 import com.kerosene.common.financial.FinancialDepositConfirmedNotificationRequest;
+import com.kerosene.common.financial.FinancialExternalPaymentNotificationRequest;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.common.financial.FinancialOutboundNotificationRequest;
 import com.kerosene.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
@@ -202,6 +203,84 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
                         walletId,
                         rail,
                         amountSats));
+    }
+
+    @Override
+    public void notifyPaymentInitiated(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats) {
+        post("/internal/kfe/notifications/payment-initiated",
+                new FinancialExternalPaymentNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats));
+    }
+
+    @Override
+    public void notifyPaymentBroadcast(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            String txid) {
+        post("/internal/kfe/notifications/payment-broadcast",
+                new FinancialOutboundNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats, 0, txid));
+    }
+
+    @Override
+    public void notifyPaymentConfirmed(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            int confirmations) {
+        post("/internal/kfe/notifications/payment-confirmed",
+                new FinancialOutboundNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats, confirmations, null));
+    }
+
+    @Override
+    public void notifyPaymentFailed(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            String failureCode,
+            String failureMessage) {
+        post("/internal/kfe/notifications/payment-failed",
+                new FinancialOutboundNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats, 0, failureCode));
+    }
+
+    @Override
+    public void notifyPaymentReconciliationRequired(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            String reason) {
+        post("/internal/kfe/notifications/payment-reconciliation-required",
+                new FinancialOutboundNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats, 0, reason));
+    }
+
+    @Override
+    public void notifyOutboundConflicted(
+            Long userId,
+            UUID transactionId,
+            UUID walletId,
+            String rail,
+            long amountSats,
+            String txid) {
+        post("/internal/kfe/notifications/outbound-conflicted",
+                new FinancialOutboundNotificationRequest(
+                        userId, transactionId, walletId, rail, amountSats, -1, txid));
     }
 
     /**

@@ -13,6 +13,8 @@ import static org.mockito.Mockito.when;
 class KfeNetworkFeeEstimateServiceTest {
 
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider = mock(ObjectProvider.class);
+    private final KfePricingService pricingService = mock(KfePricingService.class);
+    private final String sharedSecret = "test-shared-secret-for-quote-signing";
 
     @Test
     void usesServerRatesForOnchainOutboundAndReturnsThreeTiers() {
@@ -94,6 +96,7 @@ class KfeNetworkFeeEstimateServiceTest {
     private KfeNetworkFeeEstimateService service(int estimatedVbytes, double safetyMargin) {
         return new KfeNetworkFeeEstimateService(
                 bitcoinCoreProvider,
+                pricingService,
                 estimatedVbytes,
                 safetyMargin,
                 2,
@@ -104,6 +107,7 @@ class KfeNetworkFeeEstimateServiceTest {
                 6,
                 600,
                 120,
-                "mainnet");
+                "mainnet",
+                sharedSecret);
     }
 }

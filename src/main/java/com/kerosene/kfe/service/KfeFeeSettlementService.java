@@ -3,6 +3,7 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
@@ -12,6 +13,25 @@ import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Settles Kerosene fee to SYSTEM_PROFIT wallet (ITEM 10 — profit segregation).
+ *
+ * <p>PROFIT SEGREGATION MODEL (SUBLEDGER):
+ * Fees are credited to SYSTEM_PROFIT as a ledger entry within the USERS bucket.
+ * This is accounting-only — there is no physical UTXO segregation.
+ * The SYSTEM_PROFIT balance is a LIABILITY within USERS until physically moved to a
+ * dedicated vault PROFIT bucket.
+ *
+ * <p>INVARIANT: {@code userDebit = recipientCredit + revenueCredit + networkFee}
+ * Every settled transaction must preserve this identity. No sats created or destroyed.
+ *
+ * <p>CONFIGURATION: {@code kfe.profit.segregation-mode=SUBLEDGER} (default).
+ * Future modes: {@code DEDICATED_BUCKET} (separate vault bucket), {@code PERIODIC_TRANSFER}.
+ *
+ * <p>RECONCILIATION: When {@code kfe.profit.reconcile-with-vault=true}, the
+ * SYSTEM_PROFIT balance is included in solvency calculations. Total assets must cover
+ * user liabilities + SYSTEM_PROFIT balance + safety buffer.
+ */
 @Service
 public class KfeFeeSettlementService {
 
@@ -24,6 +44,8 @@ public class KfeFeeSettlementService {
     private final KfeBalanceMovementRepository movementRepository;
     private final KfeAuditLogService auditLogService;
     private final ObjectProvider<KfeBalanceMetrics> balanceMetrics;
+    private final String profitSegregationMode;
+    private final boolean profitReconcileWithVault;
 
     public KfeFeeSettlementService(
             KfeSystemWalletService systemWalletService,
@@ -31,15 +53,36 @@ public class KfeFeeSettlementService {
             KfeBalanceMovementRecorder movementRecorder,
             KfeBalanceMovementRepository movementRepository,
             KfeAuditLogService auditLogService,
-            ObjectProvider<KfeBalanceMetrics> balanceMetrics) {
+            ObjectProvider<KfeBalanceMetrics> balanceMetrics,
+            @Value("${kfe.profit.segregation-mode:SUBLEDGER}") String profitSegregationMode,
+            @Value("${kfe.profit.reconcile-with-vault:true}") boolean profitReconcileWithVault) {
         this.systemWalletService = systemWalletService;
         this.balanceService = balanceService;
         this.movementRecorder = movementRecorder;
         this.movementRepository = movementRepository;
         this.auditLogService = auditLogService;
         this.balanceMetrics = balanceMetrics;
+        this.profitSegregationMode = normalizeSegregationMode(profitSegregationMode);
+        this.profitReconcileWithVault = profitReconcileWithVault;
     }
 
+    /**
+     * Credits the Kerosene fee from a settled transaction to the SYSTEM_PROFIT wallet.
+     *
+     * <p>PROFIT INVARIANT: Every fee credit preserves the identity:
+     * {@code userDebit = recipientCredit + keroseneFee + networkFee}
+     *
+     * <p>Idempotent: dual inbound paths / retries must not inflate SYSTEM_PROFIT.
+     *
+     * <p>SEGREGATION: In SUBLEDGER mode, profit is tracked in the ledger but remains
+     * part of the USERS bucket's backing assets. It is a liability until physically
+     * transferred to a dedicated vault PROFIT bucket.
+     *
+     * <p>CHANNEL COST ATTRIBUTION: Channel operations (open/close/rebalance) consume
+     * on-chain fees. These MUST NOT accidentally consume USERS backing. Channel costs
+     * are tracked via {@code KfeChannelLifecycleService} and attributed to CHANNELS or
+     * INFRA buckets.
+     */
     public void creditKeroseneFee(KfeTransactionEntity tx) {
         if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L) {
             return;
@@ -79,8 +122,26 @@ public class KfeFeeSettlementService {
                 Map.of(
                         "transactionId", tx.getId().toString(),
                         "profitWalletId", profitWalletId.toString(),
-                        "keroseneFeeSats", tx.getKeroseneFeeSats()));
-        log.info("KFE kerosene fee settled transactionId={} feeSats={}", tx.getId(), tx.getKeroseneFeeSats());
+                        "keroseneFeeSats", tx.getKeroseneFeeSats(),
+                        "segregationMode", profitSegregationMode,
+                        "reconcileWithVault", String.valueOf(profitReconcileWithVault)));
+        log.info("KFE kerosene fee settled transactionId={} feeSats={} mode={}",
+                tx.getId(), tx.getKeroseneFeeSats(), profitSegregationMode);
+    }
+
+    /**
+     * Returns the current profit segregation mode.
+     * @return SUBLEDGER, DEDICATED_BUCKET, or PERIODIC_TRANSFER
+     */
+    public String profitSegregationMode() {
+        return profitSegregationMode;
+    }
+
+    /**
+     * Returns whether SYSTEM_PROFIT is reconciled against vault-controlled assets.
+     */
+    public boolean profitReconcileWithVault() {
+        return profitReconcileWithVault;
     }
 
     private void recordFeeSkip() {
@@ -88,5 +149,12 @@ public class KfeFeeSettlementService {
         if (metrics != null) {
             metrics.recordFeeIdempotentSkip();
         }
+    }
+
+    private static String normalizeSegregationMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "SUBLEDGER";
+        }
+        return mode.trim().toUpperCase();
     }
 }

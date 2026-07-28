@@ -92,6 +92,18 @@ public class KfePaymentRequestEntity {
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
 
+    /** JSON-serialized {@link com.kerosene.kfe.service.KfePaymentBehaviorContract} snapshot. */
+    @Column(name = "behavior_contract", columnDefinition = "TEXT")
+    private String behaviorContract;
+
+    /** Cumulative sats received on open-amount links with ACCEPT_AND_TRACK partial policy. */
+    @Column(name = "partial_payment_received")
+    private Long partialPaymentReceived;
+
+    /** Optional webhook URL for payment event delivery. */
+    @Column(name = "webhook_url", length = 2048)
+    private String webhookUrl;
+
     @PrePersist
     void onCreate() {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
@@ -125,6 +137,11 @@ public class KfePaymentRequestEntity {
     public void markPaid(UUID transactionId) {
         status = KfePaymentRequestStatus.PAID;
         paidTransactionId = transactionId;
+    }
+
+    public void markFailed(String reason) {
+        status = KfePaymentRequestStatus.FAILED;
+        // reason is audited by the caller; no dedicated column needed
     }
 
     public UUID getId() { return id; }
@@ -166,4 +183,10 @@ public class KfePaymentRequestEntity {
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public LocalDateTime getHiddenAt() { return hiddenAt; }
     public LocalDateTime getCancelledAt() { return cancelledAt; }
+    public String getBehaviorContract() { return behaviorContract; }
+    public void setBehaviorContract(String behaviorContract) { this.behaviorContract = behaviorContract; }
+    public Long getPartialPaymentReceived() { return partialPaymentReceived; }
+    public void setPartialPaymentReceived(Long partialPaymentReceived) { this.partialPaymentReceived = partialPaymentReceived; }
+    public String getWebhookUrl() { return webhookUrl; }
+    public void setWebhookUrl(String webhookUrl) { this.webhookUrl = webhookUrl; }
 }

@@ -37,7 +37,13 @@ public record KfePaymentRequestResponse(
         Long receiverAmountSats,
         Instant expiresAt,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        /** Payment behavior contract snapshot. */
+        String behaviorContract,
+        /** Cumulative sats received on open-amount links. */
+        Long partialPaymentReceived,
+        /** Optional webhook URL configured for this payment request. */
+        String webhookUrl) {
 
         public KfePaymentRequestResponse {
                 rails = rails == null || rails.isEmpty() ? List.of() : List.copyOf(rails);

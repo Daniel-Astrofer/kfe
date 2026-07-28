@@ -5,5 +5,6 @@ public enum KfePaymentRequestStatus {
     PAID,
     EXPIRED,
     HIDDEN,
-    CANCELLED
+    CANCELLED,
+    FAILED
 }

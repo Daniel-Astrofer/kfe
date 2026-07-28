@@ -18,7 +18,7 @@ class KfeJwtVerifierTest {
 
     @Test
     void verifiesCoreCompatibleTokenAndNormalizesRoles() {
-        KfeJwtVerifier verifier = new KfeJwtVerifier(SECRET, (StringRedisTemplate) null, true);
+        KfeJwtVerifier verifier = new KfeJwtVerifier(SECRET, (StringRedisTemplate) null, true, false, null, null);
 
         Claims claims = verifier.verify(token(SECRET, List.of("ROLE_admin", "user")));
 
@@ -28,7 +28,7 @@ class KfeJwtVerifierTest {
 
     @Test
     void rejectsTokenSignedWithDifferentSecret() {
-        KfeJwtVerifier verifier = new KfeJwtVerifier(SECRET, (StringRedisTemplate) null, true);
+        KfeJwtVerifier verifier = new KfeJwtVerifier(SECRET, (StringRedisTemplate) null, true, false, null, null);
 
         assertThrows(RuntimeException.class, () -> verifier.verify(token(
                 "different_secret_key_that_is_long_enough_for_hs256_123!",

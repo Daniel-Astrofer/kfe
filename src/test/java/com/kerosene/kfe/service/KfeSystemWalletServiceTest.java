@@ -27,7 +27,8 @@ class KfeSystemWalletServiceTest {
             hashService,
             0L,
             "Fundos",
-            "Lucro");
+            "Lucro",
+            "SUBLEDGER");
 
     @Test
     void createsMissingSystemWalletsWithEmptyBalances() {

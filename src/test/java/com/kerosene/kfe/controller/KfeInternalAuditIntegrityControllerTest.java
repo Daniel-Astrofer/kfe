@@ -5,7 +5,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.kerosene.common.financial.FinancialAuditIntegrityPort;
 import com.kerosene.kfe.integration.KfeFinancialAuditIntegrityAdapter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -21,12 +21,18 @@ class KfeInternalAuditIntegrityControllerTest {
 
     @Test
     void returnsAuditRootWhenCredentialMatches() {
-        when(adapter.root()).thenReturn(new FinancialAuditIntegrityPort.AuditRoot(
+        when(adapter.currentRoot()).thenReturn(new FinancialAuditIntegrityPort.AuditRoot(
+                1,
+                "SHA-256",
                 "abc123",
                 7L,
                 1L,
                 7L,
-                LocalDateTime.parse("2026-06-24T10:15:30")));
+                null,
+                Instant.parse("2026-06-24T10:15:30Z"),
+                "test-signer",
+                "test-signature",
+                "checkpoint-7"));
 
         FinancialAuditIntegrityPort.AuditRoot root = controller.root("credential");
 

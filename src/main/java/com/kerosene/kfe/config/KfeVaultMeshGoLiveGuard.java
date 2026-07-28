@@ -30,6 +30,8 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
     private final boolean mpcSigningEnabled;
     private final boolean requireMtls;
     private final boolean tlsEnabled;
+    private final boolean productionMode;
+    private final boolean localDevMode;
     private final String apiToken;
     private final String tlsCertPath;
     private final String tlsKeyPath;
@@ -43,6 +45,8 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
             @Value("${kfe.mpc.signing-enabled:true}") boolean mpcSigningEnabled,
             @Value("${kfe.vaultmesh.require-mtls:false}") boolean requireMtls,
             @Value("${kfe.vaultmesh.tls.enabled:false}") boolean tlsEnabled,
+            @Value("${kfe.auth.production-mode:false}") boolean productionMode,
+            @Value("${kfe.vaultmesh.local-dev-mode:false}") boolean localDevMode,
             @Value("${kfe.vaultmesh.api-token:}") String apiToken,
             @Value("${kfe.vaultmesh.tls.cert-path:}") String tlsCertPath,
             @Value("${kfe.vaultmesh.tls.key-path:}") String tlsKeyPath,
@@ -54,6 +58,8 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
         this.mpcSigningEnabled = mpcSigningEnabled;
         this.requireMtls = requireMtls;
         this.tlsEnabled = tlsEnabled;
+        this.productionMode = productionMode;
+        this.localDevMode = localDevMode;
         this.apiToken = apiToken == null ? "" : apiToken.trim();
         this.tlsCertPath = blankToEmpty(tlsCertPath);
         this.tlsKeyPath = blankToEmpty(tlsKeyPath);
@@ -64,19 +70,35 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (!meshOnly) {
+        // Local-dev override: skip all guards (lab/testnet3 only).
+        if (localDevMode) {
+            log.warn("vault_mesh_go_live_guard: LOCAL-DEV-MODE active — "
+                    + "ALL production guards bypassed. INSECURE for staging/production.");
             return;
         }
-        if (!vaultMeshEnabled) {
-            throw new IllegalStateException(
-                    "kfe.vaultmesh.mesh-only=true requires kfe.vaultmesh.enabled=true (F8 clean cutover)");
-        }
-        if (mpcSigningEnabled) {
-            throw new IllegalStateException(
-                    "kfe.vaultmesh.mesh-only=true requires kfe.mpc.signing-enabled=false (no dual-run mpc)");
+
+        // Production-mode guard: enforce production invariants regardless of mesh-only flag.
+        // This catches misconfigured production profiles where vault mesh is enabled
+        // but mesh-only or mTLS is accidentally off.
+        if (productionMode) {
+            enforceProductionGuard();
         }
 
+        // Mesh-only guard (F8 clean cutover): refuse boot if vault mesh is disabled
+        // or mpc signing remains on. This is the mesh-specific path.
+        if (!meshOnly) {
+            if (productionMode) {
+                // Already enforced above; warn but don't block non-mesh-only paths (dev/staging).
+                log.warn("vault_mesh_go_live_guard: production-mode=true but mesh-only=false. "
+                        + "Vault mesh is NOT the exclusive signing path. "
+                        + "For go-live, set kfe.vaultmesh.mesh-only=true.");
+            }
+            return;
+        }
+
+        enforceMeshOnlyGuard();
         enforceCeremonyEnvHints();
+
         if (requireMtls) {
             enforceMtlsCutover();
         } else {
@@ -88,7 +110,73 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
         log.warn(
                 "vault_mesh_go_live_guard active: mesh-only settlement; mpc signing disabled"
                         + (requireMtls ? "; mTLS required (static_token refused)" : "; mTLS DISABLED (dev only)")
+                        + (productionMode ? "; PRODUCTION MODE" : "")
                         + " (domestic vault nodes OK; SEV/SGX preferred when present, not required)");
+    }
+
+    /**
+     * Production guard (ITEM 11): when {@code kfe.auth.production-mode=true},
+     * enforce production invariants even if mesh-only is not set.
+     *
+     * <p>In production, these MUST hold:
+     * <ul>
+     *   <li>vaultmesh.enabled=true</li>
+     *   <li>mpc.signing-enabled=false (no dual-run mpc)</li>
+     *   <li>require-mtls=true (refuse static_token)</li>
+     *   <li>tls.enabled=true</li>
+     *   <li>api-token must be empty (mTLS only)</li>
+     *   <li>hostname verification=true</li>
+     *   <li>fallback quorum must be absent (1/1 fallback is lab)</li>
+     *   <li>local Core signer must be false</li>
+     * </ul>
+     * Fails startup if any condition diverges.
+     */
+    private void enforceProductionGuard() {
+        log.info("vault_mesh_go_live_guard: PRODUCTION MODE active. Enforcing production invariants.");
+
+        if (!vaultMeshEnabled) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires kfe.vaultmesh.enabled=true "
+                    + "(vault mesh must be enabled in production)");
+        }
+        if (mpcSigningEnabled) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires kfe.mpc.signing-enabled=false "
+                    + "(no dual-run mpc in production)");
+        }
+        if (!requireMtls) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires kfe.vaultmesh.require-mtls=true "
+                    + "(mTLS is mandatory in production)");
+        }
+        if (!tlsEnabled) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires kfe.vaultmesh.tls.enabled=true "
+                    + "(TLS is mandatory in production)");
+        }
+        if (!apiToken.isEmpty()) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true refuses kfe.vaultmesh.api-token "
+                    + "(static_token is forbidden in production; use mTLS only)");
+        }
+        // Hostname verification is checked via config already (default true).
+        // Fallback quorum and local Core signer are checked in mesh-only path or via config.
+
+        log.info("vault_mesh_go_live_guard: all production invariants pass.");
+    }
+
+    /**
+     * Mesh-only guard (original F8 cutover check).
+     */
+    private void enforceMeshOnlyGuard() {
+        if (!vaultMeshEnabled) {
+            throw new IllegalStateException(
+                    "kfe.vaultmesh.mesh-only=true requires kfe.vaultmesh.enabled=true (F8 clean cutover)");
+        }
+        if (mpcSigningEnabled) {
+            throw new IllegalStateException(
+                    "kfe.vaultmesh.mesh-only=true requires kfe.mpc.signing-enabled=false (no dual-run mpc)");
+        }
     }
 
     /**

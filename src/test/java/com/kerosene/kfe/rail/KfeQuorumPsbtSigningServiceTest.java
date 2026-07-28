@@ -1,12 +1,18 @@
 package com.kerosene.kfe.rail;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kerosene.common.vaultmesh.VaultMeshPsbtReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.client.RestTemplate;
+
+import java.math.BigDecimal;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -21,6 +27,9 @@ class KfeQuorumPsbtSigningServiceTest {
             bitcoinCoreProvider,
             mock(RestTemplate.class),
             new ObjectMapper(),
+            null,   // vaultMeshSettlementPort
+            false,  // meshOnly
+            "USERS", // meshBucket
             1,
             6,
             "http://signer-one",
@@ -28,7 +37,8 @@ class KfeQuorumPsbtSigningServiceTest {
             "signer-one",
             true,
             false,
-            "bitcoin-core-wallet");
+            "bitcoin-core-wallet",
+            "");     // signerTlsFingerprints
 
     @Test
     void rejectsFundedPsbtBeforeSigningWhenActualFeeExceedsReservedLimit() {
@@ -59,6 +69,9 @@ class KfeQuorumPsbtSigningServiceTest {
                 bitcoinCoreProvider,
                 mock(RestTemplate.class),
                 new ObjectMapper(),
+                null,   // vaultMeshSettlementPort
+                false,  // meshOnly
+                "USERS", // meshBucket
                 1,
                 6,
                 "",
@@ -66,7 +79,8 @@ class KfeQuorumPsbtSigningServiceTest {
                 "",
                 false,
                 true,
-                "bitcoin-core-wallet");
+                "bitcoin-core-wallet",
+                "");     // signerTlsFingerprints
 
         when(bitcoinCore.createFundedPsbt(
                         org.mockito.ArgumentMatchers.eq("bcrt1qdestination"),
@@ -80,6 +94,13 @@ class KfeQuorumPsbtSigningServiceTest {
         when(bitcoinCore.finalizePsbt("combined-psbt"))
                 .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("deadbeef", true));
         when(bitcoinCore.sendRawTransaction("deadbeef")).thenReturn("txid-local");
+        // PSBT integrity check mocks
+        JsonNode decodedTx = decodedPsbtNode("bcrt1qdestination", 100_000L);
+        when(bitcoinCore.decodePsbt("funded-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodePsbt("signed-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodePsbt("combined-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodeRawTransaction("deadbeef")).thenReturn(decodedTx.get("tx"));
+        when(bitcoinCore.testMempoolAccept("deadbeef")).thenReturn(mempoolAccept(true));
 
         var execution = localOnly.execute(new KfeOnchainPaymentGateway.OnchainPaymentCommand(
                 42L,
@@ -102,6 +123,9 @@ class KfeQuorumPsbtSigningServiceTest {
                 bitcoinCoreProvider,
                 mock(RestTemplate.class),
                 new ObjectMapper(),
+                null,   // vaultMeshSettlementPort
+                false,  // meshOnly
+                "USERS", // meshBucket
                 1,
                 6,
                 "",
@@ -109,7 +133,8 @@ class KfeQuorumPsbtSigningServiceTest {
                 "",
                 true,
                 false,
-                "bitcoin-core-wallet");
+                "bitcoin-core-wallet",
+                "");     // signerTlsFingerprints
 
         assertThatThrownBy(() -> none.preflight(command(500L)))
                 .isInstanceOf(IllegalStateException.class)
@@ -122,7 +147,7 @@ class KfeQuorumPsbtSigningServiceTest {
             @Override
             public VaultMeshReceipt submitIntent(com.kerosene.common.vaultmesh.VaultMeshIntent intent) {
                 return new VaultMeshReceipt(
-                        intent.intentId(), VaultMeshReceipt.Status.REJECTED, "UNUSED", null, 1L);
+                        intent.intentId(), VaultMeshReceipt.Status.REJECTED, "UNUSED", null, Instant.ofEpochMilli(1L));
             }
 
             @Override
@@ -133,7 +158,7 @@ class KfeQuorumPsbtSigningServiceTest {
                         null,
                         "mesh-signed-psbt",
                         "sig-proof",
-                        1L);
+                        Instant.ofEpochMilli(1L));
             }
         };
         KfeQuorumPsbtSigningService meshOnly = new KfeQuorumPsbtSigningService(
@@ -150,7 +175,8 @@ class KfeQuorumPsbtSigningServiceTest {
                 "",
                 false,
                 true,
-                "bitcoin-core-wallet");
+                "bitcoin-core-wallet",
+                "");     // signerTlsFingerprints
 
         when(bitcoinCore.createFundedPsbt(
                         org.mockito.ArgumentMatchers.eq("tb1qdestination"),
@@ -162,6 +188,12 @@ class KfeQuorumPsbtSigningServiceTest {
         when(bitcoinCore.finalizePsbt("mesh-signed-psbt"))
                 .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("cafebabe", true));
         when(bitcoinCore.sendRawTransaction("cafebabe")).thenReturn("txid-mesh");
+        // PSBT integrity check mocks
+        JsonNode decodedTx = decodedPsbtNode("tb1qdestination", 50_000L);
+        when(bitcoinCore.decodePsbt("funded-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodePsbt("mesh-signed-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodeRawTransaction("cafebabe")).thenReturn(decodedTx.get("tx"));
+        when(bitcoinCore.testMempoolAccept("cafebabe")).thenReturn(mempoolAccept(true));
 
         var execution = meshOnly.execute(new KfeOnchainPaymentGateway.OnchainPaymentCommand(
                 7L,
@@ -194,5 +226,63 @@ class KfeQuorumPsbtSigningServiceTest {
         ObjectProvider<T> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(value);
         return provider;
+    }
+
+    /**
+     * Creates a minimal valid-looking decoded PSBT JSON node with the expected
+     * destination and amount for test assertions.
+     */
+    static JsonNode decodedPsbtNode(String destinationAddress, long amountSats) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode root = mapper.createObjectNode();
+        ObjectNode tx = mapper.createObjectNode();
+        tx.put("version", 2);
+        tx.put("locktime", 0);
+
+        ArrayNode vin = mapper.createArrayNode();
+        ObjectNode input = mapper.createObjectNode();
+        input.put("txid", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
+        input.put("vout", 0);
+        input.put("sequence", 4294967293L);
+        vin.add(input);
+        tx.set("vin", vin);
+
+        ArrayNode vout = mapper.createArrayNode();
+        ObjectNode output = mapper.createObjectNode();
+        output.put("value", BigDecimal.valueOf(amountSats).divide(BigDecimal.valueOf(100_000_000)));
+        output.put("n", 0);
+        ObjectNode spk = mapper.createObjectNode();
+        spk.put("address", destinationAddress);
+        output.set("scriptPubKey", spk);
+        vout.add(output);
+        tx.set("vout", vout);
+
+        root.set("tx", tx);
+
+        // Add minimal witness_utxo for fee computation
+        ArrayNode inputs = mapper.createArrayNode();
+        ObjectNode psbtInput = mapper.createObjectNode();
+        ObjectNode witnessUtxo = mapper.createObjectNode();
+        // Fee = 200 sats for simplicity; input amount = output amount + fee
+        witnessUtxo.put("amount",
+                BigDecimal.valueOf(amountSats + 200L).divide(BigDecimal.valueOf(100_000_000)));
+        psbtInput.set("witness_utxo", witnessUtxo);
+        inputs.add(psbtInput);
+        root.set("inputs", inputs);
+
+        return root;
+    }
+
+    static JsonNode mempoolAccept(boolean allowed) {
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode arr = mapper.createArrayNode();
+        ObjectNode entry = mapper.createObjectNode();
+        entry.put("txid", "0000000000000000000000000000000000000000000000000000000000000000");
+        entry.put("allowed", allowed);
+        if (!allowed) {
+            entry.put("reject-reason", "test-reject");
+        }
+        arr.add(entry);
+        return arr;
     }
 }

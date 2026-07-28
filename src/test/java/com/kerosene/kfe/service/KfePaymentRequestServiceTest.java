@@ -19,6 +19,7 @@ import com.kerosene.kfe.repository.KfePaymentRequestRepository;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.webhook.KfeWebhookDeliveryService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -50,6 +51,7 @@ class KfePaymentRequestServiceTest {
     private final LightningInvoiceGateway lightningInvoiceGateway = mock(LightningInvoiceGateway.class);
     private final KfeTransactionCancellationService transactionCancellationService =
             mock(KfeTransactionCancellationService.class);
+    private final KfeWebhookDeliveryService webhookDeliveryService = mock(KfeWebhookDeliveryService.class);
 
     private final KfePaymentRequestService service = new KfePaymentRequestService(
             paymentRequestRepository,
@@ -63,7 +65,8 @@ class KfePaymentRequestServiceTest {
             dashboardPublisher,
             lightningInvoiceGateway,
             transactionCancellationService,
-            new ObjectMapper());
+            new ObjectMapper(),
+            webhookDeliveryService);
 
     @Test
     void publicGetExpiresOverdueOpenRequestBeforeReturningIt() {
@@ -110,7 +113,8 @@ class KfePaymentRequestServiceTest {
                 null,
                 null,
                 null,
-                true));
+                true,
+                null));
 
         assertThat(response.walletId()).isEqualTo(walletId);
         assertThat(response.address()).isEqualTo("bcrt1qwatchonly");
@@ -151,7 +155,8 @@ class KfePaymentRequestServiceTest {
                 null,
                 null,
                 null,
-                true));
+                true,
+                null));
 
         assertThat(response.walletId()).isEqualTo(walletId);
         assertThat(response.address()).isEqualTo("bcrt1qissued");
@@ -180,6 +185,7 @@ class KfePaymentRequestServiceTest {
                 null,
                 10_000L,
                 "Internal payment",
+                null,
                 null,
                 null,
                 null,
@@ -264,7 +270,8 @@ class KfePaymentRequestServiceTest {
                 "memo",
                 null,
                 null,
-                true));
+                true,
+                null));
 
         assertThat(response.rail()).isEqualTo(KfeRail.ONCHAIN);
         assertThat(response.rails()).isNotNull();
@@ -302,7 +309,7 @@ class KfePaymentRequestServiceTest {
                 KfeRail.ONCHAIN,
                 null,
                 10_000L,
-                null, null, null, null, true));
+                null, null, null, null, true, null));
 
         assertThat(response.rail()).isEqualTo(KfeRail.ONCHAIN);
         assertThat(response.rails()).hasSize(1);
@@ -340,7 +347,7 @@ class KfePaymentRequestServiceTest {
 
         var created = service.create(7L, new KfeCreatePaymentRequest(
                 walletId, null, List.of(KfeRail.ONCHAIN, KfeRail.LIGHTNING),
-                5_000L, "Roundtrip", null, null, null, true));
+                5_000L, "Roundtrip", null, null, null, true, null));
 
         assertThat(created.rails()).hasSize(2);
         assertThat(created.rails().get(1).paymentHash()).isEqualTo("ccdd");

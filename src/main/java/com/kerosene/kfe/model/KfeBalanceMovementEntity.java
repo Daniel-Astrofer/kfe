@@ -40,6 +40,19 @@ public class KfeBalanceMovementEntity {
     @Column(name = "to_bucket", length = 32)
     private String toBucket;
 
+    // ITEM 12: Immutable audit fields — never modified after creation
+    @Column(name = "reason", length = 128)
+    private String reason;
+
+    @Column(name = "correlation_id")
+    private UUID correlationId;
+
+    @Column(name = "causation_id")
+    private UUID causationId;
+
+    @Column(name = "asset", nullable = false, length = 10)
+    private String asset = "BTC";
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -99,6 +112,15 @@ public class KfeBalanceMovementEntity {
     public void setToBucket(String toBucket) {
         this.toBucket = toBucket;
     }
+
+    public String getReason() { return reason; }
+    public void setReason(String v) { this.reason = v; }
+    public UUID getCorrelationId() { return correlationId; }
+    public void setCorrelationId(UUID v) { this.correlationId = v; }
+    public UUID getCausationId() { return causationId; }
+    public void setCausationId(UUID v) { this.causationId = v; }
+    public String getAsset() { return asset; }
+    public void setAsset(String v) { this.asset = v; }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;

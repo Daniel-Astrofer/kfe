@@ -59,25 +59,63 @@ public class KfeTransactionStateMachine {
         if (current == target) {
             return true;
         }
-        if (current == KfeTransactionStatus.SETTLED || current == KfeTransactionStatus.FAILED) {
+        if (current == KfeTransactionStatus.FAILED
+                || current == KfeTransactionStatus.CANCELLED
+                || current == KfeTransactionStatus.DROPPED
+                || current == KfeTransactionStatus.ABANDONED) {
             return false;
         }
         return switch (current) {
-            case INTENT -> target == KfeTransactionStatus.VALIDATING || target == KfeTransactionStatus.FAILED;
-            case VALIDATING -> target == KfeTransactionStatus.QUORUM_SYNC || target == KfeTransactionStatus.FAILED;
-            case QUORUM_SYNC -> target == KfeTransactionStatus.LOCKED
-                    || target == KfeTransactionStatus.FAILED
-                    || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
-            case LOCKED -> target == KfeTransactionStatus.EXECUTING
-                    || target == KfeTransactionStatus.SETTLED
-                    || target == KfeTransactionStatus.FAILED
-                    || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
-            case EXECUTING -> target == KfeTransactionStatus.SETTLED
-                    || target == KfeTransactionStatus.FAILED
-                    || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
-            case REQUIRES_RECONCILIATION -> target == KfeTransactionStatus.EXECUTING
-                    || target == KfeTransactionStatus.SETTLED
-                    || target == KfeTransactionStatus.FAILED;
+            case INTENT ->
+                target == KfeTransactionStatus.VALIDATING
+                || target == KfeTransactionStatus.FAILED;
+            case VALIDATING ->
+                target == KfeTransactionStatus.QUORUM_SYNC
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.CANCELLED;
+            case QUORUM_SYNC ->
+                target == KfeTransactionStatus.LOCKED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case LOCKED ->
+                target == KfeTransactionStatus.EXECUTING
+                || target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.CANCELLED
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case EXECUTING ->
+                target == KfeTransactionStatus.BROADCAST
+                || target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.CONFLICTED_RECONCILING
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case BROADCAST ->
+                target == KfeTransactionStatus.CONFIRMING
+                || target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.CONFLICTED_RECONCILING
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case CONFIRMING ->
+                target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.CONFLICTED_RECONCILING
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case SETTLED ->
+                target == KfeTransactionStatus.REORG_RECONCILIATION;
+            case CONFLICTED_RECONCILING ->
+                target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.BROADCAST
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case CONFLICTED_REFUNDED ->
+                target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case REORG_RECONCILIATION ->
+                target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED
+                || target == KfeTransactionStatus.REQUIRES_RECONCILIATION;
+            case REQUIRES_RECONCILIATION ->
+                target == KfeTransactionStatus.EXECUTING
+                || target == KfeTransactionStatus.SETTLED
+                || target == KfeTransactionStatus.FAILED;
             default -> false;
         };
     }

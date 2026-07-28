@@ -2,6 +2,7 @@ package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -11,6 +12,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import com.kerosene.common.financial.FinancialNotificationPort;
+import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.audit.KfeAuditEventLogger;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -49,12 +53,18 @@ public class KfeExecutionTransactionHelper {
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
     private final KfeFeeSettlementService feeSettlementService;
+    private final KfeNetworkFeeEstimateService networkFeeEstimateService;
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService;
     private final ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService;
     private final ObjectProvider<com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
             platformOnchainDestinationRouter;
     private final ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService;
+    private final ObjectProvider<FinancialNotificationPort> notificationPort;
+    private final ObjectProvider<com.kerosene.kfe.rail.BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+    private final KfeBalanceMovementRecorder movementRecorder;
+    private final KfeFinancialMetrics financialMetrics;
+    private final KfeAuditEventLogger auditEventLogger;
     private final int maxRetryAttempts;
 
     public KfeExecutionTransactionHelper(
@@ -71,12 +81,18 @@ public class KfeExecutionTransactionHelper {
             KfeHashService hashService,
             ObjectMapper objectMapper,
             KfeFeeSettlementService feeSettlementService,
+            KfeNetworkFeeEstimateService networkFeeEstimateService,
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             ObjectProvider<KfeLightningLiquidityService> lightningLiquidityService,
             ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
             ObjectProvider<com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter>
                     platformOnchainDestinationRouter,
             ObjectProvider<KfePlatformPeerInboundService> platformPeerInboundService,
+            ObjectProvider<FinancialNotificationPort> notificationPort,
+            ObjectProvider<com.kerosene.kfe.rail.BitcoinCoreRpcClient> bitcoinCoreRpcClient,
+            KfeBalanceMovementRecorder movementRecorder,
+            KfeFinancialMetrics financialMetrics,
+            KfeAuditEventLogger auditEventLogger,
             @Value("${kfe.execution.max-retry-attempts:8}") int maxRetryAttempts) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
@@ -91,11 +107,17 @@ public class KfeExecutionTransactionHelper {
         this.hashService = hashService;
         this.objectMapper = objectMapper;
         this.feeSettlementService = feeSettlementService;
+        this.networkFeeEstimateService = networkFeeEstimateService;
         this.onchainBalanceSyncService = onchainBalanceSyncService;
         this.lightningLiquidityService = lightningLiquidityService;
         this.custodialDepositObservationService = custodialDepositObservationService;
         this.platformOnchainDestinationRouter = platformOnchainDestinationRouter;
         this.platformPeerInboundService = platformPeerInboundService;
+        this.notificationPort = notificationPort;
+        this.bitcoinCoreRpcClient = bitcoinCoreRpcClient;
+        this.movementRecorder = movementRecorder;
+        this.financialMetrics = financialMetrics;
+        this.auditEventLogger = auditEventLogger;
         if (maxRetryAttempts <= 0) {
             throw new IllegalArgumentException("maxRetryAttempts must be positive.");
         }
@@ -198,6 +220,25 @@ public class KfeExecutionTransactionHelper {
             }
         }
 
+        // Validate persistent fee quote if provided
+        String quoteId = text(payload, "quoteId", null);
+        if (quoteId != null && !quoteId.isBlank()) {
+            try {
+                networkFeeEstimateService.validateQuote(
+                        quoteId,
+                        tx.getReceiverAmountSats(),
+                        tx.getExternalReference(),
+                        tx.getRail().name());
+            } catch (RuntimeException quoteError) {
+                markFinalFailure(
+                        outbox.getId(),
+                        tx.getId(),
+                        "INVALID_QUOTE",
+                        "Fee quote validation failed: " + quoteError.getMessage());
+                return PreparationResult.skip();
+            }
+        }
+
         return new PreparationResult(
                 true,
                 op,
@@ -276,11 +317,27 @@ public class KfeExecutionTransactionHelper {
         // API (including payment-requests) stopped answering.
         UUID outboundId = tx.getId();
         String destinationAddress = tx.getExternalReference();
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final UUID notifyWalletId = sourceWalletId;
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final String notifyTxid = normalizedTxid;
         // Never block the submit HTTP thread: peer expose + deposit observe can take seconds
         // (and used to hold the client on "Autorizando…" for 10–60s after broadcast).
         runAfterCommitAsync(() -> {
             transactionRepository.findById(outboundId).ifPresent(this::exposePlatformPeerInbound);
             kickPlatformDepositObservation(destinationAddress);
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentBroadcast(notifyUserId, notifyTxId, notifyWalletId,
+                            notifyRail, notifyAmount, notifyTxid);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] broadcast notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
         });
     }
 
@@ -372,13 +429,40 @@ public class KfeExecutionTransactionHelper {
     /**
      * Persist chain confirmation progress for UI rings (0/6…6/6).
      *
+     * <p>ITEM 10: Allow confirmation decreases while not FINALIZED. Only after SETTLED does a
+     * decrease trigger reconciliation. Previously only accepted increases, which hid reorgs.
+     *
      * <p>{@link Propagation#REQUIRES_NEW}: committed independently of settle/audit so a hung
      * settle cannot leave the app frozen at 0 confirmations while Core already has 1+.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void touchOutboundConfirmations(UUID transactionId, int confirmations) {
+    public void touchOutboundConfirmations(UUID transactionId, int confirmations,
+                                           String blockHash, Integer blockHeight) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
-        if (tx == null || confirmations <= tx.getConfirmations()) {
+        if (tx == null) {
+            return;
+        }
+        // After FINALIZED (SETTLED), any confirmation decrease is a reorg incident
+        if (tx.getStatus() == KfeTransactionStatus.SETTLED && confirmations < tx.getConfirmations()) {
+            log.error(
+                    "[KFE Execution] CONFIRMATIONS_DECREASED_AFTER_SETTLE txId={} was={} now={}",
+                    transactionId, tx.getConfirmations(), confirmations);
+            tx.setStatus(KfeTransactionStatus.REQUIRES_RECONCILIATION);
+            tx.setFailureCode("CONFIRMATIONS_DECREASED");
+            tx.setFailureMessage("Confirmation count decreased after settlement: "
+                    + tx.getConfirmations() + " -> " + confirmations);
+            audit(tx, "KFE_TRANSACTION_CONFIRMATIONS_DECREASED",
+                    KfeTransactionStatus.SETTLED, KfeTransactionStatus.REQUIRES_RECONCILIATION,
+                    Map.of("was", String.valueOf(tx.getConfirmations()),
+                            "now", String.valueOf(confirmations),
+                            "blockHash", blockHash != null ? blockHash : ""));
+            // Metrics + audit: reorg detected after settlement
+            String rail = tx.getRail() != null ? tx.getRail().name() : "UNKNOWN";
+            financialMetrics.recordReorg(rail);
+            auditEventLogger.logReorg(tx.getId(), tx.getSourceWalletId(),
+                    tx.getConfirmations(), confirmations, rail);
+        }
+        if (confirmations == tx.getConfirmations()) {
             return;
         }
         tx.setConfirmations(confirmations);
@@ -388,8 +472,23 @@ public class KfeExecutionTransactionHelper {
         dashboardPublisher.publishAfterCommit(tx.getUserId());
     }
 
+    /** Backward-compat: calls the new method with null blockHash/blockHeight. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void touchOutboundConfirmations(UUID transactionId, int confirmations) {
+        touchOutboundConfirmations(transactionId, confirmations, null, null);
+    }
+
     /**
      * Unlocks/settles reserved debit after the outbound tx is monitored with enough confirmations.
+     *
+     * <p>ITEM 14: Before settling, verify:
+     * <ol>
+     *   <li>txid matches prepared transaction</li>
+     *   <li>Transaction not conflicted (confirms >= 0)</li>
+     *   <li>Confirmation count from current source (passed by caller)</li>
+     *   <li>Wallet/source matches original registration</li>
+     * </ol>
+     * Don't settle just because txid has N confirmations.
      *
      * <p>Callers must already have persisted conf progress via {@link #touchOutboundConfirmations}
      * so the UI keeps advancing if this method fails mid-way (audit lock, fee race, etc.).
@@ -421,6 +520,14 @@ public class KfeExecutionTransactionHelper {
         if (tx.getSourceWalletId() == null) {
             return false;
         }
+        // ITEM 14: never settle negative confirmations
+        if (confirmations < 0) {
+            log.error(
+                    "[KFE Execution] refusing to settle conflicted txId={} confs={}",
+                    transactionId, confirmations);
+            markOutboundConflicted(transactionId, confirmations);
+            return false;
+        }
 
         KfeExecutionOutboxEntity outbox = outboxRepository.findByTransactionId(transactionId).stream()
                 .findFirst()
@@ -433,17 +540,27 @@ public class KfeExecutionTransactionHelper {
         String providerReference = firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid());
         String provider = firstNonBlank(tx.getProvider(), "BITCOIN_CORE_QUORUM");
 
+        // ITEM 14+11: Movement-first — record SETTLE_DEBIT movement before updating balance
+        if (!movementExists(tx.getId(), tx.getSourceWalletId(), "SETTLE_DEBIT")) {
+            movementRecorder.record(tx.getId(), tx.getSourceWalletId(), "SETTLE_DEBIT",
+                    tx.getTotalDebitSats(), "LOCKED", null);
+        }
         balanceService.settleReservedDebit(tx.getSourceWalletId(), ASSET_BTC, tx.getTotalDebitSats());
-        movement(tx.getId(), tx.getSourceWalletId(), "SETTLE_DEBIT", tx.getTotalDebitSats(), "LOCKED", null);
         transition(tx, KfeTransactionStatus.SETTLED, "KFE_TRANSACTION_SETTLED",
                 Map.of(
                         "providerReferenceHash", hashService.sha256(firstNonBlank(providerReference, "")),
                         "confirmations", String.valueOf(confirmations),
                         "provider", provider));
+        // Audit: settlement with amounts and fees
+        String settleRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        auditEventLogger.logSettlement("KFE_TRANSACTION_SETTLED",
+                tx.getId(), tx.getSourceWalletId(),
+                tx.getGrossAmountSats(), tx.getNetworkFeeSats(),
+                null, settleRail,
+                hashService.sha256(firstNonBlank(providerReference, "")));
         try {
             feeSettlementService.creditKeroseneFee(tx);
         } catch (RuntimeException feeFailure) {
-            // Fee credit is idempotent on retry; do not roll back unlock/SETTLED for fee audit glitches.
             log.warn(
                     "[KFE Execution] kerosene fee settle deferred txId={}: {}",
                     tx.getId(),
@@ -457,12 +574,32 @@ public class KfeExecutionTransactionHelper {
             markOutboxDispatched(locked, providerReference);
         }
         UUID sourceWalletId = tx.getSourceWalletId();
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final int notifyConfs = confirmations;
         dashboardPublisher.publishAfterCommit(tx.getUserId());
-        // Never block the confirmation monitor on chain RPC. Scheduled onchain-balance-sync
-        // will refresh observed_sats; kick async after commit so settle returns immediately.
         runAfterCommit(() -> Thread.startVirtualThread(
-                () -> resyncCustodialObserved(sourceWalletId)));
+                () -> {
+                    resyncCustodialObserved(sourceWalletId);
+                    FinancialNotificationPort port = notificationPort.getIfAvailable();
+                    if (port != null) {
+                        try {
+                            port.notifyPaymentConfirmed(notifyUserId, notifyTxId, sourceWalletId,
+                                    notifyRail, notifyAmount, notifyConfs);
+                        } catch (RuntimeException exception) {
+                            log.warn("[KFE Execution] confirmed notification failed txId={}: {}",
+                                    notifyTxId, exception.getMessage());
+                        }
+                    }
+                }));
         return true;
+    }
+
+    /** Check if a movement already exists for this transaction+wallet+type. */
+    private boolean movementExists(UUID transactionId, UUID walletId, String movementType) {
+        return movementRepository.existsByTransactionIdAndMovementType(transactionId, movementType);
     }
 
     @Transactional
@@ -502,6 +639,23 @@ public class KfeExecutionTransactionHelper {
         markOutboxDispatched(outbox, providerReference);
         resyncCustodialObserved(sourceWalletId);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final int notifyConfs = tx.getConfirmations();
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentConfirmed(notifyUserId, notifyTxId, sourceWalletId,
+                            notifyRail, notifyAmount, notifyConfs);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] confirmed notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
     }
 
     @Transactional
@@ -541,6 +695,23 @@ public class KfeExecutionTransactionHelper {
         updateIdempotency(tx);
         markOutboxDispatched(outbox, providerReference);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "LIGHTNING";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final int notifyConfs = tx.getConfirmations();
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentConfirmed(notifyUserId, notifyTxId, sourceWalletId,
+                            notifyRail, notifyAmount, notifyConfs);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] lightning confirmed notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
     }
 
     private void consumeLightningLiquidity(UUID transactionId) {
@@ -571,13 +742,37 @@ public class KfeExecutionTransactionHelper {
                     "Provider returned a negative network fee.");
             return false;
         }
+        // ITEM 15: Block broadcast when actual fee exceeds reserved.
+        // Don't silently reconcile; require new authorization.
         if (actualFeeSats > reservedFeeSats) {
+            // Compute deficit for notification
+            long deficit = actualFeeSats - reservedFeeSats;
+            log.error(
+                    "[KFE Execution] FEE EXCEEDS RESERVED txId={} reserved={} actual={} deficit={}",
+                    tx.getId(), reservedFeeSats, actualFeeSats, deficit);
             markRequiresReconciliation(
                     outbox,
                     tx,
                     "ACTUAL_FEE_EXCEEDS_RESERVED",
-                    "Actual network fee exceeds the reserved fee limit.");
+                    "Actual fee " + actualFeeSats + " exceeds reserved " + reservedFeeSats
+                            + " by " + deficit + " sats. New authorization required.");
             return false;
+        }
+        // ITEM 15: Validate fee ratio
+        if (tx.getReceiverAmountSats() > 0L) {
+            long maxFeeRatio = 30L; // 30% of amount as absolute max fee
+            long maxFeeSats = tx.getReceiverAmountSats() * maxFeeRatio / 100L;
+            if (actualFeeSats > maxFeeSats) {
+                log.error(
+                        "[KFE Execution] FEE EXCEEDS MAX RATIO txId={} fee={} amount={} ratio={}%",
+                        tx.getId(), actualFeeSats, tx.getReceiverAmountSats(), maxFeeRatio);
+                markRequiresReconciliation(
+                        outbox,
+                        tx,
+                        "FEE_EXCEEDS_MAX_RATIO",
+                        "Fee " + actualFeeSats + " exceeds " + maxFeeRatio + "% of amount.");
+                return false;
+            }
         }
 
         final long debitWithoutNetworkFee;
@@ -614,6 +809,54 @@ public class KfeExecutionTransactionHelper {
         return true;
     }
 
+    /**
+     * ITEM 15: Validate fee before broadcasting. Call before sendrawtransaction.
+     * Returns true if the fee is within acceptable limits.
+     *
+     * @param estimatedFeeSats  the fee from the funded PSBT
+     * @param reservedFeeSats   the fee the user authorized
+     * @param amountSats        the amount being sent (for ratio check)
+     * @param maxFeeRate        maximum acceptable fee rate in sat/vB (0 = skip check)
+     * @param maxAbsoluteFee    maximum absolute fee in sats (0 = skip check)
+     * @param maxFeeRatioPct    maximum fee as % of amount (0 = skip check)
+     */
+    public static FeeValidationResult validateFeeBeforeBroadcast(
+            long estimatedFeeSats,
+            long reservedFeeSats,
+            long amountSats,
+            long maxFeeRate,
+            long maxAbsoluteFee,
+            long maxFeeRatioPct) {
+        if (estimatedFeeSats < 0L) {
+            return FeeValidationResult.invalid("Estimated fee is negative: " + estimatedFeeSats);
+        }
+        if (estimatedFeeSats > reservedFeeSats) {
+            return FeeValidationResult.invalid(
+                    "Fee " + estimatedFeeSats + " exceeds reserved " + reservedFeeSats
+                            + " by " + (estimatedFeeSats - reservedFeeSats) + " sats.");
+        }
+        if (maxAbsoluteFee > 0L && estimatedFeeSats > maxAbsoluteFee) {
+            return FeeValidationResult.invalid(
+                    "Fee " + estimatedFeeSats + " exceeds absolute max " + maxAbsoluteFee + ".");
+        }
+        if (maxFeeRatioPct > 0L && amountSats > 0L) {
+            long ratioFee = amountSats * maxFeeRatioPct / 100L;
+            if (estimatedFeeSats > ratioFee) {
+                return FeeValidationResult.invalid(
+                        "Fee " + estimatedFeeSats + " exceeds " + maxFeeRatioPct
+                                + "% of amount " + amountSats + ".");
+            }
+        }
+        return FeeValidationResult.VALID;
+    }
+
+    public record FeeValidationResult(boolean valid, @Nullable String reason) {
+        public static final FeeValidationResult VALID = new FeeValidationResult(true, null);
+        public static FeeValidationResult invalid(String reason) {
+            return new FeeValidationResult(false, reason);
+        }
+    }
+
     @Transactional
     public void markUnknown(
             UUID outboxId,
@@ -645,6 +888,24 @@ public class KfeExecutionTransactionHelper {
         clearClaim(outbox);
         outboxRepository.save(outbox);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final UUID notifyWalletId = firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId());
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final String notifyReason = trim(message, 255);
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentReconciliationRequired(notifyUserId, notifyTxId, notifyWalletId,
+                            notifyRail, notifyAmount, notifyReason);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] reconciliation notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
     }
 
     @Transactional
@@ -715,6 +976,192 @@ public class KfeExecutionTransactionHelper {
         updateIdempotency(tx);
         markOutboxFailed(outbox, code, message, false);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        // Best-effort notification after commit — funds returned to available.
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final UUID notifyWalletId = firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId());
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final String notifyCode = trim(code, 64);
+        final String notifyMessage = trim(message, 255);
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentFailed(notifyUserId, notifyTxId, notifyWalletId,
+                            notifyRail, notifyAmount, notifyCode, notifyMessage);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] failure notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
+    }
+
+    /**
+     * Handle conflicted outbound with careful UTXO verification before releasing reserve.
+     * ITEM 4: Do NOT auto-release reserve on negative confirmations. Instead:
+     * <ol>
+     *   <li>Transition to CONFLICTED_RECONCILING state.</li>
+     *   <li>Check if original inputs are free (gettxout returns null = spent)</li>
+     *   <li>Search for replacement transaction in wallet</li>
+     *   <li>If inputs free: release reserve, mark CONFLICTED_REFUNDED</li>
+     *   <li>If inputs spent by known replacement: associate new txid, keep reserve</li>
+     *   <li>If cannot determine: keep value locked, mark REQUIRES_RECONCILIATION</li>
+     * </ol>
+     * Record compensating movements; never delete old movements.
+     */
+    @Transactional
+    public void markOutboundConflicted(UUID transactionId, int confirmations) {
+        KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
+        if (tx == null || tx.getStatus() == KfeTransactionStatus.FAILED) {
+            return;
+        }
+        // Already in a conflicted terminal state — don't reprocess
+        if (tx.getStatus() == KfeTransactionStatus.CONFLICTED_REFUNDED) {
+            return;
+        }
+        if (tx.getStatus() == KfeTransactionStatus.CONFLICTED
+                || tx.getStatus() == KfeTransactionStatus.CONFLICTED_RECONCILING) {
+            // Already in reconciling — just update confirmations and retry UTXO check
+            tx.setConfirmations(confirmations);
+            tryReconcileConflicted(tx);
+            return;
+        }
+
+        tx.setConfirmations(confirmations);
+        tx.setConflictedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+        String reason = confirmations == -1 ? "CONFLICTED_DOUBLE_SPEND" : "CONFLICTED_NEGATIVE_CONFS";
+        transition(tx, KfeTransactionStatus.CONFLICTED_RECONCILING, "KFE_TRANSACTION_CONFLICTED_RECONCILING",
+                Map.of("confirmations", String.valueOf(confirmations), "reason", reason));
+
+        // Metrics + audit: conflicted event
+        String rail = tx.getRail() != null ? tx.getRail().name() : "UNKNOWN";
+        financialMetrics.recordConflicted(rail);
+        String txidHash = tx.getBlockchainTxid() != null ? hashService.sha256(tx.getBlockchainTxid()) : null;
+        auditEventLogger.logConflict("KFE_TRANSACTION_CONFLICTED_RECONCILING",
+                tx.getId(), tx.getSourceWalletId(), txidHash, reason, rail);
+
+        // Now attempt to determine actual UTXO status
+        tryReconcileConflicted(tx);
+    }
+
+    private void tryReconcileConflicted(KfeTransactionEntity tx) {
+        if (tx.getBlockchainTxid() == null || tx.getBlockchainTxid().isBlank()) {
+            // No txid to query — can't verify, mark REQUIRES_RECONCILIATION
+            markConflictInconclusive(tx, "NO_TXID_TO_VERIFY");
+            return;
+        }
+
+        com.kerosene.kfe.rail.BitcoinCoreRpcClient core = bitcoinCoreRpcClient.getIfAvailable();
+        if (core == null) {
+            markConflictInconclusive(tx, "CORE_UNAVAILABLE");
+            return;
+        }
+
+        String txid = tx.getBlockchainTxid().trim();
+        boolean allInputsFree = true;
+        boolean anyInputSpent = false;
+
+        // Check each input outpoint status
+        try {
+            JsonNode raw = core.getRawTransaction(txid, true);
+            if (raw != null && !raw.isNull() && !raw.isMissingNode()) {
+                JsonNode vin = raw.path("vin");
+                if (vin.isArray()) {
+                    for (JsonNode input : vin) {
+                        String inTxid = input.path("txid").asText(null);
+                        JsonNode inVout = input.path("vout");
+                        if (inTxid != null && !inTxid.isBlank() && inVout.isIntegralNumber()) {
+                            JsonNode outpoint = core.queryOutpoint(inTxid, inVout.asInt());
+                            if (outpoint != null) {
+                                // UTXO still exists — input not spent yet
+                                allInputsFree = false;
+                            } else {
+                                anyInputSpent = true;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Transaction not found on chain at all
+                allInputsFree = true;
+            }
+        } catch (RuntimeException e) {
+            markConflictInconclusive(tx, "UTXO_QUERY_FAILED");
+            return;
+        }
+
+        if (allInputsFree) {
+            // All inputs are free — tx never confirmed, safe to release reserve
+            releaseConflictedReserve(tx);
+        } else if (anyInputSpent) {
+            // Some inputs spent — search for replacement tx
+            String replacement = core.findReplacementTxid(txid);
+            if (replacement == null) {
+                replacement = core.findReplacementInWallet(
+                        txid, tx.getReceiverAmountSats(), tx.getExternalReference());
+            }
+            if (replacement != null) {
+                // Found replacement — associate and keep monitoring
+                tx.setReplacementTxid(replacement);
+                tx.setConfirmations(0); // restart confs for replacement
+                transition(tx, KfeTransactionStatus.EXECUTING, "KFE_TRANSACTION_REPLACEMENT_FOUND",
+                        Map.of("replacementTxid", replacement, "originalTxid", txid));
+                return;
+            }
+            // Inputs spent but no known replacement — inconclusive
+            markConflictInconclusive(tx, "INPUTS_SPENT_NO_REPLACEMENT");
+        } else {
+            // Could not determine
+            markConflictInconclusive(tx, "INCONCLUSIVE");
+        }
+
+        recordStatement(tx, firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId()), null);
+        updateIdempotency(tx);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void releaseConflictedReserve(KfeTransactionEntity tx) {
+        if (tx.getSourceWalletId() != null && tx.getTotalDebitSats() > 0L) {
+            balanceService.releaseReserved(tx.getSourceWalletId(), ASSET_BTC, tx.getTotalDebitSats());
+            movement(tx.getId(), tx.getSourceWalletId(), "RELEASE_CONFLICT_RESERVE",
+                    tx.getTotalDebitSats(), "LOCKED", "AVAILABLE");
+        }
+        releaseLightningLiquidity(tx.getId());
+        transition(tx, KfeTransactionStatus.CONFLICTED_REFUNDED, "KFE_TRANSACTION_CONFLICTED_REFUNDED",
+                Map.of("blockchainTxid", tx.getBlockchainTxid() != null ? tx.getBlockchainTxid() : ""));
+        notifyConflictedResolved(tx, true);
+    }
+
+    private void markConflictInconclusive(KfeTransactionEntity tx, String reason) {
+        // Keep reserve locked, mark for manual reconciliation
+        transition(tx, KfeTransactionStatus.REQUIRES_RECONCILIATION,
+                "KFE_TRANSACTION_CONFLICT_INCONCLUSIVE",
+                Map.of("reason", reason, "blockchainTxid",
+                        tx.getBlockchainTxid() != null ? tx.getBlockchainTxid() : ""));
+        notifyConflictedResolved(tx, false);
+    }
+
+    private void notifyConflictedResolved(KfeTransactionEntity tx, boolean refunded) {
+        final Long userId = tx.getUserId();
+        final UUID txId = tx.getId();
+        final UUID walletId = firstNonNull(tx.getSourceWalletId(), tx.getDestinationWalletId());
+        final String rail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long amount = tx.getGrossAmountSats();
+        final String txid = tx.getBlockchainTxid();
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyOutboundConflicted(userId, txId, walletId, rail, amount,
+                            txid != null ? txid : "");
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] conflicted notification failed txId={}: {}",
+                            txId, exception.getMessage());
+                }
+            }
+        });
     }
 
     @Transactional
@@ -744,6 +1191,13 @@ public class KfeExecutionTransactionHelper {
         tx.setFailureMessage(trim(message, 255));
         transition(tx, KfeTransactionStatus.REQUIRES_RECONCILIATION, "KFE_TRANSACTION_REQUIRES_RECONCILIATION",
                 Map.of("reason", code));
+
+        // Metrics + audit: reconciliation required
+        String rail = tx.getRail() != null ? tx.getRail().name() : "UNKNOWN";
+        financialMetrics.recordReconciliationRequired(rail);
+        auditEventLogger.logReconciliation("KFE_TRANSACTION_REQUIRES_RECONCILIATION",
+                tx.getId(), tx.getSourceWalletId(), code, rail);
+
         recordStatement(tx, firstNonNull(tx.getDestinationWalletId(), tx.getSourceWalletId()), null);
         updateIdempotency(tx);
 
@@ -759,6 +1213,25 @@ public class KfeExecutionTransactionHelper {
         clearClaim(outbox);
         outboxRepository.save(outbox);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
+        // Best-effort notification — manual reconciliation needed.
+        final Long notifyUserId = tx.getUserId();
+        final UUID notifyTxId = tx.getId();
+        final UUID notifyWalletId = firstNonNull(tx.getDestinationWalletId(), tx.getSourceWalletId());
+        final String notifyRail = tx.getRail() != null ? tx.getRail().name() : "ONCHAIN";
+        final long notifyAmount = tx.getGrossAmountSats();
+        final String notifyReason = trim(code, 64);
+        runAfterCommitAsync(() -> {
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentReconciliationRequired(notifyUserId, notifyTxId, notifyWalletId,
+                            notifyRail, notifyAmount, notifyReason);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] reconciliation notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
     }
 
     private void markOutboxDispatched(KfeExecutionOutboxEntity outbox, String providerReference) {
@@ -855,6 +1328,21 @@ public class KfeExecutionTransactionHelper {
         tx.setStatus(target);
         transactionRepository.save(tx);
         audit(tx, eventType, previous, target, auditPayload);
+
+        // Metrics: record transaction lifecycle counter
+        String rail = tx.getRail() != null ? tx.getRail().name() : "UNKNOWN";
+        String direction = tx.getDirection() != null ? tx.getDirection().name() : "UNKNOWN";
+        financialMetrics.recordTransaction(rail, direction, target.name());
+
+        // Structured audit log for state transitions
+        auditEventLogger.logStateTransition(
+                eventType,
+                tx.getId(),
+                tx.getSourceWalletId(),
+                previous != null ? previous.name() : null,
+                target.name(),
+                tx.getGrossAmountSats(),
+                rail);
     }
 
     private void audit(

@@ -16,7 +16,6 @@ import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
 
 import java.util.List;
-import java.util.OptionalInt;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,8 +51,11 @@ class KfeOutboundConfirmationMonitorTest {
                 transactionHelper,
                 bitcoinCoreRpcClient,
                 coldObservationService,
+                null, // KfeFinancialMetrics (null-safe)
                 50,
-                1);
+                1,
+                5,
+                300);
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
         lenient().when(coldObservationService.getIfAvailable()).thenReturn(null);
     }
@@ -63,14 +65,17 @@ class KfeOutboundConfirmationMonitorTest {
         KfeTransactionEntity tx = outbound(KfeTransactionStatus.EXECUTING, 0, "aa".repeat(32));
         UUID txId = tx.getId();
         stubOutboundQueries(List.of(tx), List.of());
-        when(core.findTransactionConfirmations(tx.getBlockchainTxid())).thenReturn(OptionalInt.of(2));
+        when(core.fetchTransactionChainStatus(tx.getBlockchainTxid()))
+                .thenReturn(new BitcoinCoreRpcClient.TransactionChainStatus(
+                        BitcoinCoreRpcClient.TransactionChainStatus.ChainState.CONFIRMED,
+                        2, "blockhash", 100, null));
         when(transactionHelper.settleOutboundWhenConfirmed(txId, 2)).thenReturn(true);
 
         monitor.reconcileOutboundConfirmations();
 
         // Conf touch must run before settle so UI is not stuck at 0 if settle hangs.
         var inOrder = org.mockito.Mockito.inOrder(transactionHelper);
-        inOrder.verify(transactionHelper).touchOutboundConfirmations(txId, 2);
+        inOrder.verify(transactionHelper).touchOutboundConfirmations(eq(txId), eq(2), any(), any());
         inOrder.verify(transactionHelper).settleOutboundWhenConfirmed(txId, 2);
     }
 
@@ -83,15 +88,21 @@ class KfeOutboundConfirmationMonitorTest {
                 transactionHelper,
                 bitcoinCoreRpcClient,
                 coldObservationService,
+                null, // KfeFinancialMetrics (null-safe)
                 50,
-                3);
+                3,
+                5,
+                300);
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
         stubOutboundQueries(List.of(tx), List.of());
-        when(core.findTransactionConfirmations(tx.getBlockchainTxid())).thenReturn(OptionalInt.of(1));
+        when(core.fetchTransactionChainStatus(tx.getBlockchainTxid()))
+                .thenReturn(new BitcoinCoreRpcClient.TransactionChainStatus(
+                        BitcoinCoreRpcClient.TransactionChainStatus.ChainState.CONFIRMED,
+                        1, "blockhash", 100, null));
 
         monitor.reconcileOutboundConfirmations();
 
-        verify(transactionHelper).touchOutboundConfirmations(txId, 1);
+        verify(transactionHelper).touchOutboundConfirmations(eq(txId), eq(1), any(), any());
         verify(transactionHelper, never()).settleOutboundWhenConfirmed(any(), anyInt());
     }
 
@@ -100,11 +111,14 @@ class KfeOutboundConfirmationMonitorTest {
         KfeTransactionEntity tx = outbound(KfeTransactionStatus.SETTLED, 1, "cc".repeat(32));
         UUID txId = tx.getId();
         stubOutboundQueries(List.of(), List.of(tx));
-        when(core.findTransactionConfirmations(tx.getBlockchainTxid())).thenReturn(OptionalInt.of(4));
+        when(core.fetchTransactionChainStatus(tx.getBlockchainTxid()))
+                .thenReturn(new BitcoinCoreRpcClient.TransactionChainStatus(
+                        BitcoinCoreRpcClient.TransactionChainStatus.ChainState.CONFIRMED,
+                        4, "blockhash", 100, null));
 
         monitor.reconcileOutboundConfirmations();
 
-        verify(transactionHelper).touchOutboundConfirmations(txId, 4);
+        verify(transactionHelper).touchOutboundConfirmations(eq(txId), eq(4), any(), any());
         verify(transactionHelper, never()).settleOutboundWhenConfirmed(any(), anyInt());
     }
 
@@ -113,13 +127,16 @@ class KfeOutboundConfirmationMonitorTest {
         KfeTransactionEntity tx = outbound(KfeTransactionStatus.EXECUTING, 0, "dd".repeat(32));
         UUID txId = tx.getId();
         stubOutboundQueries(List.of(tx), List.of());
-        when(core.findTransactionConfirmations(tx.getBlockchainTxid())).thenReturn(OptionalInt.of(3));
+        when(core.fetchTransactionChainStatus(tx.getBlockchainTxid()))
+                .thenReturn(new BitcoinCoreRpcClient.TransactionChainStatus(
+                        BitcoinCoreRpcClient.TransactionChainStatus.ChainState.CONFIRMED,
+                        3, "blockhash", 100, null));
         when(transactionHelper.settleOutboundWhenConfirmed(txId, 3))
                 .thenThrow(new IllegalStateException("audit lock"));
 
         monitor.reconcileOutboundConfirmations();
 
-        verify(transactionHelper).touchOutboundConfirmations(txId, 3);
+        verify(transactionHelper).touchOutboundConfirmations(eq(txId), eq(3), any(), any());
         verify(transactionHelper).settleOutboundWhenConfirmed(txId, 3);
     }
 

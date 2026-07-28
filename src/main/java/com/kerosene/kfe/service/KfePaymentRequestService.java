@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
 import com.kerosene.kfe.dto.KfePaymentRequestResponse;
+import com.kerosene.kfe.dto.KfePublicPaymentRequestResponse;
 import com.kerosene.kfe.dto.RailDetail;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -27,7 +28,10 @@ import com.kerosene.kfe.repository.KfePaymentRequestRepository;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
+import com.kerosene.kfe.webhook.KfeWebhookDeliveryService;
+import com.kerosene.kfe.webhook.KfeWebhookEvent;
 
+import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -65,6 +69,7 @@ public class KfePaymentRequestService {
     private final LightningInvoiceGateway lightningInvoiceGateway;
     private final KfeTransactionCancellationService transactionCancellationService;
     private final ObjectMapper objectMapper;
+    private final KfeWebhookDeliveryService webhookDeliveryService;
 
     public KfePaymentRequestService(
             KfePaymentRequestRepository paymentRequestRepository,
@@ -79,7 +84,9 @@ public class KfePaymentRequestService {
             @Qualifier("kfeExternalLightningInvoiceGateway")
             LightningInvoiceGateway lightningInvoiceGateway,
             KfeTransactionCancellationService transactionCancellationService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            KfeWebhookDeliveryService webhookDeliveryService) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -92,6 +99,7 @@ public class KfePaymentRequestService {
         this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.transactionCancellationService = transactionCancellationService;
         this.objectMapper = objectMapper;
+        this.webhookDeliveryService = webhookDeliveryService;
     }
 
     @Transactional
@@ -151,6 +159,23 @@ public class KfePaymentRequestService {
             pr.setExpiresAt(request.expiresAt());
         }
         pr.setRailsData(serializeRailsData(rails, onchainAddress, lightningInvoice));
+
+        // Behavior contract: fixed-amount links use defaults; open-amount links accept partials.
+        KfePaymentBehaviorContract contract;
+        if (request.amountSats() != null && request.amountSats() > 0) {
+            contract = KfePaymentBehaviorContract.forFixedAmount();
+            pr.setPartialPaymentReceived(null);
+        } else {
+            contract = KfePaymentBehaviorContract.forOpenAmount();
+            pr.setPartialPaymentReceived(0L);
+        }
+        pr.setBehaviorContract(serializeBehaviorContract(contract));
+
+        // Webhook URL (optional)
+        if (request.webhookUrl() != null && !request.webhookUrl().isBlank()) {
+            pr.setWebhookUrl(request.webhookUrl().trim());
+        }
+
         pr = paymentRequestRepository.save(pr);
 
         auditLogService.record(
@@ -183,10 +208,10 @@ public class KfePaymentRequestService {
     }
 
     @Transactional
-    public KfePaymentRequestResponse publicGet(String publicId) {
+    public KfePublicPaymentRequestResponse publicGet(String publicId) {
         KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByPublicId(publicId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
-        return toResponse(expireIfDue(paymentRequest));
+        return toPublicResponse(expireIfDue(paymentRequest));
     }
 
     @Transactional
@@ -459,7 +484,29 @@ public class KfePaymentRequestService {
                 settlementTx == null ? null : settlementTx.getReceiverAmountSats(),
                 com.kerosene.kfe.time.Utc.toInstant(entity.getExpiresAt()),
                 com.kerosene.kfe.time.Utc.toInstant(entity.getCreatedAt()),
-                com.kerosene.kfe.time.Utc.toInstant(entity.getUpdatedAt()));
+                com.kerosene.kfe.time.Utc.toInstant(entity.getUpdatedAt()),
+                entity.getBehaviorContract(),
+                entity.getPartialPaymentReceived(),
+                entity.getWebhookUrl());
+    }
+
+    private KfePublicPaymentRequestResponse toPublicResponse(KfePaymentRequestEntity entity) {
+        List<RailDetail> railDetails = deserializeRailsData(entity);
+        List<String> rails = railDetails.stream()
+                .map(r -> r.rail().name())
+                .distinct()
+                .toList();
+        KfePaymentRequestStatus status = entity.getStatus();
+        return new KfePublicPaymentRequestResponse(
+                entity.getPublicId(),
+                entity.getDescription(),
+                entity.getAmountSats() != null ? BigDecimal.valueOf(entity.getAmountSats()) : null,
+                "SATS",
+                entity.getMemo(),
+                status,
+                com.kerosene.kfe.time.Utc.toInstant(entity.getExpiresAt()),
+                rails,
+                com.kerosene.kfe.time.Utc.toInstant(entity.getCreatedAt()));
     }
 
     private Optional<KfeTransactionEntity> findSettlementTransaction(KfePaymentRequestEntity entity) {
@@ -564,5 +611,32 @@ public class KfePaymentRequestService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String serializeBehaviorContract(KfePaymentBehaviorContract contract) {
+        if (contract == null) return null;
+        try {
+            return objectMapper.writeValueAsString(contract);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize behavior contract", e);
+            return null;
+        }
+    }
+
+    private KfePaymentBehaviorContract deserializeBehaviorContract(KfePaymentRequestEntity entity) {
+        String json = entity.getBehaviorContract();
+        if (json == null || json.isBlank()) {
+            return entity.getAmountSats() != null && entity.getAmountSats() > 0
+                    ? KfePaymentBehaviorContract.forFixedAmount()
+                    : KfePaymentBehaviorContract.forOpenAmount();
+        }
+        try {
+            return objectMapper.readValue(json, KfePaymentBehaviorContract.class);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to deserialize behavior contract for PR {}", entity.getId(), e);
+            return entity.getAmountSats() != null && entity.getAmountSats() > 0
+                    ? KfePaymentBehaviorContract.forFixedAmount()
+                    : KfePaymentBehaviorContract.forOpenAmount();
+        }
     }
 }

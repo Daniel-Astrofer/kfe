@@ -45,9 +45,11 @@ public class KfeStandaloneSecurityConfiguration {
                                 "/actuator/health",
                                 "/actuator/health/**",
                                 "/api/public/kfe/**",
-                                "/internal/kfe/**",
                                 "/error")
                         .permitAll()
+                        // Internal endpoints verify X-KFE-Internal-Secret in-controller (constant-time).
+                        .requestMatchers("/internal/kfe/vault-mesh/**").permitAll()
+                        .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")
                         .requestMatchers("/kfe/**").authenticated()
                         .anyRequest().denyAll())
@@ -59,8 +61,11 @@ public class KfeStandaloneSecurityConfiguration {
     public KfeJwtVerifier kfeJwtVerifier(
             @Value("${api.secret.token.secret}") String secret,
             ObjectProvider<StringRedisTemplate> redisTemplate,
-            @Value("${kfe.security.jwt.revocation-check-enabled:true}") boolean revocationCheckEnabled) {
-        return new KfeJwtVerifier(secret, redisTemplate, revocationCheckEnabled);
+            @Value("${kfe.security.jwt.revocation-check-enabled:true}") boolean revocationCheckEnabled,
+            @Value("${kfe.auth.revocation.required:false}") boolean revocationRequired,
+            @Value("${kfe.auth.jwt.issuer:}") String issuer,
+            @Value("${kfe.auth.jwt.audience:}") String audience) {
+        return new KfeJwtVerifier(secret, redisTemplate, revocationCheckEnabled, revocationRequired, issuer, audience);
     }
 
     @Bean

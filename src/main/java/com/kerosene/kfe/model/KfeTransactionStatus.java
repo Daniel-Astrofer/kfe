@@ -6,9 +6,18 @@ public enum KfeTransactionStatus {
     QUORUM_SYNC,
     LOCKED,
     EXECUTING,
+    BROADCAST,
+    CONFIRMING,
     SETTLED,
     FAILED,
-    REQUIRES_RECONCILIATION;
+    CANCELLED,
+    REQUIRES_RECONCILIATION,
+    CONFLICTED,
+    CONFLICTED_RECONCILING,
+    CONFLICTED_REFUNDED,
+    REORG_RECONCILIATION,
+    DROPPED,
+    ABANDONED;
 
     /**
      * Coarse status for UI badges. Order/date stay fixed; only this label moves
@@ -17,7 +26,10 @@ public enum KfeTransactionStatus {
     public String displayStatus() {
         return switch (this) {
             case SETTLED -> "CONFIRMED";
-            case FAILED, REQUIRES_RECONCILIATION -> "FAILED";
+            case FAILED, CANCELLED, REQUIRES_RECONCILIATION, CONFLICTED,
+                 CONFLICTED_RECONCILING, CONFLICTED_REFUNDED,
+                 REORG_RECONCILIATION,
+                 DROPPED, ABANDONED -> "FAILED";
             default -> "PENDING";
         };
     }

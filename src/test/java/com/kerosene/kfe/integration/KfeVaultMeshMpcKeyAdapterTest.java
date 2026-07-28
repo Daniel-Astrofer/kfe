@@ -22,28 +22,29 @@ class KfeVaultMeshMpcKeyAdapterTest {
     void keygenWalletReturnsXonlyPubkeyWhenPresent() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
         when(port.getUsersDepositAddress()).thenReturn(new VaultMeshDepositInfo(
-                "tb1paddress",
+                "tb1pqqqqp399et0xe0j3xehqlenme4egz9y7dznlk9rn2nperql6n8nsgt27ds", // valid bech32m
                 "tr(...)#descriptor",
                 "taproot",
-                "0123456789abcdef",
-                "fedcba9876543210",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                 "testnet"));
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(port);
 
         FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
 
-        assertThat(adapter.keygenWallet(WALLET_ID, 42L)).isEqualTo("fedcba9876543210");
+        assertThat(adapter.keygenWallet(WALLET_ID, 42L))
+                .isEqualTo("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
     }
 
     @Test
-    void keygenWalletFallsBackToOutputPubkeyThenAddress() {
+    void keygenWalletFallsBackToOutputPubkeyWithValidFormat() {
         VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
         when(port.getUsersDepositAddress()).thenReturn(new VaultMeshDepositInfo(
                 "tb1pfallback",
                 null,
                 "taproot",
-                "outputpub",
+                "aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011",
                 null,
                 "testnet"));
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
@@ -51,7 +52,29 @@ class KfeVaultMeshMpcKeyAdapterTest {
 
         FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
 
-        assertThat(adapter.keygenWallet(WALLET_ID, 42L)).isEqualTo("outputpub");
+        assertThat(adapter.keygenWallet(WALLET_ID, 42L))
+                .isEqualTo("aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011");
+    }
+
+    @Test
+    void keygenWalletFailsWhenPubkeysAreNotValidHex() {
+        VaultMeshSettlementPort port = mock(VaultMeshSettlementPort.class);
+        // xonly_pubkey is null, output_pubkey is not 64 hex chars — should fail
+        when(port.getUsersDepositAddress()).thenReturn(new VaultMeshDepositInfo(
+                "tb1pfallback",
+                null,
+                "taproot",
+                "short",
+                null,
+                "testnet"));
+        ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(port);
+
+        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+
+        assertThatThrownBy(() -> adapter.keygenWallet(WALLET_ID, 42L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("returned an empty public key");
     }
 
     @Test

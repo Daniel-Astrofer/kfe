@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
+import com.kerosene.common.financial.FinancialNotificationPort;
+import com.kerosene.kfe.audit.KfeAuditEventLogger;
+import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
@@ -43,6 +46,7 @@ class KfeExecutionTransactionHelperTest {
     private final KfeDashboardPublisher dashboardPublisher = mock(KfeDashboardPublisher.class);
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeFeeSettlementService feeSettlementService = mock(KfeFeeSettlementService.class);
+    private final KfeNetworkFeeEstimateService networkFeeEstimateService = mock(KfeNetworkFeeEstimateService.class);
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncProvider =
             mock(ObjectProvider.class);
@@ -58,6 +62,13 @@ class KfeExecutionTransactionHelperTest {
     @SuppressWarnings("unchecked")
     private final ObjectProvider<KfePlatformPeerInboundService> peerInboundProvider =
             mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<FinancialNotificationPort> notificationPortProvider =
+            mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<com.kerosene.kfe.rail.BitcoinCoreRpcClient> bitcoinCoreRpcProvider =
+            mock(ObjectProvider.class);
+    private final KfeBalanceMovementRecorder movementRecorder = mock(KfeBalanceMovementRecorder.class);
 
     private final KfeExecutionTransactionHelper helper = helper(8);
 
@@ -282,11 +293,17 @@ class KfeExecutionTransactionHelperTest {
                 hashService,
                 new ObjectMapper(),
                 feeSettlementService,
+                networkFeeEstimateService,
                 onchainBalanceSyncProvider,
                 lightningLiquidityProvider,
                 custodialDepositProvider,
                 platformRouterProvider,
                 peerInboundProvider,
+                notificationPortProvider,
+                bitcoinCoreRpcProvider,
+                movementRecorder,
+                mock(KfeFinancialMetrics.class),
+                mock(KfeAuditEventLogger.class),
                 maxRetryAttempts);
     }
 

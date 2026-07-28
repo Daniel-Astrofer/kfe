@@ -3,13 +3,22 @@ package com.kerosene.kfe.service;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import com.kerosene.kfe.dto.KfeFeeQuoteResponse;
 import com.kerosene.kfe.dto.KfeFeeTierResponse;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class KfeNetworkFeeEstimateService {
@@ -18,8 +27,10 @@ public class KfeNetworkFeeEstimateService {
     static final String FALLBACK_SOURCE = "CONFIGURED_FALLBACK";
     static final String NOT_APPLICABLE_SOURCE = "NOT_APPLICABLE";
     static final String CLIENT_LIMIT_SOURCE = "CLIENT_LIMIT";
+    static final int FEE_ESTIMATE_VERSION = 1;
 
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider;
+    private final KfePricingService pricingService;
     private final int estimatedVbytes;
     private final double safetyMargin;
     private final int fastTargetBlocks;
@@ -31,9 +42,12 @@ public class KfeNetworkFeeEstimateService {
     private final long expectedBlockSeconds;
     private final long quoteTtlSeconds;
     private final String bitcoinNetwork;
+    private final byte[] sharedSecretBytes;
+    private final Map<String, KfeFeeQuoteResponse> quoteStore = new ConcurrentHashMap<>();
 
     public KfeNetworkFeeEstimateService(
             ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider,
+            KfePricingService pricingService,
             @Value("${kfe.fee-estimate.estimated-vbytes:250}") int estimatedVbytes,
             @Value("${kfe.fee-estimate.safety-margin:1.5}") double safetyMargin,
             @Value("${kfe.fee-estimate.fast-target-blocks:2}") int fastTargetBlocks,
@@ -44,8 +58,10 @@ public class KfeNetworkFeeEstimateService {
             @Value("${kfe.fee-estimate.fallback-slow-sat-vbyte:6}") long fallbackSlowRate,
             @Value("${kfe.fee-estimate.expected-block-seconds:600}") long expectedBlockSeconds,
             @Value("${kfe.fee-estimate.quote-ttl-seconds:120}") long quoteTtlSeconds,
-            @Value("${bitcoin.network:mainnet}") String bitcoinNetwork) {
+            @Value("${bitcoin.network:mainnet}") String bitcoinNetwork,
+            @Value("${kfe.internal.shared-secret:}") String sharedSecret) {
         this.bitcoinCoreProvider = bitcoinCoreProvider;
+        this.pricingService = pricingService;
         this.estimatedVbytes = positive(estimatedVbytes, "estimatedVbytes");
         if (safetyMargin < 1.0d || !Double.isFinite(safetyMargin)) {
             throw new IllegalArgumentException("safetyMargin must be >= 1.0");
@@ -60,6 +76,122 @@ public class KfeNetworkFeeEstimateService {
         this.expectedBlockSeconds = positive(expectedBlockSeconds, "expectedBlockSeconds");
         this.quoteTtlSeconds = positive(quoteTtlSeconds, "quoteTtlSeconds");
         this.bitcoinNetwork = bitcoinNetwork != null ? bitcoinNetwork.trim() : "mainnet";
+        this.sharedSecretBytes = resolveSharedSecret(sharedSecret);
+    }
+
+    private static byte[] resolveSharedSecret(String sharedSecret) {
+        if (sharedSecret == null || sharedSecret.isBlank()) {
+            throw new IllegalArgumentException("kfe.internal.shared-secret must be configured for fee quote signing.");
+        }
+        return sharedSecret.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Generates a persistent, signed quote binding the estimated fees to a specific
+     * transaction intent. The quote expires after the configured quote TTL.
+     */
+    public KfeFeeQuoteResponse quote(
+            KfeRail rail,
+            KfeDirection direction,
+            long amountSats,
+            long requestedNetworkFeeSats,
+            String userId,
+            String walletId,
+            String destinationHash) {
+        Estimate estimate = estimate(rail, direction, requestedNetworkFeeSats);
+        KfePricingService.Quote pricingQuote = pricingService.quote(rail, direction, amountSats, estimate.selectedNetworkFeeSats());
+
+        KfeFeeQuoteResponse quote = new KfeFeeQuoteResponse();
+        quote.setQuoteId(UUID.randomUUID().toString());
+        quote.setUserId(userId);
+        quote.setWalletId(walletId);
+        quote.setDestinationHash(destinationHash);
+        quote.setRail(rail.name());
+        quote.setAmount(BigDecimal.valueOf(amountSats));
+        quote.setNetworkFeeSat(estimate.selectedNetworkFeeSats());
+        quote.setServiceFeeSat(pricingQuote.keroseneFeeSats());
+        quote.setTotalDebitSat(pricingQuote.totalDebitSats());
+        quote.setPricingPolicyVersion(pricingQuote.pricingPolicyVersion());
+        quote.setFeeEstimateVersion(FEE_ESTIMATE_VERSION);
+        quote.setExpiresAt(Instant.now().plusSeconds(quoteTtlSeconds));
+        quote.setSignature(signQuote(quote));
+
+        quoteStore.put(quote.getQuoteId(), quote);
+        return quote;
+    }
+
+    /**
+     * Validates a previously generated quote. Returns the quote if it is valid,
+     * throws an exception otherwise.
+     */
+    public KfeFeeQuoteResponse validateQuote(
+            String quoteId,
+            long amountSats,
+            String destinationHash,
+            String rail) {
+        if (quoteId == null || quoteId.isBlank()) {
+            throw new IllegalArgumentException("quoteId is required for quote validation.");
+        }
+
+        KfeFeeQuoteResponse quote = quoteStore.get(quoteId);
+        if (quote == null) {
+            throw new IllegalArgumentException("Quote not found: " + quoteId);
+        }
+
+        if (quote.getExpiresAt() != null && Instant.now().isAfter(quote.getExpiresAt())) {
+            quoteStore.remove(quoteId);
+            throw new IllegalArgumentException("Quote expired: " + quoteId);
+        }
+
+        if (quote.getAmount() == null || quote.getAmount().longValue() != amountSats) {
+            throw new IllegalArgumentException("Quote amount mismatch for " + quoteId);
+        }
+
+        if (!safeEquals(quote.getDestinationHash(), destinationHash)) {
+            throw new IllegalArgumentException("Quote destination mismatch for " + quoteId);
+        }
+
+        if (!safeEquals(quote.getRail(), rail)) {
+            throw new IllegalArgumentException("Quote rail mismatch for " + quoteId);
+        }
+
+        String expectedSignature = signQuote(quote);
+        if (!safeEquals(expectedSignature, quote.getSignature())) {
+            throw new IllegalArgumentException("Quote signature invalid for " + quoteId);
+        }
+
+        return quote;
+    }
+
+    private String signQuote(KfeFeeQuoteResponse quote) {
+        String payload = String.join("|",
+                quote.getQuoteId() != null ? quote.getQuoteId() : "",
+                quote.getUserId() != null ? quote.getUserId() : "",
+                quote.getWalletId() != null ? quote.getWalletId() : "",
+                quote.getDestinationHash() != null ? quote.getDestinationHash() : "",
+                quote.getRail() != null ? quote.getRail() : "",
+                quote.getAmount() != null ? quote.getAmount().toPlainString() : "",
+                quote.getNetworkFeeSat() != null ? String.valueOf(quote.getNetworkFeeSat()) : "",
+                quote.getServiceFeeSat() != null ? String.valueOf(quote.getServiceFeeSat()) : "",
+                quote.getTotalDebitSat() != null ? String.valueOf(quote.getTotalDebitSat()) : "",
+                String.valueOf(quote.getPricingPolicyVersion()),
+                String.valueOf(quote.getFeeEstimateVersion()),
+                quote.getExpiresAt() != null ? quote.getExpiresAt().toString() : "");
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(sharedSecretBytes, "HmacSHA256"));
+            byte[] hmac = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(hmac);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to sign fee quote.", e);
+        }
+    }
+
+    private static boolean safeEquals(String a, String b) {
+        if (a == null) {
+            return b == null;
+        }
+        return a.equals(b);
     }
 
     public Estimate estimate(
@@ -138,8 +270,6 @@ public class KfeNetworkFeeEstimateService {
 
     private KfeFeeTierResponse tier(String priority, long rate, int targetBlocks, String source) {
         long networkFeeSats = feeSatsForRate(rate);
-        // Testnet/regtest block times are irregular — use a more conservative block interval
-        // so the UI does not promise mainnet-like ~10 min blocks.
         long blockSeconds = isNonMainnet(bitcoinNetwork)
                 ? Math.max(expectedBlockSeconds, 1_200L)
                 : expectedBlockSeconds;
@@ -159,7 +289,6 @@ public class KfeNetworkFeeEstimateService {
         if (safetyMargin <= 1.0d) {
             return base;
         }
-        // ceil(base * margin) without floating overflow for large values
         double scaled = base * safetyMargin;
         if (scaled >= Long.MAX_VALUE) {
             return Long.MAX_VALUE;

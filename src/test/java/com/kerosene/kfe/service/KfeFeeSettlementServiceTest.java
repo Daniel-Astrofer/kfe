@@ -8,6 +8,7 @@ import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
 import java.util.UUID;
 
+import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -29,7 +30,9 @@ class KfeFeeSettlementServiceTest {
             movementRecorder,
             movementRepository,
             auditLogService,
-            metricsProvider);
+            metricsProvider,
+            "SUBLEDGER",
+            true);
 
     @Test
     void skipsTransactionsWithoutKeroseneFee() {

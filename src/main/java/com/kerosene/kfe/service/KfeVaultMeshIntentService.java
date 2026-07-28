@@ -47,7 +47,11 @@ public class KfeVaultMeshIntentService {
                 destination == null ? "" : destination,
                 amountSats,
                 policyHash == null ? "" : policyHash,
-                Instant.now().toEpochMilli());
+                Instant.now(),
+                null,
+                null,
+                null,
+                null);
         VaultMeshReceipt receipt = settlementPort.submitIntent(intent);
         log.info(
                 "vault_mesh_intent intentId={} status={} reason={}",
