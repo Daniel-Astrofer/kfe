@@ -72,6 +72,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final int constitutionMemberCount;
     private final int constitutionThreshold;
     private final int minimumAgreement;
+    private KfeKeroseneNodeDirectory nodeDirectory;
 
     @Autowired
     public KfeVaultMeshSettlementClient(
@@ -177,6 +178,11 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     boolean tlsEnabled() {
         return tlsEnabled;
+    }
+
+    @Autowired(required = false)
+    void setNodeDirectory(KfeKeroseneNodeDirectory nodeDirectory) {
+        this.nodeDirectory = nodeDirectory;
     }
 
     @Override
@@ -526,6 +532,9 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     }
 
     private HttpHeaders authHeaders(boolean json) {
+        if (nodeDirectory != null) {
+            nodeDirectory.requireAuthorized(vaultUrls);
+        }
         HttpHeaders headers = new HttpHeaders();
         if (json) {
             headers.setContentType(MediaType.APPLICATION_JSON);
