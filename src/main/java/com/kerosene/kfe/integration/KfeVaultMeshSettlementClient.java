@@ -28,6 +28,7 @@ import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
 import javax.net.ssl.SSLContext;
 import java.nio.charset.StandardCharsets;
+import java.net.Proxy;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -94,7 +95,10 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             @Value("${kfe.vaultmesh.constitution.hash:}") String constitutionHash,
             @Value("${kfe.vaultmesh.constitution.member-count:3}") int constitutionMemberCount,
             @Value("${kfe.vaultmesh.constitution.threshold:2}") int constitutionThreshold,
-            @Value("${kfe.vaultmesh.urls:}") String vaultUrlsCsv) {
+            @Value("${kfe.vaultmesh.urls:}") String vaultUrlsCsv,
+            @Value("${kfe.vaultmesh.transport:direct}") String transport,
+            @Value("${kfe.vaultmesh.proxy.socks-host:}") String socksHost,
+            @Value("${kfe.vaultmesh.proxy.socks-port:9050}") int socksPort) {
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.vaultUrls = parseVaultUrls(vaultUrlsCsv, this.baseUrl);
@@ -105,6 +109,8 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         this.constitutionMemberCount = Math.max(1, constitutionMemberCount);
         this.constitutionThreshold = Math.max(1, Math.min(constitutionThreshold, constitutionMemberCount));
         this.minimumAgreement = this.constitutionThreshold;
+        Proxy proxy = KfeVaultMeshTlsSupport.validateTransport(
+                transport, socksHost, socksPort, this.tlsEnabled, this.vaultUrls);
 
         RestTemplateBuilder builder = restTemplateBuilder
                 .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
@@ -124,8 +130,11 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                     sslContext,
                     tlsHostnameVerification,
                     (int) Math.min(connectTimeoutMs, Integer.MAX_VALUE),
-                    (int) Math.min(readTimeoutMs, Integer.MAX_VALUE));
+                    (int) Math.min(readTimeoutMs, Integer.MAX_VALUE),
+                    proxy);
             this.restTemplate = builder.requestFactory(() -> factory).build();
+        } else if (proxy != null) {
+            throw new IllegalStateException("Tor vault-mesh transport requires mTLS");
         } else {
             this.restTemplate = builder.build();
         }
@@ -160,7 +169,10 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
                 "",
                 3,
                 2,
-                baseUrl);
+                baseUrl,
+                "direct",
+                "",
+                9050);
     }
 
     boolean tlsEnabled() {

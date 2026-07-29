@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -216,7 +217,10 @@ class KfeVaultMeshSettlementClientTest {
                 "",
                 3,
                 2,
-                "https://vault.test:7701");
+                "https://vault.test:7701",
+                "direct",
+                "",
+                9050);
         assertThat(client.tlsEnabled()).isTrue();
 
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
@@ -287,9 +291,36 @@ class KfeVaultMeshSettlementClientTest {
                         "",
                         3,
                         2,
-                        "https://vault.test:7701"))
+                        "https://vault.test:7701",
+                        "direct",
+                        "",
+                        9050))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("kfe.vaultmesh.tls.enabled=true");
+    }
+
+    @Test
+    void torTransportAcceptsOnlyMtlsOnionUrlsAndUsesUnresolvedSocksAddress() {
+        java.net.Proxy proxy = KfeVaultMeshTlsSupport.validateTransport(
+                "tor", "tor-proxy", 9050, true, List.of("https://vaultabcdefghijkl.onion:7801"));
+
+        assertThat(proxy.type()).isEqualTo(java.net.Proxy.Type.SOCKS);
+        assertThat((java.net.InetSocketAddress) proxy.address())
+                .satisfies(address -> {
+                    assertThat(address.isUnresolved()).isTrue();
+                    assertThat(address.getHostString()).isEqualTo("tor-proxy");
+                    assertThat(address.getPort()).isEqualTo(9050);
+                });
+    }
+
+    @Test
+    void torTransportFailsClosedForClearnetOrMissingMtls() {
+        assertThatThrownBy(() -> KfeVaultMeshTlsSupport.validateTransport(
+                        "tor", "tor-proxy", 9050, true, List.of("https://vault-1:7801")))
+                .hasMessageContaining("https://*.onion");
+        assertThatThrownBy(() -> KfeVaultMeshTlsSupport.validateTransport(
+                        "tor", "tor-proxy", 9050, false, List.of("https://vaultabcdefghijkl.onion")))
+                .hasMessageContaining("requires mTLS");
     }
 
     private Path materializeLabCerts() throws Exception {

@@ -11,6 +11,9 @@ import javax.net.ssl.TrustManagerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -89,7 +92,8 @@ final class KfeVaultMeshTlsSupport {
             SSLContext sslContext,
             boolean hostnameVerification,
             int connectTimeoutMs,
-            int readTimeoutMs) {
+            int readTimeoutMs,
+            Proxy proxy) {
         HostnameVerifier verifier = hostnameVerification
                 ? HttpsURLConnection.getDefaultHostnameVerifier()
                 : (String hostname, SSLSession session) -> true;
@@ -106,7 +110,54 @@ final class KfeVaultMeshTlsSupport {
         };
         factory.setConnectTimeout(connectTimeoutMs);
         factory.setReadTimeout(readTimeoutMs);
+        if (proxy != null) {
+            factory.setProxy(proxy);
+        }
         return factory;
+    }
+
+    static Proxy validateTransport(
+            String transport,
+            String socksHost,
+            int socksPort,
+            boolean tlsEnabled,
+            Collection<String> vaultUrls) {
+        String mode = transport == null ? "direct" : transport.trim().toLowerCase();
+        if ("direct".equals(mode)) {
+            return null;
+        }
+        if (!"tor".equals(mode)) {
+            throw new IllegalStateException("kfe.vaultmesh.transport must be 'direct' or 'tor'");
+        }
+        if (!tlsEnabled) {
+            throw new IllegalStateException("Tor vault-mesh transport requires mTLS");
+        }
+        if (!isPresent(socksHost) || socksPort < 1 || socksPort > 65535) {
+            throw new IllegalStateException(
+                    "Tor vault-mesh transport requires a valid kfe.vaultmesh.proxy.socks-host and socks-port");
+        }
+        if (vaultUrls == null || vaultUrls.isEmpty()) {
+            throw new IllegalStateException("Tor vault-mesh transport requires at least one Vault onion URL");
+        }
+        for (String value : vaultUrls) {
+            URI uri;
+            try {
+                uri = URI.create(value);
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalStateException("Invalid Vault URL in Tor mode", exception);
+            }
+            String host = uri.getHost();
+            if (!"https".equalsIgnoreCase(uri.getScheme())
+                    || host == null
+                    || !host.toLowerCase().endsWith(".onion")) {
+                throw new IllegalStateException(
+                        "Tor vault-mesh transport accepts only https://*.onion Vault URLs");
+            }
+        }
+        // Unresolved is intentional: JVM DNS must never resolve an onion endpoint.
+        return new Proxy(
+                Proxy.Type.SOCKS,
+                InetSocketAddress.createUnresolved(socksHost.trim(), socksPort));
     }
 
     static KeyManagerFactory keyManagersFromPem(String certPath, String keyPath) throws Exception {

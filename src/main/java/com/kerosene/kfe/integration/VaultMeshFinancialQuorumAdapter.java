@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 
 import javax.net.ssl.SSLContext;
 import java.nio.charset.StandardCharsets;
+import java.net.Proxy;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
@@ -62,7 +63,10 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
             @Value("${kfe.vaultmesh.tls.truststore-type:PKCS12}") String tlsTruststoreType,
             @Value("${kfe.vaultmesh.tls.hostname-verification:true}") boolean hostnameVerification,
             @Value("${kfe.vaultmesh.constitution.member-count:3}") int memberCount,
-            @Value("${kfe.vaultmesh.constitution.threshold:2}") int threshold) {
+            @Value("${kfe.vaultmesh.constitution.threshold:2}") int threshold,
+            @Value("${kfe.vaultmesh.transport:direct}") String transport,
+            @Value("${kfe.vaultmesh.proxy.socks-host:}") String socksHost,
+            @Value("${kfe.vaultmesh.proxy.socks-port:9050}") int socksPort) {
         this.objectMapper = objectMapper;
         this.coordinatorUrl = trimUrl(coordinatorUrl);
         this.vaultUrls = parseUrls(vaultUrls, this.coordinatorUrl);
@@ -70,14 +74,17 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
         this.memberCount = memberCount;
         this.threshold = threshold;
         if (memberCount < 1 || threshold < 1 || threshold > memberCount
-                || this.vaultUrls.size() != memberCount) {
+                || this.vaultUrls.isEmpty() || this.vaultUrls.size() > memberCount) {
             throw new IllegalStateException("Vault financial quorum roster/threshold is invalid");
         }
+        boolean configuredTls = KfeVaultMeshTlsSupport.tlsConfigured(
+                tlsEnabled, tlsCertPath, tlsKeyPath, tlsCaPath, tlsKeystorePath, tlsTruststorePath);
+        Proxy proxy = KfeVaultMeshTlsSupport.validateTransport(
+                transport, socksHost, socksPort, configuredTls, this.vaultUrls);
         RestTemplateBuilder builder = restTemplateBuilder
                 .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
                 .setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        if (KfeVaultMeshTlsSupport.tlsConfigured(
-                tlsEnabled, tlsCertPath, tlsKeyPath, tlsCaPath, tlsKeystorePath, tlsTruststorePath)) {
+        if (configuredTls) {
             SSLContext sslContext = KfeVaultMeshTlsSupport.buildSslContext(
                     tlsCertPath, tlsKeyPath, tlsCaPath,
                     tlsKeystorePath, tlsKeystorePassword, tlsKeystoreType,
@@ -87,7 +94,8 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
                             sslContext,
                             hostnameVerification,
                             (int) Math.min(connectTimeoutMs, Integer.MAX_VALUE),
-                            (int) Math.min(readTimeoutMs, Integer.MAX_VALUE));
+                            (int) Math.min(readTimeoutMs, Integer.MAX_VALUE),
+                            proxy);
             builder = builder.requestFactory(() -> factory);
         } else if (tlsEnabled) {
             throw new IllegalStateException("Vault financial quorum requires complete mTLS material");
