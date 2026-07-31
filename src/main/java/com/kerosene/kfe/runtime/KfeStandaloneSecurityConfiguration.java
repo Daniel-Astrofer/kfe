@@ -24,7 +24,6 @@ import java.util.List;
 @EnableWebSecurity
 @EnableMethodSecurity
 @ConditionalOnProperty(name = "kfe.standalone", havingValue = "true")
-@ConditionalOnProperty(name = "kfe.security.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeStandaloneSecurityConfiguration {
 
     @Bean
@@ -52,7 +51,7 @@ public class KfeStandaloneSecurityConfiguration {
                         .requestMatchers("/internal/kfe/vault-mesh/**").permitAll()
                         .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")
-                        .requestMatchers("/kfe/**").authenticated()
+                        .requestMatchers("/kfe/**").permitAll()
                         .anyRequest().denyAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
@@ -70,8 +69,10 @@ public class KfeStandaloneSecurityConfiguration {
     }
 
     @Bean
-    public KfeJwtAuthenticationFilter kfeJwtAuthenticationFilter(KfeJwtVerifier jwtVerifier) {
-        return new KfeJwtAuthenticationFilter(jwtVerifier);
+    public KfeJwtAuthenticationFilter kfeJwtAuthenticationFilter(
+            KfeJwtVerifier jwtVerifier,
+            @Value("${kfe.security.enabled:true}") boolean securityEnabled) {
+        return new KfeJwtAuthenticationFilter(jwtVerifier, securityEnabled);
     }
 
     @Bean

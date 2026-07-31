@@ -13,17 +13,27 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class KfeJwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final Logger logger = LoggerFactory.getLogger(KfeJwtAuthenticationFilter.class);
     private final KfeJwtVerifier jwtVerifier;
+    private final boolean securityEnabled;
 
-    public KfeJwtAuthenticationFilter(KfeJwtVerifier jwtVerifier) {
+    public KfeJwtAuthenticationFilter(KfeJwtVerifier jwtVerifier, boolean securityEnabled) {
         this.jwtVerifier = jwtVerifier;
+        this.securityEnabled = securityEnabled;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        if (!securityEnabled) {
+            filterChain.doFilter(request, response);
+            return;
+        }
         String authorization = request.getHeader("Authorization");
         if (authorization == null || !authorization.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
@@ -41,6 +51,7 @@ public class KfeJwtAuthenticationFilter extends OncePerRequestFilter {
                     .setAuthentication(new UsernamePasswordAuthenticationToken(userId, null, authorities));
             filterChain.doFilter(request, response);
         } catch (RuntimeException exception) {
+            logger.error("[KFE JWT] Verification failed: {}", exception.getMessage());
             SecurityContextHolder.clearContext();
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");
