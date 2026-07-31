@@ -24,6 +24,7 @@ import java.util.List;
 @EnableWebSecurity
 @EnableMethodSecurity
 @ConditionalOnProperty(name = "kfe.standalone", havingValue = "true")
+@ConditionalOnProperty(name = "kfe.security.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeStandaloneSecurityConfiguration {
 
     @Bean
