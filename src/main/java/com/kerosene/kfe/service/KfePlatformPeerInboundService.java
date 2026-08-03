@@ -3,7 +3,6 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,6 +10,7 @@ import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.application.transaction.KfePlatformOnchainDestinationRouter;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
@@ -76,9 +76,7 @@ public class KfePlatformPeerInboundService {
             KfeDashboardPublisher dashboardPublisher,
             KfeAuditLogService auditLogService,
             ObjectProvider<FinancialNotificationPort> notificationPort,
-            @Value(
-                    "${kfe.custodial-deposit-observation.min-confirmations:${bitcoin.min-confirmations:3}}")
-                    int minConfirmations) {
+            KfeBitcoinFinalityPolicy finalityPolicy) {
         this.destinationRouter = destinationRouter;
         this.walletRepository = walletRepository;
         this.transactionRepository = transactionRepository;
@@ -93,7 +91,7 @@ public class KfePlatformPeerInboundService {
         this.dashboardPublisher = dashboardPublisher;
         this.auditLogService = auditLogService;
         this.notificationPort = notificationPort;
-        this.minConfirmations = Math.max(0, minConfirmations);
+        this.minConfirmations = finalityPolicy.getCreditConfirmations();
     }
 
     /**

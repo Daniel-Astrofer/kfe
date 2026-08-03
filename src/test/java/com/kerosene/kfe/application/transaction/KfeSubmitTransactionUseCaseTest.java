@@ -269,7 +269,10 @@ class KfeSubmitTransactionUseCaseTest {
         when(outboxUseCase.enqueueExternal(any(), any())).thenReturn(outboxId);
         when(responseMapper.toTransactionResponse(any(KfeTransactionEntity.class)))
                 .thenReturn(pendingResponse, settledResponse);
-        when(outboxService.claimImmediate(eq(outboxId), anyString())).thenReturn(true);
+        UUID claimToken = UUID.randomUUID();
+        KfeExecutionOutboxService.ExecutionClaim executionClaim =
+                new KfeExecutionOutboxService.ExecutionClaim(outboxId, claimToken);
+        when(outboxService.claimImmediate(eq(outboxId), anyString())).thenReturn(Optional.of(executionClaim));
         when(transactionRepository.findById(any(UUID.class))).thenAnswer(invocation -> {
             KfeTransactionEntity settled = new KfeTransactionEntity();
             settled.setStatus(com.kerosene.kfe.model.KfeTransactionStatus.SETTLED);
@@ -281,7 +284,7 @@ class KfeSubmitTransactionUseCaseTest {
 
         assertSame(settledResponse, result);
         verify(outboxService).claimImmediate(eq(outboxId), anyString());
-        verify(outboxProcessor).process(outboxId);
+        verify(outboxProcessor).process(executionClaim);
         verify(lightningLiquidityService).reserveForTransaction(any(UUID.class), eq(5_100L));
     }
 

@@ -161,7 +161,15 @@ public class LndRestLightningClient
 
     @Override
     public CustodyGateway.PaymentResult payLightning(CustodyGateway.LightningPaymentCommand command) {
+        return payPreparedLightning(prepareLightning(command));
+    }
+
+    @Override
+    public PreparedLightningPayment prepareLightning(CustodyGateway.LightningPaymentCommand command) {
         requireLive();
+        if (command == null) {
+            throw new IllegalArgumentException("Lightning payment command is required.");
+        }
         if (command.paymentRequest() == null || command.paymentRequest().isBlank()) {
             throw new IllegalArgumentException("Lightning destination (invoice / LNURL / address / pubkey) is required.");
         }
@@ -172,34 +180,117 @@ public class LndRestLightningClient
                     "Invalid Lightning destination. Use BOLT11 (ln…), LNURL1…, user@domain, or 66-char node pubkey.");
         }
 
-        LightningPaymentResult result = switch (destination.kind()) {
-            case BOLT11 -> payInvoice(destination.value(), command.amountSats(), command.maxFeeSats());
-            case KEYSEND -> payKeysend(destination.value(), command.amountSats(), command.maxFeeSats());
+        String paymentRequest = null;
+        String nodePubkey = null;
+        String preimageBase64 = null;
+        String paymentHash;
+        String kind;
+        switch (destination.kind()) {
+            case BOLT11 -> {
+                kind = "BOLT11";
+                paymentRequest = destination.value();
+                paymentHash = decodeInvoice(paymentRequest).paymentHash();
+            }
+            case KEYSEND -> {
+                kind = "KEYSEND";
+                nodePubkey = destination.value().toLowerCase(Locale.ROOT);
+                byte[] preimage = new byte[32];
+                secureRandom.nextBytes(preimage);
+                preimageBase64 = Base64.getEncoder().encodeToString(preimage);
+                paymentHash = sha256Hex(preimage);
+            }
             case LNURL, LIGHTNING_ADDRESS -> {
                 if (lnurlPayResolver == null) {
                     throw new IllegalStateException("LNURL / Lightning Address resolver is not available.");
                 }
-                String bolt11 = lnurlPayResolver.resolveBolt11(destination, command.amountSats());
-                yield payInvoice(bolt11, command.amountSats(), command.maxFeeSats());
+                kind = "BOLT11";
+                paymentRequest = lnurlPayResolver.resolveBolt11(destination, command.amountSats());
+                paymentHash = decodeInvoice(paymentRequest).paymentHash();
             }
+            default -> throw new IllegalArgumentException("Unsupported Lightning destination kind.");
+        }
+        if (paymentHash == null || !paymentHash.matches("(?i)[0-9a-f]{64}")) {
+            throw new IllegalStateException("LND did not decode a valid Lightning payment hash.");
+        }
+        return new PreparedLightningPayment(
+                kind,
+                command.userId(),
+                command.walletId(),
+                command.walletName(),
+                paymentRequest,
+                nodePubkey,
+                preimageBase64,
+                paymentHash.toLowerCase(Locale.ROOT),
+                paymentHash.toLowerCase(Locale.ROOT),
+                command.amountSats(),
+                command.maxFeeSats(),
+                command.description(),
+                command.idempotencyKey(),
+                command.authorizationProof());
+    }
+
+    @Override
+    public CustodyGateway.PaymentResult payPreparedLightning(PreparedLightningPayment prepared) {
+        requireLive();
+        validatePreparedPayment(prepared);
+        LightningPaymentResult prior = lookupPayment(prepared.paymentHash());
+        if (prior != null) {
+            LightningPaymentOutcome priorOutcome = LightningPaymentOutcome.fromProviderStatus(prior.status());
+            if (priorOutcome == LightningPaymentOutcome.SUCCEEDED) {
+                return successfulPayment(prior, prepared.paymentHash());
+            }
+            if (priorOutcome == LightningPaymentOutcome.FAILED) {
+                throw new IllegalArgumentException(
+                        "Lightning payment is already terminal FAILED for the persisted payment hash.");
+            }
+            throw new LightningPaymentInFlightException(
+                    "Lightning payment is already in flight for the persisted payment hash.",
+                    prepared.paymentHash(),
+                    prior.rawPayload());
+        }
+
+        LightningPaymentResult result = switch (prepared.destinationKind()) {
+            case "BOLT11" -> payInvoice(
+                    prepared.paymentRequest(), prepared.amountSats(), prepared.maxFeeSats());
+            case "KEYSEND" -> payKeysendPrepared(
+                    prepared.nodePubkey(),
+                    prepared.amountSats(),
+                    prepared.maxFeeSats(),
+                    prepared.keysendPreimageBase64(),
+                    prepared.paymentHash());
+            default -> throw new IllegalArgumentException("Unsupported prepared Lightning destination kind.");
         };
+
+        if (result.paymentHash() != null
+                && !prepared.paymentHash().equalsIgnoreCase(result.paymentHash())) {
+            throw new LightningPaymentInFlightException(
+                    "LND returned a payment hash different from the persisted payment identity.",
+                    prepared.paymentHash(),
+                    result.rawPayload());
+        }
 
         LightningPaymentOutcome outcome = LightningPaymentOutcome.fromProviderStatus(result.status());
         return switch (outcome) {
-            case SUCCEEDED -> new CustodyGateway.PaymentResult(
-                    result.paymentHash(),
-                    null,
-                    result.paymentHash(),
-                    outcome.name(),
-                    result.feeSats(),
-                    result.rawPayload());
+            case SUCCEEDED -> successfulPayment(result, prepared.paymentHash());
             case FAILED -> throw new IllegalArgumentException(
                     "Lightning payment failed: " + nullToEmpty(result.status()));
             case IN_FLIGHT, UNKNOWN -> throw new LightningPaymentInFlightException(
                     "Lightning payment is not terminal (status=" + nullToEmpty(result.status()) + ").",
-                    result.paymentHash(),
+                    prepared.paymentHash(),
                     result.rawPayload());
         };
+    }
+
+    private CustodyGateway.PaymentResult successfulPayment(
+            LightningPaymentResult result,
+            String expectedPaymentHash) {
+        return new CustodyGateway.PaymentResult(
+                expectedPaymentHash,
+                null,
+                expectedPaymentHash,
+                LightningPaymentOutcome.SUCCEEDED.name(),
+                result.feeSats(),
+                result.rawPayload());
     }
 
     @Override
@@ -514,22 +605,39 @@ public class LndRestLightningClient
      * Spontaneous (keysend) payment to a node pubkey via {@code /v2/router/send}.
      */
     public LightningPaymentResult payKeysend(String nodePubkeyHex, long amountSats, long maxFeeSats) {
+        byte[] preimage = new byte[32];
+        secureRandom.nextBytes(preimage);
+        String paymentHashHex = sha256Hex(preimage);
+        return payKeysendPrepared(
+                nodePubkeyHex,
+                amountSats,
+                maxFeeSats,
+                Base64.getEncoder().encodeToString(preimage),
+                paymentHashHex);
+    }
+
+    private LightningPaymentResult payKeysendPrepared(
+            String nodePubkeyHex,
+            long amountSats,
+            long maxFeeSats,
+            String preimageBase64,
+            String expectedPaymentHash) {
         if (nodePubkeyHex == null || !nodePubkeyHex.matches("(?i)[0-9a-f]{66}")) {
             throw new IllegalArgumentException("Keysend destination must be a 66-char hex node pubkey.");
         }
         if (amountSats <= 0L) {
             throw new IllegalArgumentException("amountSats must be positive for keysend.");
         }
-        byte[] preimage = new byte[32];
-        secureRandom.nextBytes(preimage);
-        byte[] paymentHash;
+        byte[] preimage;
         try {
-            paymentHash = MessageDigest.getInstance("SHA-256").digest(preimage);
-        } catch (Exception ex) {
-            throw new IllegalStateException("Could not hash keysend preimage.", ex);
+            preimage = Base64.getDecoder().decode(preimageBase64);
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Prepared keysend preimage is invalid.", exception);
         }
-        String paymentHashHex = HexFormat.of().formatHex(paymentHash);
-        String preimageB64 = Base64.getEncoder().encodeToString(preimage);
+        if (preimage.length != 32 || !sha256Hex(preimage).equalsIgnoreCase(expectedPaymentHash)) {
+            throw new IllegalArgumentException("Prepared keysend preimage does not match its payment hash.");
+        }
+        byte[] paymentHash = HexFormat.of().parseHex(expectedPaymentHash);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("dest", nodePubkeyHex.toLowerCase(Locale.ROOT));
@@ -539,7 +647,7 @@ public class LndRestLightningClient
         payload.put("no_inflight_updates", true);
         payload.put("payment_hash", Base64.getEncoder().encodeToString(paymentHash));
         Map<String, String> customRecords = new LinkedHashMap<>();
-        customRecords.put(KEYSEND_PREIMAGE_RECORD, preimageB64);
+        customRecords.put(KEYSEND_PREIMAGE_RECORD, preimageBase64);
         payload.put("dest_custom_records", customRecords);
 
         JsonNode response = post("/v2/router/send", payload);
@@ -559,7 +667,7 @@ public class LndRestLightningClient
         }
         String hash = paymentHashHex(response);
         if (hash == null || hash.isBlank()) {
-            hash = paymentHashHex;
+            hash = expectedPaymentHash;
         }
         return new LightningPaymentResult(hash, longField(response, "fee_sat", "fee"), status, response.toString());
     }
@@ -575,7 +683,7 @@ public class LndRestLightningClient
         // LND rejects amt on fixed-amount invoices:
         // "amount must not be specified when paying a non-zero amount invoice".
         // Only send amt for zero-amount (amountless) invoices.
-        long invoiceSats = decodeInvoiceAmountSats(paymentRequest);
+        long invoiceSats = decodeInvoice(paymentRequest).amountSats();
         if (invoiceSats <= 0L) {
             if (amountSats <= 0L) {
                 throw new IllegalArgumentException(
@@ -615,32 +723,35 @@ public class LndRestLightningClient
      * Invoice amount in sats: LND decode first, bolt11 HRP fallback.
      * Returns 0 only for true amountless invoices (or unparseable bech32 with no HRP amount).
      */
-    private long decodeInvoiceAmountSats(String paymentRequest) {
+    private DecodedInvoice decodeInvoice(String paymentRequest) {
         if (paymentRequest == null || paymentRequest.isBlank()) {
-            return 0L;
+            throw new IllegalArgumentException("Lightning payment request is required.");
         }
         try {
             String encoded = java.net.URLEncoder
                     .encode(paymentRequest.trim(), java.nio.charset.StandardCharsets.UTF_8);
-            JsonNode decoded = get("/v1/payreq/" + encoded);
+            JsonNode decoded = getRequired("/v1/payreq/" + encoded);
+            String paymentHash = text(decoded, "payment_hash");
+            if (paymentHash == null || !paymentHash.matches("(?i)[0-9a-f]{64}")) {
+                throw new IllegalStateException("LND payreq decode did not return a valid payment_hash.");
+            }
             long sats = longField(decoded, "num_satoshis", "num_satoshi");
             if (sats > 0L) {
-                return sats;
+                return new DecodedInvoice(sats, paymentHash.toLowerCase(Locale.ROOT));
             }
             long msat = longField(decoded, "num_msat", "num_msats");
             if (msat > 0L) {
-                return msat / 1000L;
+                return new DecodedInvoice(msat / 1000L, paymentHash.toLowerCase(Locale.ROOT));
             }
-            // Successful decode of amountless invoice → 0 (do not send amt unless caller requires).
-            if (!decoded.path("payment_hash").isMissingNode()
-                    || !decoded.path("destination").isMissingNode()
-                    || !decoded.path("description").isMissingNode()) {
-                return 0L;
-            }
-        } catch (RuntimeException ignored) {
-            // offline HRP parse below
+            return new DecodedInvoice(0L, paymentHash.toLowerCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException("LND could not decode the Lightning invoice.", exception);
         }
-        return parseBolt11AmountSatsFromHrp(paymentRequest.trim());
+    }
+
+    private record DecodedInvoice(long amountSats, String paymentHash) {
     }
 
     /**
@@ -710,6 +821,71 @@ public class LndRestLightningClient
         }
     }
 
+    private void validatePreparedPayment(PreparedLightningPayment prepared) {
+        if (prepared == null
+                || prepared.paymentHash() == null
+                || !prepared.paymentHash().matches("(?i)[0-9a-f]{64}")
+                || prepared.executionReference() == null
+                || !prepared.paymentHash().equalsIgnoreCase(prepared.executionReference())
+                || prepared.amountSats() <= 0L
+                || prepared.maxFeeSats() < 0L) {
+            throw new IllegalArgumentException("Persisted Lightning payment identity is invalid.");
+        }
+        if ("BOLT11".equals(prepared.destinationKind())) {
+            DecodedInvoice decoded = decodeInvoice(prepared.paymentRequest());
+            if (!prepared.paymentHash().equalsIgnoreCase(decoded.paymentHash())) {
+                throw new IllegalArgumentException("Persisted invoice does not match its payment hash.");
+            }
+            if (decoded.amountSats() > 0L && decoded.amountSats() != prepared.amountSats()) {
+                throw new IllegalArgumentException("Persisted invoice amount does not match the payment amount.");
+            }
+        } else if (!"KEYSEND".equals(prepared.destinationKind())) {
+            throw new IllegalArgumentException("Persisted Lightning destination kind is invalid.");
+        }
+    }
+
+    private LightningPaymentResult lookupPayment(String expectedPaymentHash) {
+        long indexOffset = 0L;
+        for (int page = 0; page < 20; page++) {
+            String path = "/v1/payments?include_incomplete=true&max_payments=100&reversed=true&index_offset="
+                    + indexOffset;
+            JsonNode response = getRequired(path);
+            JsonNode payments = response.path("payments");
+            if (!payments.isArray() || payments.isEmpty()) {
+                return null;
+            }
+            for (JsonNode payment : payments) {
+                String paymentHash = paymentHashHex(payment);
+                if (paymentHash != null && expectedPaymentHash.equalsIgnoreCase(paymentHash)) {
+                    long feeSats = longField(payment, "fee_sat", "fee");
+                    if (feeSats <= 0L) {
+                        feeSats = Math.max(0L, longField(payment, "fee_msat") / 1000L);
+                    }
+                    return new LightningPaymentResult(
+                            expectedPaymentHash,
+                            feeSats,
+                            text(payment, "status"),
+                            payment.toString());
+                }
+            }
+            long nextOffset = longField(response, "first_index_offset");
+            if (nextOffset <= 0L || nextOffset == indexOffset) {
+                return null;
+            }
+            indexOffset = nextOffset;
+        }
+        throw new IllegalStateException(
+                "LND payment history pagination limit was reached before reconciliation completed.");
+    }
+
+    private static String sha256Hex(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not hash Lightning payment identity.", exception);
+        }
+    }
+
     private JsonNode get(String path) {
         try {
             HttpEntity<Void> request = new HttpEntity<>(headers());
@@ -720,8 +896,20 @@ public class LndRestLightningClient
             // Callers such as invoice status treat empty JSON as UNKNOWN; log so silent
             // lookup failures (wrong path encoding, TLS, 4xx/5xx) are visible in ops.
             org.slf4j.LoggerFactory.getLogger(LndRestLightningClient.class)
-                    .warn("[LND REST] GET {} failed: {}", path, ex.getMessage());
+                    .warn("[LND REST] GET {} failed: {}", safeEndpoint(path), ex.getMessage());
             return objectMapper.createObjectNode();
+        }
+    }
+
+    private JsonNode getRequired(String path) {
+        try {
+            HttpEntity<Void> request = new HttpEntity<>(headers());
+            ResponseEntity<String> response =
+                    restTemplate.exchange(baseUrl + path, HttpMethod.GET, request, String.class);
+            return parse(response);
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "LND REST request failed on " + safeEndpoint(path), exception);
         }
     }
 
@@ -902,6 +1090,20 @@ public class LndRestLightningClient
             return s;
         }
         return s + "====".substring(mod);
+    }
+
+    private static String safeEndpoint(String path) {
+        if (path == null || path.isBlank()) {
+            return "unknown";
+        }
+        String withoutQuery = path.split("\\?", 2)[0];
+        if (withoutQuery.startsWith("/v1/payreq/")) {
+            return "/v1/payreq/{redacted}";
+        }
+        if (withoutQuery.startsWith("/v1/invoice/")) {
+            return "/v1/invoice/{hash}";
+        }
+        return withoutQuery;
     }
 
     private boolean looksLikeHex(String value) {

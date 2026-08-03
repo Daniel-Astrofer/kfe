@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
@@ -85,8 +86,14 @@ class KfeColdWalletObservationServiceTest {
                 notificationPortProvider,
                 transactionTemplate,
                 20,
-                3,
+                finalityPolicy(),
                 50);
+    }
+
+    private static KfeBitcoinFinalityPolicy finalityPolicy() {
+        KfeBitcoinFinalityPolicy policy = new KfeBitcoinFinalityPolicy();
+        policy.setCreditConfirmations(3);
+        return policy;
     }
 
     @Test

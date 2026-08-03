@@ -1,5 +1,7 @@
 package com.kerosene.kfe.rail;
 
+import java.util.List;
+
 public interface KfeOnchainPaymentGateway {
 
     String providerName();
@@ -9,6 +11,20 @@ public interface KfeOnchainPaymentGateway {
     }
 
     PaymentResult sendOnchain(OnchainPaymentCommand command);
+
+    default PreparedOnchainPayment prepareOnchain(OnchainPaymentCommand command) {
+        throw new UnsupportedOperationException(
+                "This on-chain provider does not support durable prepare-before-broadcast.");
+    }
+
+    default PaymentResult broadcastPrepared(PreparedOnchainPayment prepared) {
+        throw new UnsupportedOperationException(
+                "This on-chain provider does not support durable prepared broadcasts.");
+    }
+
+    default void releasePrepared(PreparedOnchainPayment prepared) {
+        // Providers that lock external resources during preparation override this hook.
+    }
 
     record OnchainPreflightCommand(
             Long userId,
@@ -67,6 +83,22 @@ public interface KfeOnchainPaymentGateway {
             String psbtHash,
             int configuredSignerCount,
             String providerReference) {
+    }
+
+    record PreparedOnchainPayment(
+            String rawTransaction,
+            String expectedTxid,
+            long feeSats,
+            String fundedPsbtHash,
+            String combinedPsbtHash,
+            String rawTransactionHash,
+            List<String> acceptedSigners,
+            String intentId,
+            String metadataJson) {
+
+        public PreparedOnchainPayment {
+            acceptedSigners = acceptedSigners == null ? List.of() : List.copyOf(acceptedSigners);
+        }
     }
 
     record PaymentResult(

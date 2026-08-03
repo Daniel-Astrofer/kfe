@@ -351,6 +351,8 @@ public class KfeInboundSettlementService {
     private void clearClaim(KfeExecutionOutboxEntity outbox) {
         outbox.setClaimedBy(null);
         outbox.setClaimedAt(null);
+        outbox.setClaimToken(null);
+        outbox.setLeaseExpiresAt(null);
     }
 
     private String firstNonBlank(String... values) {

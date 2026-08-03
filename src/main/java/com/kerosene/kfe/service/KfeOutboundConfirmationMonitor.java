@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -35,9 +36,6 @@ public class KfeOutboundConfirmationMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfeOutboundConfirmationMonitor.class);
 
-    /** App confirmation rings target; keep refreshing SETTLED rows until this. */
-    private static final int UI_CONFIRMATION_TARGET = 6;
-
     private final KfeTransactionRepository transactionRepository;
     private final KfeExecutionTransactionHelper transactionHelper;
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
@@ -45,6 +43,7 @@ public class KfeOutboundConfirmationMonitor {
     private final KfeFinancialMetrics financialMetrics;
     private final int batchSize;
     private final int minConfirmations;
+    private final int uiConfirmationTarget;
     private final int maxNotFoundCount;
     private final int notFoundGracePeriodSeconds;
 
@@ -55,8 +54,7 @@ public class KfeOutboundConfirmationMonitor {
             ObjectProvider<KfeColdWalletObservationService> coldObservationService,
             KfeFinancialMetrics financialMetrics,
             @Value("${kfe.network-monitor.batch-size:50}") int batchSize,
-            @Value("${kfe.network-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
-            int minConfirmations,
+            KfeBitcoinFinalityPolicy finalityPolicy,
             @Value("${kfe.network-monitor.onchain.max-not-found-count:5}") int maxNotFoundCount,
             @Value("${kfe.network-monitor.onchain.not-found-grace-period-seconds:300}")
             int notFoundGracePeriodSeconds) {
@@ -66,7 +64,8 @@ public class KfeOutboundConfirmationMonitor {
         this.coldObservationService = coldObservationService;
         this.financialMetrics = financialMetrics;
         this.batchSize = Math.max(1, batchSize);
-        this.minConfirmations = Math.max(0, minConfirmations);
+        this.minConfirmations = finalityPolicy.getCreditConfirmations();
+        this.uiConfirmationTarget = finalityPolicy.getFinalityConfirmations();
         this.maxNotFoundCount = Math.max(1, maxNotFoundCount);
         this.notFoundGracePeriodSeconds = Math.max(30, notFoundGracePeriodSeconds);
     }
@@ -89,13 +88,13 @@ public class KfeOutboundConfirmationMonitor {
                         KfeTransactionStatus.EXECUTING,
                         KfeTransactionStatus.VALIDATING,
                         KfeTransactionStatus.REQUIRES_RECONCILIATION),
-                UI_CONFIRMATION_TARGET,
+                uiConfirmationTarget,
                 PageRequest.of(0, batchSize));
         List<KfeTransactionEntity> settledOutbounds = transactionRepository.findOutboundAwaitingConfirmation(
                 KfeRail.ONCHAIN,
                 KfeDirection.OUTBOUND,
                 List.of(KfeTransactionStatus.SETTLED),
-                UI_CONFIRMATION_TARGET,
+                uiConfirmationTarget,
                 PageRequest.of(0, batchSize));
 
         for (KfeTransactionEntity tx : openOutbounds) {
@@ -128,7 +127,7 @@ public class KfeOutboundConfirmationMonitor {
                                 KfeTransactionStatus.VALIDATING,
                                 KfeTransactionStatus.EXECUTING,
                                 KfeTransactionStatus.SETTLED),
-                        UI_CONFIRMATION_TARGET,
+                        uiConfirmationTarget,
                         PageRequest.of(0, batchSize));
         for (KfeTransactionEntity tx : openInbounds) {
             try {

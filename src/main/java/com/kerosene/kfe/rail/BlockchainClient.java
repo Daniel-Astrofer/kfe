@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 
 public interface BlockchainClient {
     record FeeRates(long fastSatPerVByte, long halfHourSatPerVByte, long hourSatPerVByte) {
@@ -41,6 +42,24 @@ public interface BlockchainClient {
     String sendRawTransaction(String hex);
 
     JsonNode getRawTransaction(String txid, boolean verbose);
+
+    default OptionalInt findTransactionConfirmations(String txid) {
+        if (txid == null || txid.isBlank()) {
+            return OptionalInt.empty();
+        }
+        try {
+            JsonNode transaction = getRawTransaction(txid.trim(), true);
+            if (transaction == null || transaction.isNull() || transaction.isMissingNode()) {
+                return OptionalInt.empty();
+            }
+            JsonNode confirmations = transaction.path("confirmations");
+            return confirmations.isIntegralNumber()
+                    ? OptionalInt.of(confirmations.asInt())
+                    : OptionalInt.of(0);
+        } catch (RuntimeException exception) {
+            return OptionalInt.empty();
+        }
+    }
 
     default long getHotWalletBalance() {
         try {

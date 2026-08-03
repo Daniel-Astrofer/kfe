@@ -34,6 +34,7 @@ public class KfeHashService {
                 String.valueOf(balance.getLockedSats()),
                 String.valueOf(balance.getAutoHoldSats()),
                 String.valueOf(balance.getObservedSats()),
+                String.valueOf(balance.getReorgDebtSats()),
                 String.valueOf(balance.getNonce())));
     }
 }

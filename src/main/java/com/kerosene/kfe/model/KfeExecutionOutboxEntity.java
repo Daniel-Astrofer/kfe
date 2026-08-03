@@ -7,6 +7,7 @@ import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -52,6 +53,21 @@ public class KfeExecutionOutboxEntity {
     @Column(name = "claimed_at")
     private LocalDateTime claimedAt;
 
+    @Column(name = "claim_token")
+    private UUID claimToken;
+
+    @Column(name = "lease_expires_at")
+    private LocalDateTime leaseExpiresAt;
+
+    @Column(name = "prepared_payload_ciphertext", columnDefinition = "TEXT")
+    private String preparedPayloadCiphertext;
+
+    @Column(name = "prepared_payload_hash", length = 64)
+    private String preparedPayloadHash;
+
+    @Column(name = "execution_reference", length = 255)
+    private String executionReference;
+
     @Column(name = "dispatched_at")
     private LocalDateTime dispatchedAt;
 
@@ -63,6 +79,10 @@ public class KfeExecutionOutboxEntity {
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
 
     @PrePersist
     void onCreate() {
@@ -160,6 +180,46 @@ public class KfeExecutionOutboxEntity {
         this.claimedAt = claimedAt;
     }
 
+    public UUID getClaimToken() {
+        return claimToken;
+    }
+
+    public void setClaimToken(UUID claimToken) {
+        this.claimToken = claimToken;
+    }
+
+    public LocalDateTime getLeaseExpiresAt() {
+        return leaseExpiresAt;
+    }
+
+    public void setLeaseExpiresAt(LocalDateTime leaseExpiresAt) {
+        this.leaseExpiresAt = leaseExpiresAt;
+    }
+
+    public String getPreparedPayloadCiphertext() {
+        return preparedPayloadCiphertext;
+    }
+
+    public void setPreparedPayloadCiphertext(String preparedPayloadCiphertext) {
+        this.preparedPayloadCiphertext = preparedPayloadCiphertext;
+    }
+
+    public String getPreparedPayloadHash() {
+        return preparedPayloadHash;
+    }
+
+    public void setPreparedPayloadHash(String preparedPayloadHash) {
+        this.preparedPayloadHash = preparedPayloadHash;
+    }
+
+    public String getExecutionReference() {
+        return executionReference;
+    }
+
+    public void setExecutionReference(String executionReference) {
+        this.executionReference = executionReference;
+    }
+
     public LocalDateTime getDispatchedAt() {
         return dispatchedAt;
     }
@@ -182,5 +242,9 @@ public class KfeExecutionOutboxEntity {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

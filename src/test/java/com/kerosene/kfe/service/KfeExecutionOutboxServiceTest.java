@@ -6,6 +6,7 @@ import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,15 +24,20 @@ class KfeExecutionOutboxServiceTest {
     @Test
     void claimsDueOutboxItemsWithNormalizedWorkerId() {
         KfeExecutionOutboxEntity candidate = new KfeExecutionOutboxEntity();
-        when(repository.findTop100ClaimCandidates(anyCollection(), any(), any()))
+        when(repository.findTop100ClaimCandidates(anyCollection(), anyCollection(), any()))
                 .thenReturn(List.of(candidate));
-        when(repository.claimDue(eq(candidate.getId()), anyCollection(), any(), any(), eq("kfe-worker")))
+        when(repository.claimDue(
+                eq(candidate.getId()), anyCollection(), anyCollection(), any(),
+                eq("kfe-worker"), any(UUID.class), any()))
                 .thenReturn(1);
-        when(repository.findById(candidate.getId())).thenReturn(Optional.of(candidate));
 
-        List<KfeExecutionOutboxEntity> claimed = service.claimDue("KFE-WORKER");
+        List<KfeExecutionOutboxService.ExecutionClaim> claimed = service.claimDue("KFE-WORKER");
 
-        assertThat(claimed).containsExactly(candidate);
-        verify(repository).claimDue(eq(candidate.getId()), anyCollection(), any(), any(), eq("kfe-worker"));
+        assertThat(claimed).hasSize(1);
+        assertThat(claimed.getFirst().outboxId()).isEqualTo(candidate.getId());
+        assertThat(claimed.getFirst().claimToken()).isNotNull();
+        verify(repository).claimDue(
+                eq(candidate.getId()), anyCollection(), anyCollection(), any(),
+                eq("kfe-worker"), any(UUID.class), any());
     }
 }

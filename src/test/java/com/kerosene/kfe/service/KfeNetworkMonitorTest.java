@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -65,8 +66,14 @@ class KfeNetworkMonitorTest {
                 lightningInvoiceGatewayProvider,
                 objectMapper,
                 50,
-                3
+                finalityPolicy()
         );
+    }
+
+    private KfeBitcoinFinalityPolicy finalityPolicy() {
+        KfeBitcoinFinalityPolicy policy = new KfeBitcoinFinalityPolicy();
+        policy.setCreditConfirmations(3);
+        return policy;
     }
 
     @Test

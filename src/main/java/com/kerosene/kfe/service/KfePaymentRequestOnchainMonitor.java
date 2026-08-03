@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
@@ -85,8 +86,7 @@ public class KfePaymentRequestOnchainMonitor {
             ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService,
             ObjectProvider<KfeBalanceMetrics> balanceMetrics,
             @Value("${kfe.payment-request-monitor.batch-size:50}") int batchSize,
-            @Value("${kfe.payment-request-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
-            int minConfirmations) {
+            KfeBitcoinFinalityPolicy finalityPolicy) {
         this.paymentRequestRepository = paymentRequestRepository;
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
@@ -105,8 +105,7 @@ public class KfePaymentRequestOnchainMonitor {
         this.onchainBalanceSyncService = onchainBalanceSyncService;
         this.balanceMetrics = balanceMetrics;
         this.batchSize = Math.max(1, batchSize);
-        // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
-        this.minConfirmations = Math.max(0, minConfirmations);
+        this.minConfirmations = finalityPolicy.getCreditConfirmations();
     }
 
     @Scheduled(

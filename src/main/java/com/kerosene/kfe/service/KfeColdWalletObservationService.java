@@ -20,6 +20,7 @@ import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.model.KfeWalletStatus;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.rail.BlockchainClient;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
@@ -88,8 +89,7 @@ public class KfeColdWalletObservationService {
             ObjectProvider<FinancialNotificationPort> notificationPort,
             TransactionTemplate transactionTemplate,
             @Value("${kfe.cold-observation.batch-size:20}") int batchSize,
-            @Value("${kfe.cold-observation.min-confirmations:${bitcoin.min-confirmations:3}}")
-            int minConfirmations,
+            KfeBitcoinFinalityPolicy finalityPolicy,
             @Value("${kfe.cold-observation.descriptor-range:200}") int descriptorRange) {
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
@@ -104,7 +104,7 @@ public class KfeColdWalletObservationService {
         this.notificationPort = notificationPort;
         this.transactionTemplate = transactionTemplate;
         this.batchSize = Math.max(1, batchSize);
-        this.minConfirmations = Math.max(0, minConfirmations);
+        this.minConfirmations = finalityPolicy.getCreditConfirmations();
         this.descriptorRange = Math.max(1, descriptorRange);
     }
 

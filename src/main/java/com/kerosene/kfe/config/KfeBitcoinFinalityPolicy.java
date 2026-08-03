@@ -38,9 +38,15 @@ public class KfeBitcoinFinalityPolicy {
 
     @PostConstruct
     void validateProductionGate() {
-        if (creditConfirmations < 1) {
-            String msg = "bitcoin.credit-confirmations must be >= 1 in production. Current: "
-                    + creditConfirmations;
+        if (detectedConfirmations < 0
+                || creditConfirmations < 1
+                || finalityConfirmations < creditConfirmations
+                || reorgMonitorConfirmations < finalityConfirmations) {
+            String msg = "Invalid Bitcoin finality policy: require 0 <= detected, 1 <= credit <= finality "
+                    + "<= reorg-monitor. Current detected=" + detectedConfirmations
+                    + " credit=" + creditConfirmations
+                    + " finality=" + finalityConfirmations
+                    + " reorg-monitor=" + reorgMonitorConfirmations;
             log.error(msg);
             throw new IllegalStateException(msg);
         }

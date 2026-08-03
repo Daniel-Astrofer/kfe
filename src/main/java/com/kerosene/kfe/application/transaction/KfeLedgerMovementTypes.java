@@ -26,6 +26,10 @@ public final class KfeLedgerMovementTypes {
     // ITEM 12: Reversal/correction movement types (create compensating movements, never UPDATE/DELETE)
     public static final String REVERSAL_CREDIT = "REVERSAL_CREDIT";
     public static final String REVERSAL_DEBIT = "REVERSAL_DEBIT";
+    public static final String REORG_DEBT = "REORG_DEBT";
+    public static final String REORG_RESTORE_CREDIT = "REORG_RESTORE_CREDIT";
+    public static final String REVERSAL_KEROSENE_FEE = "REVERSAL_KEROSENE_FEE";
+    public static final String RESTORE_KEROSENE_FEE = "RESTORE_KEROSENE_FEE";
     public static final String CORRECTION_CREDIT = "CORRECTION_CREDIT";
     public static final String CORRECTION_DEBIT = "CORRECTION_DEBIT";
 
@@ -37,11 +41,22 @@ public final class KfeLedgerMovementTypes {
             CREDIT);
 
     public static final Set<String> IDEMPOTENT_CREDIT_TYPE_SET = Set.copyOf(IDEMPOTENT_CREDIT_TYPES);
+    public static final Set<String> IDEMPOTENT_REVERSAL_TYPE_SET = Set.of(
+            REVERSAL_DEBIT,
+            REORG_DEBT,
+            REORG_RESTORE_CREDIT,
+            REVERSAL_KEROSENE_FEE,
+            RESTORE_KEROSENE_FEE);
 
     private KfeLedgerMovementTypes() {
     }
 
     public static boolean isIdempotentCreditType(String movementType) {
         return movementType != null && IDEMPOTENT_CREDIT_TYPE_SET.contains(movementType);
+    }
+
+    public static boolean isIdempotentMovementType(String movementType) {
+        return isIdempotentCreditType(movementType)
+                || (movementType != null && IDEMPOTENT_REVERSAL_TYPE_SET.contains(movementType));
     }
 }

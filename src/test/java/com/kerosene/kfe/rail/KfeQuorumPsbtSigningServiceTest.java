@@ -9,17 +9,29 @@ import com.kerosene.common.vaultmesh.VaultMeshReceipt;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class KfeQuorumPsbtSigningServiceTest {
+
+    private static final String LOCAL_TXID = "11".repeat(32);
+    private static final String MESH_TXID = "22".repeat(32);
 
     private final BitcoinCoreRpcClient bitcoinCore = mock(BitcoinCoreRpcClient.class);
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreProvider = provider(bitcoinCore);
@@ -87,18 +99,21 @@ class KfeQuorumPsbtSigningServiceTest {
                         org.mockito.ArgumentMatchers.eq(100_000L),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.eq("bech32")))
+                        org.mockito.ArgumentMatchers.eq("bech32"),
+                        org.mockito.ArgumentMatchers.eq(true)))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 200L));
         when(bitcoinCore.walletProcessPsbt("funded-psbt")).thenReturn("signed-psbt");
         when(bitcoinCore.combinePsbt(org.mockito.ArgumentMatchers.anyList())).thenReturn("combined-psbt");
         when(bitcoinCore.finalizePsbt("combined-psbt"))
                 .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("deadbeef", true));
-        when(bitcoinCore.sendRawTransaction("deadbeef")).thenReturn("txid-local");
+        when(bitcoinCore.sendRawTransaction("deadbeef")).thenReturn(LOCAL_TXID);
         // PSBT integrity check mocks
-        JsonNode decodedTx = decodedPsbtNode("bcrt1qdestination", 100_000L);
+        ObjectNode decodedTx = (ObjectNode) decodedPsbtNode("bcrt1qdestination", 100_000L, LOCAL_TXID);
+        ObjectNode signedTx = decodedTx.deepCopy();
+        addPartialSignature(signedTx, "02" + "33".repeat(32));
         when(bitcoinCore.decodePsbt("funded-psbt")).thenReturn(decodedTx);
-        when(bitcoinCore.decodePsbt("signed-psbt")).thenReturn(decodedTx);
-        when(bitcoinCore.decodePsbt("combined-psbt")).thenReturn(decodedTx);
+        when(bitcoinCore.decodePsbt("signed-psbt")).thenReturn(signedTx);
+        when(bitcoinCore.decodePsbt("combined-psbt")).thenReturn(signedTx);
         when(bitcoinCore.decodeRawTransaction("deadbeef")).thenReturn(decodedTx.get("tx"));
         when(bitcoinCore.testMempoolAccept("deadbeef")).thenReturn(mempoolAccept(true));
 
@@ -113,8 +128,9 @@ class KfeQuorumPsbtSigningServiceTest {
                 "idem",
                 "proof"));
 
-        assertThat(execution.txid()).isEqualTo("txid-local");
-        assertThat(execution.acceptedSigners()).containsExactly("bitcoin-core-wallet");
+        assertThat(execution.txid()).isEqualTo(LOCAL_TXID);
+        assertThat(execution.acceptedSigners()).singleElement()
+                .asString().startsWith("bitcoin-core-wallet#");
     }
 
     @Test
@@ -183,13 +199,14 @@ class KfeQuorumPsbtSigningServiceTest {
                         org.mockito.ArgumentMatchers.eq(50_000L),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.eq("bech32m")))
+                        org.mockito.ArgumentMatchers.eq("bech32m"),
+                        org.mockito.ArgumentMatchers.eq(true)))
                 .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 150L));
         when(bitcoinCore.finalizePsbt("mesh-signed-psbt"))
                 .thenReturn(new BitcoinCoreRpcClient.FinalizedPsbt("cafebabe", true));
-        when(bitcoinCore.sendRawTransaction("cafebabe")).thenReturn("txid-mesh");
+        when(bitcoinCore.sendRawTransaction("cafebabe")).thenReturn(MESH_TXID);
         // PSBT integrity check mocks
-        JsonNode decodedTx = decodedPsbtNode("tb1qdestination", 50_000L);
+        JsonNode decodedTx = decodedPsbtNode("tb1qdestination", 50_000L, MESH_TXID);
         when(bitcoinCore.decodePsbt("funded-psbt")).thenReturn(decodedTx);
         when(bitcoinCore.decodePsbt("mesh-signed-psbt")).thenReturn(decodedTx);
         when(bitcoinCore.decodeRawTransaction("cafebabe")).thenReturn(decodedTx.get("tx"));
@@ -206,8 +223,99 @@ class KfeQuorumPsbtSigningServiceTest {
                 "idem-mesh",
                 "proof"));
 
-        assertThat(execution.txid()).isEqualTo("txid-mesh");
+        assertThat(execution.txid()).isEqualTo(MESH_TXID);
         assertThat(execution.acceptedSigners()).containsExactly("vault-mesh");
+    }
+
+    @Test
+    void knownPreparedTransactionIsReconciledWithoutAnotherBroadcast() {
+        ObjectNode decoded = new ObjectMapper().createObjectNode();
+        decoded.put("txid", LOCAL_TXID);
+        when(bitcoinCore.decodeRawTransaction("deadbeef")).thenReturn(decoded);
+        when(bitcoinCore.findTransactionConfirmations(LOCAL_TXID)).thenReturn(OptionalInt.of(0));
+        KfeOnchainPaymentGateway.PreparedOnchainPayment prepared =
+                new KfeOnchainPaymentGateway.PreparedOnchainPayment(
+                        "deadbeef",
+                        LOCAL_TXID,
+                        200L,
+                        "funded-hash",
+                        "combined-hash",
+                        sha256("deadbeef"),
+                        List.of("bitcoin-core-wallet"),
+                        "intent-id",
+                        "{}");
+
+        KfeQuorumPsbtSigningService.OnchainExecution execution = service.broadcast(prepared);
+
+        assertThat(execution.txid()).isEqualTo(LOCAL_TXID);
+        verify(bitcoinCore, never()).requireMempoolAccept("deadbeef");
+        verify(bitcoinCore, never()).sendRawTransaction("deadbeef");
+    }
+
+    @Test
+    void rejectsTwoRemoteSeatsThatReturnTheSameCryptographicSignerKey() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        KfeQuorumPsbtSigningService twoSeats = new KfeQuorumPsbtSigningService(
+                bitcoinCoreProvider,
+                restTemplate,
+                new ObjectMapper(),
+                null,
+                false,
+                "USERS",
+                2,
+                6,
+                "http://signer-one,http://signer-two",
+                "key-one,key-two",
+                "signer-one,signer-two",
+                true,
+                false,
+                "bitcoin-core-wallet",
+                "");
+        when(bitcoinCore.createFundedPsbt(
+                        org.mockito.ArgumentMatchers.eq("bcrt1qdestination"),
+                        org.mockito.ArgumentMatchers.eq(100_000L),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq("bech32"),
+                        org.mockito.ArgumentMatchers.eq(true)))
+                .thenReturn(new BitcoinCoreRpcClient.FundedPsbt("funded-psbt", 200L));
+        when(restTemplate.postForEntity(
+                        org.mockito.ArgumentMatchers.eq("http://signer-one"),
+                        org.mockito.ArgumentMatchers.any(HttpEntity.class),
+                        org.mockito.ArgumentMatchers.eq(String.class)))
+                .thenReturn(ResponseEntity.ok(
+                        "{\"signerId\":\"signer-one\",\"signedPsbt\":\"partial-one\"}"));
+        when(restTemplate.postForEntity(
+                        org.mockito.ArgumentMatchers.eq("http://signer-two"),
+                        org.mockito.ArgumentMatchers.any(HttpEntity.class),
+                        org.mockito.ArgumentMatchers.eq(String.class)))
+                .thenReturn(ResponseEntity.ok(
+                        "{\"signerId\":\"signer-two\",\"signedPsbt\":\"partial-two\"}"));
+
+        ObjectNode funded = (ObjectNode) decodedPsbtNode("bcrt1qdestination", 100_000L, LOCAL_TXID);
+        ObjectNode first = funded.deepCopy();
+        ObjectNode second = funded.deepCopy();
+        String repeatedPublicKey = "02" + "44".repeat(32);
+        addPartialSignature(first, repeatedPublicKey);
+        addPartialSignature(second, repeatedPublicKey);
+        when(bitcoinCore.decodePsbt("funded-psbt")).thenReturn(funded);
+        when(bitcoinCore.decodePsbt("partial-one")).thenReturn(first);
+        when(bitcoinCore.decodePsbt("partial-two")).thenReturn(second);
+
+        assertThatThrownBy(() -> twoSeats.prepare(new KfeOnchainPaymentGateway.OnchainPaymentCommand(
+                        42L,
+                        null,
+                        "wallet",
+                        "bcrt1qdestination",
+                        100_000L,
+                        500L,
+                        "memo",
+                        "duplicate-key",
+                        "proof")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("1 of 2 distinct cryptographic signers");
+
+        verify(bitcoinCore, never()).combinePsbt(org.mockito.ArgumentMatchers.anyList());
     }
 
     private KfeOnchainPaymentGateway.OnchainPreflightCommand command(long maxFeeSats) {
@@ -228,14 +336,24 @@ class KfeQuorumPsbtSigningServiceTest {
         return provider;
     }
 
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
     /**
      * Creates a minimal valid-looking decoded PSBT JSON node with the expected
      * destination and amount for test assertions.
      */
-    static JsonNode decodedPsbtNode(String destinationAddress, long amountSats) {
+    static JsonNode decodedPsbtNode(String destinationAddress, long amountSats, String txid) {
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode root = mapper.createObjectNode();
         ObjectNode tx = mapper.createObjectNode();
+        tx.put("txid", txid);
         tx.put("version", 2);
         tx.put("locktime", 0);
 
@@ -271,6 +389,20 @@ class KfeQuorumPsbtSigningServiceTest {
         root.set("inputs", inputs);
 
         return root;
+    }
+
+    private static void addPartialSignature(ObjectNode decodedPsbt, String publicKey) {
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode inputs = (ArrayNode) decodedPsbt.withArray("inputs");
+        ObjectNode input = inputs.isEmpty()
+                ? mapper.createObjectNode()
+                : (ObjectNode) inputs.get(0);
+        ObjectNode signatures = mapper.createObjectNode();
+        signatures.put(publicKey, "30440220");
+        input.set("partial_signatures", signatures);
+        if (inputs.isEmpty()) {
+            inputs.add(input);
+        }
     }
 
     static JsonNode mempoolAccept(boolean allowed) {

@@ -27,6 +27,7 @@ class KfeExecutionOutboxProcessorTest {
         UUID outboxId = UUID.randomUUID();
         UUID txId = UUID.randomUUID();
         UUID walletId = UUID.randomUUID();
+        UUID claimToken = UUID.randomUUID();
 
         KfeExecutionTransactionHelper.PreparationResult prep = new KfeExecutionTransactionHelper.PreparationResult(
                 true,
@@ -42,10 +43,11 @@ class KfeExecutionOutboxProcessorTest {
                 "idemp-key",
                 "quorum-proposal",
                 null,
-                null
+                null,
+                claimToken
         );
 
-        when(transactionHelper.prepare(outboxId)).thenReturn(prep);
+        when(transactionHelper.prepare(outboxId, claimToken)).thenReturn(prep);
 
         KfeOnchainPaymentGateway.PaymentResult paymentResult = new KfeOnchainPaymentGateway.PaymentResult(
                 "ref-123",
@@ -58,13 +60,14 @@ class KfeExecutionOutboxProcessorTest {
         when(onchainCustodyPort.sendOnchain(any())).thenReturn(paymentResult);
         when(onchainCustodyPort.providerName()).thenReturn("btc-core");
 
-        processor.process(outboxId);
+        processor.process(new KfeExecutionOutboxService.ExecutionClaim(outboxId, claimToken));
 
-        verify(transactionHelper).prepare(outboxId);
+        verify(transactionHelper).prepare(outboxId, claimToken);
         verify(onchainCustodyPort).sendOnchain(any());
         verify(transactionHelper).settleOutbound(
                 eq(outboxId),
                 eq(txId),
+                eq(claimToken),
                 eq("btc-core"),
                 eq("txid-123"),
                 eq("txid-123"),
@@ -77,6 +80,7 @@ class KfeExecutionOutboxProcessorTest {
     @Test
     void processDoesNotCallProviderWhenPreparationDoesNotProceed() {
         UUID outboxId = UUID.randomUUID();
+        UUID claimToken = UUID.randomUUID();
         KfeExecutionTransactionHelper.PreparationResult terminal = new KfeExecutionTransactionHelper.PreparationResult(
                 false,
                 null,
@@ -91,15 +95,16 @@ class KfeExecutionOutboxProcessorTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                claimToken
         );
-        when(transactionHelper.prepare(outboxId)).thenReturn(terminal);
+        when(transactionHelper.prepare(outboxId, claimToken)).thenReturn(terminal);
 
-        processor.process(outboxId);
+        processor.process(new KfeExecutionOutboxService.ExecutionClaim(outboxId, claimToken));
 
-        verify(transactionHelper).prepare(outboxId);
+        verify(transactionHelper).prepare(outboxId, claimToken);
         verifyNoInteractions(onchainCustodyPort, lightningPaymentGateway);
-        verify(transactionHelper, never()).markFinalFailure(any(), any(), any(), any());
-        verify(transactionHelper, never()).markRetryableFailure(any(), any(), any(), any());
+        verify(transactionHelper, never()).markFinalFailure(any(), any(), any(), any(), any());
+        verify(transactionHelper, never()).markRetryableFailure(any(), any(), any(), any(), any());
     }
 }

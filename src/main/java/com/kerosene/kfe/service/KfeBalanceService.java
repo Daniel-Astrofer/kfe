@@ -78,11 +78,32 @@ public class KfeBalanceService {
 
     public KfeBalanceEntity creditAvailable(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
+        long availableBefore = balance.getAvailableSats();
         balance.creditAvailable(amountSats);
         sign(balance);
         KfeBalanceEntity saved = balanceRepository.save(balance);
-        publishBalanceSnapshot(walletId, saved, amountSats, "crédito", "AVAILABLE");
+        publishBalanceSnapshot(
+                walletId, saved, saved.getAvailableSats() - availableBefore, "crédito", "AVAILABLE");
         return saved;
+    }
+
+    public ReorgDebitResult reverseAvailableCreditForReorg(
+            UUID walletId,
+            String asset,
+            long amountSats) {
+        KfeBalanceEntity balance = requireForUpdate(walletId, asset);
+        long availableBefore = balance.getAvailableSats();
+        long debtBefore = balance.getReorgDebtSats();
+        balance.reverseAvailableCreditForReorg(amountSats);
+        sign(balance);
+        KfeBalanceEntity saved = balanceRepository.save(balance);
+        long debited = availableBefore - saved.getAvailableSats();
+        long debtAdded = saved.getReorgDebtSats() - debtBefore;
+        publishBalanceSnapshot(walletId, saved, -debited, "reorg", "AVAILABLE");
+        return new ReorgDebitResult(debited, debtAdded, saved.getReorgDebtSats());
+    }
+
+    public record ReorgDebitResult(long debitedSats, long debtAddedSats, long totalDebtSats) {
     }
 
     public KfeBalanceEntity setObserved(UUID walletId, String asset, long observedSats) {

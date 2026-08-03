@@ -129,6 +129,60 @@ public class KfeFeeSettlementService {
                 tx.getId(), tx.getKeroseneFeeSats(), profitSegregationMode);
     }
 
+    public void reverseKeroseneFeeForReorg(KfeTransactionEntity tx) {
+        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L
+                || !movementRepository.existsByTransactionIdAndMovementType(tx.getId(), MOVEMENT_TYPE)
+                || movementRepository.existsByTransactionIdAndMovementType(
+                        tx.getId(), KfeLedgerMovementTypes.REVERSAL_KEROSENE_FEE)) {
+            return;
+        }
+        UUID profitWalletId = systemWalletService.requireProfitWalletId();
+        boolean wrote = movementRecorder.record(
+                tx.getId(),
+                profitWalletId,
+                KfeLedgerMovementTypes.REVERSAL_KEROSENE_FEE,
+                tx.getKeroseneFeeSats(),
+                "AVAILABLE_OR_DEBT",
+                "CHAIN_REORG");
+        if (!wrote) {
+            return;
+        }
+        KfeBalanceService.ReorgDebitResult result = balanceService.reverseAvailableCreditForReorg(
+                profitWalletId, KfeSystemWalletService.ASSET_BTC, tx.getKeroseneFeeSats());
+        auditLogService.record(
+                "KFE_KEROSENE_FEE_REORG_REVERSED",
+                tx.getId(),
+                profitWalletId,
+                tx.getStatus(),
+                tx.getStatus(),
+                Map.of(
+                        "feeSats", tx.getKeroseneFeeSats(),
+                        "debitedSats", result.debitedSats(),
+                        "debtAddedSats", result.debtAddedSats()));
+    }
+
+    public void restoreKeroseneFeeAfterReorg(KfeTransactionEntity tx) {
+        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L
+                || !movementRepository.existsByTransactionIdAndMovementType(
+                        tx.getId(), KfeLedgerMovementTypes.REVERSAL_KEROSENE_FEE)
+                || movementRepository.existsByTransactionIdAndMovementType(
+                        tx.getId(), KfeLedgerMovementTypes.RESTORE_KEROSENE_FEE)) {
+            return;
+        }
+        UUID profitWalletId = systemWalletService.requireProfitWalletId();
+        boolean wrote = movementRecorder.record(
+                tx.getId(),
+                profitWalletId,
+                KfeLedgerMovementTypes.RESTORE_KEROSENE_FEE,
+                tx.getKeroseneFeeSats(),
+                "CHAIN_REORG",
+                "AVAILABLE_OR_DEBT");
+        if (wrote) {
+            balanceService.creditAvailable(
+                    profitWalletId, KfeSystemWalletService.ASSET_BTC, tx.getKeroseneFeeSats());
+        }
+    }
+
     /**
      * Returns the current profit segregation mode.
      * @return SUBLEDGER, DEDICATED_BUCKET, or PERIODIC_TRANSFER

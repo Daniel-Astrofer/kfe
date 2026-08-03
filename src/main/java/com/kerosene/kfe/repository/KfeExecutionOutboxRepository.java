@@ -41,37 +41,47 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
                 o.status in :dueStatuses
                 and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
             ) or (
+                o.status = 'UNKNOWN'
+                and o.operation in :recoverableOperations
+                and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
+            ) or (
                 o.status = 'PROCESSING'
                 and (
-                    o.claimedAt is null
-                    or o.claimedAt < :staleClaimBefore
-                    or o.updatedAt < :staleClaimBefore
+                    o.leaseExpiresAt is null
+                    or o.leaseExpiresAt <= :now
                 )
             )
             order by o.createdAt asc
             """)
     List<KfeExecutionOutboxEntity> findTop100ClaimCandidates(
             @Param("dueStatuses") Collection<String> dueStatuses,
-            @Param("now") LocalDateTime now,
-            @Param("staleClaimBefore") LocalDateTime staleClaimBefore);
+            @Param("recoverableOperations") Collection<String> recoverableOperations,
+            @Param("now") LocalDateTime now);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update KfeExecutionOutboxEntity o
             set o.status = 'PROCESSING',
                 o.claimedBy = :workerId,
-                o.claimedAt = :now
+                o.claimedAt = :now,
+                o.claimToken = :claimToken,
+                o.leaseExpiresAt = :leaseExpiresAt,
+                o.updatedAt = :now,
+                o.rowVersion = o.rowVersion + 1
             where o.id = :id
               and (
                 (
                     o.status in :dueStatuses
                     and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
                 ) or (
+                    o.status = 'UNKNOWN'
+                    and o.operation in :recoverableOperations
+                    and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
+                ) or (
                     o.status = 'PROCESSING'
                     and (
-                        o.claimedAt is null
-                        or o.claimedAt < :staleClaimBefore
-                        or o.updatedAt < :staleClaimBefore
+                        o.leaseExpiresAt is null
+                        or o.leaseExpiresAt <= :now
                     )
                 )
               )
@@ -79,9 +89,11 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
     int claimDue(
             @Param("id") UUID id,
             @Param("dueStatuses") Collection<String> dueStatuses,
+            @Param("recoverableOperations") Collection<String> recoverableOperations,
             @Param("now") LocalDateTime now,
-            @Param("staleClaimBefore") LocalDateTime staleClaimBefore,
-            @Param("workerId") String workerId);
+            @Param("workerId") String workerId,
+            @Param("claimToken") UUID claimToken,
+            @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt);
 
     /**
      * Claim a specific outbox row for immediate (sync-on-submit) processing.
@@ -92,7 +104,11 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
             update KfeExecutionOutboxEntity o
             set o.status = 'PROCESSING',
                 o.claimedBy = :workerId,
-                o.claimedAt = :now
+                o.claimedAt = :now,
+                o.claimToken = :claimToken,
+                o.leaseExpiresAt = :leaseExpiresAt,
+                o.updatedAt = :now,
+                o.rowVersion = o.rowVersion + 1
             where o.id = :id
               and o.status in ('PENDING', 'FAILED_RETRYABLE')
               and (o.nextAttemptAt is null or o.nextAttemptAt <= :now)
@@ -100,5 +116,23 @@ public interface KfeExecutionOutboxRepository extends JpaRepository<KfeExecution
     int claimImmediate(
             @Param("id") UUID id,
             @Param("now") LocalDateTime now,
-            @Param("workerId") String workerId);
+            @Param("workerId") String workerId,
+            @Param("claimToken") UUID claimToken,
+            @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update KfeExecutionOutboxEntity o
+            set o.leaseExpiresAt = :leaseExpiresAt,
+                o.updatedAt = :now,
+                o.rowVersion = o.rowVersion + 1
+            where o.id = :id
+              and o.status = 'PROCESSING'
+              and o.claimToken = :claimToken
+            """)
+    int heartbeat(
+            @Param("id") UUID id,
+            @Param("claimToken") UUID claimToken,
+            @Param("now") LocalDateTime now,
+            @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt);
 }

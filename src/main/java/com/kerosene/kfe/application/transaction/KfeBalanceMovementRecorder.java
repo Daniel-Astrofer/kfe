@@ -34,7 +34,7 @@ public class KfeBalanceMovementRecorder {
             String fromBucket,
             String toBucket) {
         if (transactionId != null
-                && KfeLedgerMovementTypes.isIdempotentCreditType(movementType)
+                && KfeLedgerMovementTypes.isIdempotentMovementType(movementType)
                 && movementRepository.existsByTransactionIdAndMovementType(transactionId, movementType)) {
             log.debug(
                     "KFE movement already present transactionId={} type={} — skip",
@@ -54,7 +54,7 @@ public class KfeBalanceMovementRecorder {
             movementRepository.save(movement);
             return true;
         } catch (DataIntegrityViolationException exception) {
-            if (transactionId != null && KfeLedgerMovementTypes.isIdempotentCreditType(movementType)) {
+            if (transactionId != null && KfeLedgerMovementTypes.isIdempotentMovementType(movementType)) {
                 log.info(
                         "KFE movement race lost transactionId={} type={} — treated as idempotent skip",
                         transactionId,

@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import com.kerosene.common.security.CryptoPurpose;
+import com.kerosene.common.security.EncryptedValue;
 import com.kerosene.common.security.StringColumnCryptoPort;
 
 import javax.crypto.Cipher;
@@ -13,6 +15,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -132,6 +135,88 @@ public class KfeStringColumnCryptoService implements StringColumnCryptoPort {
                     .digest(sharedSecret.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             throw new IllegalStateException("Failed to derive KFE column crypto key from shared secret", e);
+        }
+    }
+
+    @Override
+    public EncryptedValue encrypt(CryptoPurpose purpose, byte[] plaintext, byte[] associatedData) {
+        if (purpose == null || plaintext == null || associatedData == null || associatedData.length == 0) {
+            throw new IllegalArgumentException("Purpose, plaintext and non-empty associated data are required.");
+        }
+        try {
+            byte[] nonce = new byte[GCM_IV_LENGTH];
+            secureRandom.nextBytes(nonce);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, masterKey, new GCMParameterSpec(GCM_TAG_BITS, nonce));
+            cipher.updateAAD(domainSeparatedAad(purpose, associatedData));
+            byte[] sealed = cipher.doFinal(plaintext);
+            int tagLength = GCM_TAG_BITS / Byte.SIZE;
+            return new EncryptedValue(
+                    keyId(masterKey),
+                    "AES-256-GCM",
+                    1,
+                    nonce,
+                    Arrays.copyOf(sealed, sealed.length - tagLength),
+                    Arrays.copyOfRange(sealed, sealed.length - tagLength, sealed.length),
+                    Instant.now());
+        } catch (Exception exception) {
+            throw new IllegalStateException("KFE purpose-bound encryption failed.", exception);
+        }
+    }
+
+    @Override
+    public byte[] decrypt(
+            CryptoPurpose purpose,
+            EncryptedValue encrypted,
+            byte[] associatedData) {
+        if (purpose == null || encrypted == null || associatedData == null || associatedData.length == 0) {
+            throw new IllegalArgumentException("Purpose, encrypted value and non-empty associated data are required.");
+        }
+        if (!"AES-256-GCM".equals(encrypted.algorithm()) || encrypted.version() != 1) {
+            throw new IllegalArgumentException("Unsupported KFE encrypted value algorithm or version.");
+        }
+        SecretKey key = decryptKeys.stream()
+                .filter(candidate -> keyId(candidate).equals(encrypted.keyId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "KFE encrypted value references an unavailable key version."));
+        try {
+            byte[] sealed = new byte[encrypted.ciphertext().length + encrypted.authenticationTag().length];
+            System.arraycopy(encrypted.ciphertext(), 0, sealed, 0, encrypted.ciphertext().length);
+            System.arraycopy(
+                    encrypted.authenticationTag(),
+                    0,
+                    sealed,
+                    encrypted.ciphertext().length,
+                    encrypted.authenticationTag().length);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, encrypted.nonce()));
+            cipher.updateAAD(domainSeparatedAad(purpose, associatedData));
+            return cipher.doFinal(sealed);
+        } catch (Exception exception) {
+            throw new IllegalStateException("KFE purpose-bound decryption failed.", exception);
+        }
+    }
+
+    @Override
+    public boolean needsRotation(EncryptedValue value) {
+        return value == null || !keyId(masterKey).equals(value.keyId());
+    }
+
+    private byte[] domainSeparatedAad(CryptoPurpose purpose, byte[] associatedData) {
+        byte[] prefix = ("KEROSENE|" + purpose.name() + "|v1|").getBytes(StandardCharsets.UTF_8);
+        byte[] result = new byte[prefix.length + associatedData.length];
+        System.arraycopy(prefix, 0, result, 0, prefix.length);
+        System.arraycopy(associatedData, 0, result, prefix.length, associatedData.length);
+        return result;
+    }
+
+    private String keyId(SecretKey key) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getEncoded());
+            return "kfe-column-" + java.util.HexFormat.of().formatHex(digest, 0, 8);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to identify KFE column key.", exception);
         }
     }
 

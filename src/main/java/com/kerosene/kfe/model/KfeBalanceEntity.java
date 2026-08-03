@@ -34,6 +34,9 @@ public class KfeBalanceEntity {
     @Column(name = "observed_sats", nullable = false)
     private long observedSats;
 
+    @Column(name = "reorg_debt_sats", nullable = false)
+    private long reorgDebtSats;
+
     /** Last successful observed probe quality (LIVE_MEMPOOL_AWARE, OPTIMISTIC_DELTA, …). */
     @Column(name = "observed_probe_quality", length = 32)
     private String observedProbeQuality;
@@ -105,7 +108,17 @@ public class KfeBalanceEntity {
 
     public void creditAvailable(long amountSats) {
         requirePositive(amountSats);
-        availableSats = Math.addExact(availableSats, amountSats);
+        long debtPayment = Math.min(reorgDebtSats, amountSats);
+        reorgDebtSats -= debtPayment;
+        availableSats = Math.addExact(availableSats, amountSats - debtPayment);
+        nonce++;
+    }
+
+    public void reverseAvailableCreditForReorg(long amountSats) {
+        requirePositive(amountSats);
+        long availableDebit = Math.min(availableSats, amountSats);
+        availableSats -= availableDebit;
+        reorgDebtSats = Math.addExact(reorgDebtSats, amountSats - availableDebit);
         nonce++;
     }
 
@@ -195,6 +208,17 @@ public class KfeBalanceEntity {
 
     public long getObservedSats() {
         return observedSats;
+    }
+
+    public long getReorgDebtSats() {
+        return reorgDebtSats;
+    }
+
+    public void setReorgDebtSats(long reorgDebtSats) {
+        if (reorgDebtSats < 0L) {
+            throw new IllegalArgumentException("reorgDebtSats must be non-negative.");
+        }
+        this.reorgDebtSats = reorgDebtSats;
     }
 
     public void setObservedSats(long observedSats) {

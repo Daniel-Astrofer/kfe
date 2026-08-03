@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Pageable;
 import com.kerosene.kfe.model.KfeDirection;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
@@ -53,7 +54,7 @@ class KfeOutboundConfirmationMonitorTest {
                 coldObservationService,
                 null, // KfeFinancialMetrics (null-safe)
                 50,
-                1,
+                finalityPolicy(1, 6),
                 5,
                 300);
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
@@ -90,7 +91,7 @@ class KfeOutboundConfirmationMonitorTest {
                 coldObservationService,
                 null, // KfeFinancialMetrics (null-safe)
                 50,
-                3,
+                finalityPolicy(3, 6),
                 5,
                 300);
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
@@ -196,5 +197,13 @@ class KfeOutboundConfirmationMonitorTest {
         tx.setSourceWalletId(UUID.randomUUID());
         tx.setUserId(1L);
         return tx;
+    }
+
+    private static KfeBitcoinFinalityPolicy finalityPolicy(int credit, int finality) {
+        KfeBitcoinFinalityPolicy policy = new KfeBitcoinFinalityPolicy();
+        policy.setCreditConfirmations(credit);
+        policy.setFinalityConfirmations(finality);
+        policy.setReorgMonitorConfirmations(Math.max(12, finality));
+        return policy;
     }
 }

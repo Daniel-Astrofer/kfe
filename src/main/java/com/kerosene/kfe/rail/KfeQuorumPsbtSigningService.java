@@ -162,6 +162,11 @@ public class KfeQuorumPsbtSigningService {
     }
 
     public OnchainExecution execute(KfeOnchainPaymentGateway.OnchainPaymentCommand command) {
+        return broadcast(prepare(command));
+    }
+
+    public KfeOnchainPaymentGateway.PreparedOnchainPayment prepare(
+            KfeOnchainPaymentGateway.OnchainPaymentCommand command) {
         BitcoinCoreRpcClient bitcoinCore = requireBitcoinCore();
         requireSignerCapacity();
 
@@ -179,9 +184,11 @@ public class KfeQuorumPsbtSigningService {
                 command.amountSats(),
                 confTarget,
                 feeRate,
-                changeType);
-        validateFundedPsbt(fundedPsbt, command.maxFeeSats());
-        String fundedPsbtHash = sha256(fundedPsbt.psbt());
+                changeType,
+                true);
+        try {
+            validateFundedPsbt(fundedPsbt, command.maxFeeSats());
+            String fundedPsbtHash = sha256(fundedPsbt.psbt());
 
         log.info(
                 "[KFE-PSBT] event=PSBT_CREATED userRef={} destinationRef={} walletNameRef={} amountSats={} feeRateSatVb={} confTarget={} fundedFeeSats={} meshOnly={}",
@@ -201,16 +208,24 @@ public class KfeQuorumPsbtSigningService {
         List<String> partialPsbts = new ArrayList<>();
         partialPsbts.add(fundedPsbt.psbt());
         List<String> acceptedSigners = new ArrayList<>();
+        Set<String> acceptedCryptographicSigners = new LinkedHashSet<>();
 
         // 1) Local Core wallet is a first-class production signer seat when enabled.
-        if (localCoreSignerEnabled && acceptedSigners.size() < requiredSignatures) {
+        if (localCoreSignerEnabled && acceptedCryptographicSigners.size() < requiredSignatures) {
             try {
                 String signed = bitcoinCore.walletProcessPsbt(fundedPsbt.psbt());
                 if (signed != null && !signed.isBlank()) {
                     // Verify this partial PSBT did not alter transaction structure.
-                    verifyPartialPsbtStructure(bitcoinCore, fundedPsbt.psbt(), signed, localCoreSignerId);
+                    Set<String> contribution = verifyPartialPsbtStructure(
+                            bitcoinCore, fundedPsbt.psbt(), signed, localCoreSignerId);
+                    contribution.removeAll(acceptedCryptographicSigners);
+                    if (contribution.isEmpty()) {
+                        throw new IllegalStateException(
+                                "Local Core signer did not add a distinct cryptographic signature.");
+                    }
                     partialPsbts.add(signed);
-                    acceptedSigners.add(localCoreSignerId);
+                    acceptedCryptographicSigners.addAll(contribution);
+                    contribution.forEach(key -> acceptedSigners.add(signerLabel(localCoreSignerId, key)));
                     log.info(
                             "[KFE-PSBT] event=PSBT_LOCAL_CORE_SIGNED userRef={} signerId={}",
                             LogSanitizer.fingerprint(String.valueOf(command.userId())),
@@ -226,7 +241,7 @@ public class KfeQuorumPsbtSigningService {
 
         // 2) Remote multiparty / HSM signers
         for (int index = 0; index < signerUrls.size(); index++) {
-            if (acceptedSigners.size() >= requiredSignatures) {
+            if (acceptedCryptographicSigners.size() >= requiredSignatures) {
                 break;
             }
             String signerUrl = signerUrls.get(index);
@@ -241,10 +256,16 @@ public class KfeQuorumPsbtSigningService {
                         command);
                 if (signature.signedPsbt() != null && !signature.signedPsbt().isBlank()) {
                     // Verify this partial PSBT did not alter transaction structure.
-                    verifyPartialPsbtStructure(
+                    Set<String> contribution = verifyPartialPsbtStructure(
                             bitcoinCore, fundedPsbt.psbt(), signature.signedPsbt(), expectedSignerId);
+                    contribution.removeAll(acceptedCryptographicSigners);
+                    if (contribution.isEmpty()) {
+                        throw new IllegalStateException(
+                                "Signer did not add a distinct cryptographic signature.");
+                    }
                     partialPsbts.add(signature.signedPsbt());
-                    acceptedSigners.add(signature.signerId());
+                    acceptedCryptographicSigners.addAll(contribution);
+                    contribution.forEach(key -> acceptedSigners.add(signerLabel(signature.signerId(), key)));
                 }
             } catch (Exception ex) {
                 log.warn(
@@ -255,13 +276,20 @@ public class KfeQuorumPsbtSigningService {
             }
         }
 
-        if (acceptedSigners.size() < requiredSignatures) {
+        if (acceptedCryptographicSigners.size() < requiredSignatures) {
             throw new IllegalStateException(
-                    "Quorum signing failed: " + acceptedSigners.size() + " of " + requiredSignatures
-                            + " signers responded (configuredSeats=" + configuredSignerCount() + ").");
+                    "Quorum signing failed: " + acceptedCryptographicSigners.size() + " of "
+                            + requiredSignatures + " distinct cryptographic signers contributed "
+                            + "(configuredSeats=" + configuredSignerCount() + ").");
         }
 
         String combinedPsbt = bitcoinCore.combinePsbt(partialPsbts);
+        Set<String> combinedCryptographicSigners = collectPartialSignerKeys(bitcoinCore.decodePsbt(combinedPsbt));
+        if (combinedCryptographicSigners.size() < requiredSignatures
+                || !combinedCryptographicSigners.containsAll(acceptedCryptographicSigners)) {
+            throw new IllegalStateException(
+                    "Combined PSBT does not preserve the required distinct cryptographic signatures.");
+        }
         // Verify combined PSBT before finalization.
         String intentId = firstNonBlank(
                 command.idempotencyKey(), "onchain-quorum-" + System.currentTimeMillis());
@@ -272,17 +300,21 @@ public class KfeQuorumPsbtSigningService {
                 command.destinationAddress(),
                 command.amountSats(),
                 intentId);
-        return finalizeAndBroadcast(
-                bitcoinCore,
-                command,
-                fundedPsbt,
-                fundedPsbtHash,
-                combinedPsbt,
-                acceptedSigners,
-                intentId);
+            return finalizePrepared(
+                    bitcoinCore,
+                    command,
+                    fundedPsbt,
+                    fundedPsbtHash,
+                    combinedPsbt,
+                    acceptedSigners,
+                    intentId);
+        } catch (RuntimeException exception) {
+            bitcoinCore.unlockPsbtInputsBestEffort(fundedPsbt.psbt());
+            throw exception;
+        }
     }
 
-    private OnchainExecution executeMeshSigned(
+    private KfeOnchainPaymentGateway.PreparedOnchainPayment executeMeshSigned(
             BitcoinCoreRpcClient bitcoinCore,
             KfeOnchainPaymentGateway.OnchainPaymentCommand command,
             BitcoinCoreRpcClient.FundedPsbt fundedPsbt,
@@ -322,7 +354,7 @@ public class KfeQuorumPsbtSigningService {
                 LogSanitizer.fingerprint(String.valueOf(command.userId())),
                 LogSanitizer.fingerprint(intentId),
                 LogSanitizer.fingerprint(receipt.signatureProof()));
-        return finalizeAndBroadcast(
+        return finalizePrepared(
                 bitcoinCore,
                 command,
                 fundedPsbt,
@@ -332,7 +364,7 @@ public class KfeQuorumPsbtSigningService {
                 intentId);
     }
 
-    private OnchainExecution finalizeAndBroadcast(
+    private KfeOnchainPaymentGateway.PreparedOnchainPayment finalizePrepared(
             BitcoinCoreRpcClient bitcoinCore,
             KfeOnchainPaymentGateway.OnchainPaymentCommand command,
             BitcoinCoreRpcClient.FundedPsbt fundedPsbt,
@@ -353,67 +385,149 @@ public class KfeQuorumPsbtSigningService {
                 bitcoinCore, fundedPsbt, finalizedPsbt.hex(),
                 command.destinationAddress(), command.amountSats(), intentId);
 
-        // [P0 ITEM 2] Test mempool acceptance before broadcast.
-        bitcoinCore.requireMempoolAccept(finalizedPsbt.hex());
-
-        String txid;
-        try {
-            txid = bitcoinCore.sendRawTransaction(finalizedPsbt.hex());
-        } catch (RuntimeException broadcastFailure) {
-            throw new KfeOnchainPaymentGateway.ProviderExecutionAmbiguous(
-                    "Bitcoin Core broadcast result is ambiguous.",
-                    combinedPsbtHash,
-                    metadataJson(
-                            fundedPsbtHash,
-                            combinedPsbtHash,
-                            rawTxHash,
-                            acceptedSigners,
-                            fundedPsbt.feeSats(),
-                            null,
-                            "UNKNOWN",
-                            intentId),
-                    broadcastFailure);
-        }
-        if (txid == null || txid.isBlank()) {
-            throw new KfeOnchainPaymentGateway.ProviderExecutionAmbiguous(
-                    "Bitcoin Core broadcast did not return a txid.",
-                    combinedPsbtHash,
-                    metadataJson(
-                            fundedPsbtHash,
-                            combinedPsbtHash,
-                            rawTxHash,
-                            acceptedSigners,
-                            fundedPsbt.feeSats(),
-                            null,
-                            "UNKNOWN",
-                            intentId),
-                    null);
+        JsonNode decodedRaw = bitcoinCore.decodeRawTransaction(finalizedPsbt.hex());
+        String expectedTxid = text(decodedRaw, "txid");
+        if (expectedTxid == null || !expectedTxid.matches("(?i)[0-9a-f]{64}")) {
+            throw new IllegalStateException("Bitcoin Core did not derive a valid txid for the finalized transaction.");
         }
 
-        log.info(
-                "[KFE-PSBT] event=PSBT_BROADCAST userRef={} txidRef={} signedBy={} destinationRef={} meshOnly={}",
-                LogSanitizer.fingerprint(String.valueOf(command.userId())),
-                LogSanitizer.fingerprint(txid),
-                acceptedSigners.size(),
-                LogSanitizer.fingerprint(command.destinationAddress()),
-                meshOnly);
-
-        return new OnchainExecution(
-                txid,
+        return new KfeOnchainPaymentGateway.PreparedOnchainPayment(
+                finalizedPsbt.hex(),
+                expectedTxid.toLowerCase(Locale.ROOT),
                 fundedPsbt.feeSats(),
                 fundedPsbtHash,
                 combinedPsbtHash,
                 rawTxHash,
                 acceptedSigners,
+                intentId,
                 metadataJson(
                         fundedPsbtHash,
                         combinedPsbtHash,
                         rawTxHash,
                         acceptedSigners,
                         fundedPsbt.feeSats(),
-                        txid,
-                        "MEMPOOL",
+                        expectedTxid,
+                        "PREPARED",
                         intentId));
+    }
+
+    public OnchainExecution broadcast(KfeOnchainPaymentGateway.PreparedOnchainPayment prepared) {
+        if (prepared == null
+                || prepared.rawTransaction() == null
+                || prepared.rawTransaction().isBlank()
+                || prepared.expectedTxid() == null
+                || !prepared.expectedTxid().matches("(?i)[0-9a-f]{64}")
+                || prepared.rawTransactionHash() == null
+                || !prepared.rawTransactionHash().matches("(?i)[0-9a-f]{64}")
+                || prepared.feeSats() < 0L
+                || prepared.acceptedSigners().isEmpty()) {
+            throw new IllegalArgumentException("A valid prepared raw transaction and expected txid are required.");
+        }
+        BitcoinCoreRpcClient bitcoinCore = requireBitcoinCore();
+        String rawTransaction = prepared.rawTransaction().trim();
+        String expectedTxid = prepared.expectedTxid().trim().toLowerCase(Locale.ROOT);
+        if (!MessageDigest.isEqual(
+                sha256(rawTransaction).getBytes(StandardCharsets.US_ASCII),
+                prepared.rawTransactionHash().getBytes(StandardCharsets.US_ASCII))) {
+            throw new IllegalArgumentException("Prepared raw transaction hash mismatch.");
+        }
+        JsonNode decoded = bitcoinCore.decodeRawTransaction(rawTransaction);
+        String decodedTxid = text(decoded, "txid");
+        if (decodedTxid == null || !expectedTxid.equals(decodedTxid.toLowerCase(Locale.ROOT))) {
+            throw new IllegalArgumentException("Prepared transaction does not decode to its expected txid.");
+        }
+
+        if (bitcoinCore.findTransactionConfirmations(expectedTxid).isPresent()) {
+            return completedExecution(prepared, expectedTxid, "KNOWN");
+        }
+
+        try {
+            bitcoinCore.requireMempoolAccept(rawTransaction);
+        } catch (RuntimeException policyRejection) {
+            if (bitcoinCore.findTransactionConfirmations(expectedTxid).isPresent()) {
+                return completedExecution(prepared, expectedTxid, "KNOWN");
+            }
+            bitcoinCore.unlockRawTransactionInputsBestEffort(rawTransaction);
+            throw new IllegalArgumentException(
+                    "Prepared transaction was rejected by Bitcoin Core mempool policy.",
+                    policyRejection);
+        }
+
+        try {
+            String returnedTxid = bitcoinCore.sendRawTransaction(rawTransaction);
+            if (returnedTxid == null || !expectedTxid.equals(returnedTxid.trim().toLowerCase(Locale.ROOT))) {
+                throw ambiguousBroadcast(
+                        prepared,
+                        "Bitcoin Core broadcast returned an unexpected or empty txid.",
+                        null);
+            }
+        } catch (KfeOnchainPaymentGateway.ProviderExecutionAmbiguous ambiguous) {
+            throw ambiguous;
+        } catch (RuntimeException broadcastFailure) {
+            if (!bitcoinCore.findTransactionConfirmations(expectedTxid).isPresent()) {
+                throw ambiguousBroadcast(
+                        prepared,
+                        "Bitcoin Core broadcast result is ambiguous.",
+                        broadcastFailure);
+            }
+        }
+        return completedExecution(prepared, expectedTxid, "MEMPOOL");
+    }
+
+    public void release(KfeOnchainPaymentGateway.PreparedOnchainPayment prepared) {
+        if (prepared != null && prepared.rawTransaction() != null && !prepared.rawTransaction().isBlank()) {
+            requireBitcoinCore().unlockRawTransactionInputsBestEffort(prepared.rawTransaction());
+        }
+    }
+
+    private KfeOnchainPaymentGateway.ProviderExecutionAmbiguous ambiguousBroadcast(
+            KfeOnchainPaymentGateway.PreparedOnchainPayment prepared,
+            String message,
+            Throwable cause) {
+        return new KfeOnchainPaymentGateway.ProviderExecutionAmbiguous(
+                message,
+                prepared.expectedTxid(),
+                metadataJson(
+                        prepared.fundedPsbtHash(),
+                        prepared.combinedPsbtHash(),
+                        prepared.rawTransactionHash(),
+                        prepared.acceptedSigners(),
+                        prepared.feeSats(),
+                        prepared.expectedTxid(),
+                        "UNKNOWN",
+                        prepared.intentId()),
+                cause);
+    }
+
+    private OnchainExecution completedExecution(
+            KfeOnchainPaymentGateway.PreparedOnchainPayment prepared,
+            String txid,
+            String status) {
+
+        log.info(
+                "[KFE-PSBT] event=PSBT_BROADCAST userRef={} txidRef={} signedBy={} destinationRef={} meshOnly={}",
+                LogSanitizer.fingerprint(prepared.intentId()),
+                LogSanitizer.fingerprint(txid),
+                prepared.acceptedSigners().size(),
+                "prepared",
+                meshOnly);
+
+        return new OnchainExecution(
+                txid,
+                prepared.feeSats(),
+                prepared.fundedPsbtHash(),
+                prepared.combinedPsbtHash(),
+                prepared.rawTransactionHash(),
+                prepared.acceptedSigners(),
+                metadataJson(
+                        prepared.fundedPsbtHash(),
+                        prepared.combinedPsbtHash(),
+                        prepared.rawTransactionHash(),
+                        prepared.acceptedSigners(),
+                        prepared.feeSats(),
+                        txid,
+                        status,
+                        prepared.intentId()));
     }
 
     private SignerSignature requestSignature(
@@ -685,7 +799,7 @@ public class KfeQuorumPsbtSigningService {
      * not alter the transaction inputs before contributing its signature. Counts
      * distinct cryptographic signers from PSBT partial_signatures.
      */
-    private void verifyPartialPsbtStructure(
+    private Set<String> verifyPartialPsbtStructure(
             BitcoinCoreRpcClient bitcoinCore,
             String originalPsbt,
             String partialPsbt,
@@ -711,21 +825,14 @@ public class KfeQuorumPsbtSigningService {
                     "Signer " + signerId + " altered PSBT inputs. Rejecting partial signature.");
         }
 
-        // Count distinct cryptographic signers from partial_signatures in the PSBT.
-        int distinctCryptoSigners = countDistinctPartialSigners(decodedPartial);
-        if (distinctCryptoSigners == 0) {
-            log.warn(
-                    "[KFE-PSBT] event=PSBT_NO_CRYPTO_SIG signerRef={} "
-                            + "WARNING: partial PSBT has no recognizable partial signatures.",
-                    LogSanitizer.fingerprint(signerId));
+        Set<String> originalSigners = collectPartialSignerKeys(decodedOriginal);
+        Set<String> contributedSigners = new LinkedHashSet<>(collectPartialSignerKeys(decodedPartial));
+        contributedSigners.removeAll(originalSigners);
+        if (contributedSigners.isEmpty()) {
+            throw new IllegalStateException(
+                    "Signer " + signerId + " returned a PSBT without a new cryptographic signature.");
         }
-        if (distinctCryptoSigners > 1) {
-            log.warn(
-                    "[KFE-PSBT] event=PSBT_MULTI_SIG signerRef={} distinctSigs={} "
-                            + "Partial PSBT contains multiple distinct signers.",
-                    LogSanitizer.fingerprint(signerId),
-                    distinctCryptoSigners);
-        }
+        return contributedSigners;
     }
 
     /**
@@ -843,21 +950,40 @@ public class KfeQuorumPsbtSigningService {
      * This counts cryptographic signatures, not self-claimed HTTP identities.
      */
     static int countDistinctPartialSigners(JsonNode decodedPsbt) {
+        return collectPartialSignerKeys(decodedPsbt).size();
+    }
+
+    static Set<String> collectPartialSignerKeys(JsonNode decodedPsbt) {
         if (decodedPsbt == null) {
-            return 0;
+            return Set.of();
         }
         JsonNode inputs = decodedPsbt.path("inputs");
         if (!inputs.isArray()) {
-            return 0;
+            return Set.of();
         }
         Set<String> uniquePubkeys = new TreeSet<>();
         for (JsonNode inputNode : inputs) {
             JsonNode partialSigs = inputNode.path("partial_signatures");
             if (partialSigs.isObject()) {
-                partialSigs.fieldNames().forEachRemaining(uniquePubkeys::add);
+                partialSigs.fieldNames().forEachRemaining(key -> addNormalizedSignerKey(uniquePubkeys, key));
+            }
+            JsonNode taprootScriptSigs = inputNode.path("taproot_script_path_sigs");
+            if (taprootScriptSigs.isObject()) {
+                taprootScriptSigs.fieldNames()
+                        .forEachRemaining(key -> addNormalizedSignerKey(uniquePubkeys, key));
             }
         }
-        return uniquePubkeys.size();
+        return Set.copyOf(uniquePubkeys);
+    }
+
+    private static void addNormalizedSignerKey(Set<String> target, String rawKey) {
+        if (rawKey == null) {
+            return;
+        }
+        String candidate = rawKey.trim().toLowerCase(Locale.ROOT).split("[,/:]", 2)[0];
+        if (candidate.matches("[0-9a-f]{64}") || candidate.matches("0[23][0-9a-f]{64}")) {
+            target.add(candidate);
+        }
     }
 
     /**
@@ -1043,6 +1169,11 @@ public class KfeQuorumPsbtSigningService {
 
     private String signerId(int index) {
         return index < signerIds.size() ? signerIds.get(index) : "signer-" + (index + 1);
+    }
+
+    private String signerLabel(String seatId, String cryptographicKey) {
+        String keyHash = sha256(cryptographicKey);
+        return firstNonBlank(seatId, "signer") + "#" + keyHash.substring(0, 16);
     }
 
     private List<String> splitCsv(String raw) {

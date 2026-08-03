@@ -85,7 +85,9 @@ class KfeExecutionTransactionHelperTest {
         when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
         when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
 
-        helper.settleOutbound(outboxId, transactionId, "provider", "new-provider-ref", "txid", 12L, walletId, "{}");
+        helper.settleOutbound(
+                outboxId, transactionId, outbox.getClaimToken(), "provider",
+                "new-provider-ref", "txid", 12L, walletId, "{}");
 
         assertThat(outbox.getStatus()).isEqualTo("DISPATCHED");
         assertThat(outbox.getProviderReference()).isEqualTo("new-provider-ref");
@@ -110,7 +112,8 @@ class KfeExecutionTransactionHelperTest {
         when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
         when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
 
-        helper.markFinalFailure(outboxId, transactionId, "NEW_FAILURE", "should not replay");
+        helper.markFinalFailure(
+                outboxId, transactionId, outbox.getClaimToken(), "NEW_FAILURE", "should not replay");
 
         assertThat(outbox.getStatus()).isEqualTo("FAILED_FINAL");
         assertThat(outbox.getAttempts()).isEqualTo(3);
@@ -135,7 +138,9 @@ class KfeExecutionTransactionHelperTest {
         when(outboxRepository.findByIdForUpdate(outboxId)).thenReturn(Optional.of(outbox));
         when(transactionRepository.findByIdForUpdate(transactionId)).thenReturn(Optional.of(tx));
 
-        helper.markFinalFailure(outboxId, transactionId, "PROVIDER_FINAL_FAILURE", "provider rejected payment");
+        helper.markFinalFailure(
+                outboxId, transactionId, outbox.getClaimToken(),
+                "PROVIDER_FINAL_FAILURE", "provider rejected payment");
 
         assertThat(outbox.getStatus()).isEqualTo("FAILED_FINAL");
         assertThat(outbox.getLastError()).isEqualTo("PROVIDER_FINAL_FAILURE: provider rejected payment");
@@ -160,6 +165,7 @@ class KfeExecutionTransactionHelperTest {
         helper.settleOutbound(
                 outboxId,
                 transactionId,
+                outbox.getClaimToken(),
                 "BITCOIN_CORE",
                 "provider-reference",
                 "blockchain-txid",
@@ -201,6 +207,7 @@ class KfeExecutionTransactionHelperTest {
         helper.settleOutbound(
                 outboxId,
                 transactionId,
+                outbox.getClaimToken(),
                 "BITCOIN_CORE",
                 "provider-reference",
                 "blockchain-txid",
@@ -234,6 +241,7 @@ class KfeExecutionTransactionHelperTest {
         helper(3).markRetryableFailure(
                 outboxId,
                 transactionId,
+                outbox.getClaimToken(),
                 "PROVIDER_RETRYABLE_FAILURE",
                 "Bitcoin provider unavailable");
 
@@ -261,6 +269,7 @@ class KfeExecutionTransactionHelperTest {
         helper(3).markRetryableFailure(
                 outboxId,
                 transactionId,
+                outbox.getClaimToken(),
                 "PROVIDER_RETRYABLE_FAILURE",
                 "Bitcoin provider unavailable");
 
@@ -314,6 +323,8 @@ class KfeExecutionTransactionHelperTest {
         outbox.setStatus("PROCESSING");
         outbox.setClaimedBy("worker");
         outbox.setClaimedAt(LocalDateTime.now());
+        outbox.setClaimToken(UUID.randomUUID());
+        outbox.setLeaseExpiresAt(LocalDateTime.now().plusMinutes(10));
         outbox.setPayloadHash("payload-hash");
         return outbox;
     }

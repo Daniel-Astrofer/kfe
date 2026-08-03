@@ -231,8 +231,8 @@ public class KfeSubmitTransactionUseCase {
                 : outcome.onchainOutboxId();
         UUID transactionId = outcome.transactionId();
         try {
-            boolean claimed = outboxService.claimImmediate(outboxId, SYNC_WORKER_ID);
-            if (!claimed) {
+            var claim = outboxService.claimImmediate(outboxId, SYNC_WORKER_ID);
+            if (claim.isEmpty()) {
                 log.info(
                         "[KFE Submit] {} outbox already claimed (async worker) outboxId={} txId={}",
                         railLabel,
@@ -244,7 +244,7 @@ public class KfeSubmitTransactionUseCase {
                         railLabel,
                         outboxId,
                         transactionId);
-                outboxProcessor.process(outboxId);
+                outboxProcessor.process(claim.orElseThrow());
             }
         } catch (RuntimeException exception) {
             // Processor already marks retryable/final failure in most paths; never fail the HTTP

@@ -36,7 +36,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
     private final StringRedisTemplate redisTemplate;
     private final String columnCryptoKeyBase64;
     private final boolean allowSharedSecretDerivation;
-    private final int depositMinimumConfirmationsGate;
+    private final KfeBitcoinFinalityPolicy finalityPolicy;
 
     public KfeProductionGateConfig(
             @Value("${api.secret.token.secret:}") String jwtSecret,
@@ -46,7 +46,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
             @Value("${kfe.auth.revocation.required:false}") boolean revocationRequired,
             @Value("${kfe.column-crypto.key-base64:}") String columnCryptoKeyBase64,
             @Value("${kfe.crypto.allow-shared-secret-derivation:false}") boolean allowSharedSecretDerivation,
-            @Value("${kfe.deposit.minimum-confirmations-gate:3}") int depositMinimumConfirmationsGate,
+            KfeBitcoinFinalityPolicy finalityPolicy,
             org.springframework.beans.factory.ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.jwtSecret = blankToEmpty(jwtSecret);
         this.jwtIssuer = blankToEmpty(jwtIssuer);
@@ -56,7 +56,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
         this.columnCryptoKeyBase64 = blankToEmpty(columnCryptoKeyBase64);
         this.allowSharedSecretDerivation = allowSharedSecretDerivation;
-        this.depositMinimumConfirmationsGate = depositMinimumConfirmationsGate;
+        this.finalityPolicy = finalityPolicy;
     }
 
     @Override
@@ -132,17 +132,18 @@ public class KfeProductionGateConfig implements ApplicationRunner {
                     + "mempool-only deposit credit is allowed.");
             return;
         }
-        if (depositMinimumConfirmationsGate < 1) {
+        int creditConfirmations = finalityPolicy.getCreditConfirmations();
+        if (creditConfirmations < 1) {
             throw new IllegalStateException(
-                    "kfe.deposit.minimum-confirmations-gate is "
-                            + depositMinimumConfirmationsGate
+                    "bitcoin.credit-confirmations is "
+                            + creditConfirmations
                             + " but production mode requires at least 1. "
                             + "Mempool-only deposit crediting (minConfirmations=0) is unsafe "
                             + "in production — a 0-conf tx can be double-spent. "
-                            + "Set kfe.deposit.minimum-confirmations-gate to 1 or higher "
+                            + "Set bitcoin.credit-confirmations to 1 or higher "
                             + "(default is 3) or set kfe.auth.production-mode=false for testing.");
         }
-        log.info("Deposit min-confirmations gate: {} (production, >=1 OK)", depositMinimumConfirmationsGate);
+        log.info("Deposit credit-confirmations gate: {} (production, >=1 OK)", creditConfirmations);
     }
 
     private static String blankToEmpty(String value) {

@@ -5,8 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
-
 import java.util.List;
 import java.util.UUID;
 
@@ -31,16 +29,16 @@ public class KfeExecutionOutboxWorker {
             fixedDelayString = "${kfe.execution.outbox.fixed-delay-ms:5000}",
             initialDelayString = "${kfe.execution.outbox.initial-delay-ms:10000}")
     public void drain() {
-        List<KfeExecutionOutboxEntity> claimed = outboxService.claimDue(workerId);
+        List<KfeExecutionOutboxService.ExecutionClaim> claimed = outboxService.claimDue(workerId);
         if (claimed.isEmpty()) {
             return;
         }
         log.info("[KFE Outbox] claimed {} item(s) workerId={}", claimed.size(), workerId);
-        for (KfeExecutionOutboxEntity item : claimed) {
+        for (KfeExecutionOutboxService.ExecutionClaim claim : claimed) {
             try {
-                processor.process(item.getId());
+                processor.process(claim);
             } catch (RuntimeException exception) {
-                log.warn("[KFE Outbox] Processing failed for {}: {}", item.getId(), exception.getMessage());
+                log.warn("[KFE Outbox] Processing failed for {}: {}", claim.outboxId(), exception.getMessage());
             }
         }
     }

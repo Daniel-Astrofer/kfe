@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -27,7 +28,10 @@ import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
+import org.springframework.data.domain.PageRequest;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +39,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.OptionalInt;
 
 /**
  * Detects external on-chain deposits into {@link KfeWalletKind#CUSTODIAL_ONCHAIN} addresses
@@ -79,6 +84,9 @@ public class KfeCustodialDepositObservationService {
     private final TransactionTemplate transactionTemplate;
     private final int batchSize;
     private final int minConfirmations;
+    private final KfeBitcoinFinalityPolicy finalityPolicy;
+    private final int missingObservationsBeforeReorg;
+    private final long missingSecondsBeforeReorg;
 
     public KfeCustodialDepositObservationService(
             KfeWalletRepository walletRepository,
@@ -100,9 +108,11 @@ public class KfeCustodialDepositObservationService {
             ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex,
             TransactionTemplate transactionTemplate,
             @Value("${kfe.custodial-deposit-observation.batch-size:30}") int batchSize,
-            @Value(
-                    "${kfe.custodial-deposit-observation.min-confirmations:${bitcoin.min-confirmations:3}}")
-                    int minConfirmations) {
+            KfeBitcoinFinalityPolicy finalityPolicy,
+            @Value("${kfe.custodial-deposit-observation.reorg-missing-observations:3}")
+                    int missingObservationsBeforeReorg,
+            @Value("${kfe.custodial-deposit-observation.reorg-missing-min-seconds:60}")
+                    long missingSecondsBeforeReorg) {
         this.walletRepository = walletRepository;
         this.addressRepository = addressRepository;
         this.transactionRepository = transactionRepository;
@@ -122,7 +132,10 @@ public class KfeCustodialDepositObservationService {
         this.addressIndex = addressIndex;
         this.transactionTemplate = transactionTemplate;
         this.batchSize = Math.max(1, batchSize);
-        this.minConfirmations = Math.max(0, minConfirmations);
+        this.finalityPolicy = finalityPolicy;
+        this.minConfirmations = finalityPolicy.getCreditConfirmations();
+        this.missingObservationsBeforeReorg = Math.max(2, missingObservationsBeforeReorg);
+        this.missingSecondsBeforeReorg = Math.max(0L, missingSecondsBeforeReorg);
     }
 
     @Scheduled(
@@ -150,139 +163,213 @@ public class KfeCustodialDepositObservationService {
             }
         }
 
-        // ITEM 9: Detect disappeared zero-conf deposits
-        detectDisappearedDeposits(client);
+        monitorKnownDepositFinality(client);
     }
 
-    /**
-     * ITEM 9: Periodically check VALIDATING/CONFIRMING inbound transactions and mark DROPPED
-     * when the txid no longer exists on chain (RBF'd/double-spent out of UTXOs).
-     */
-    private void detectDisappearedDeposits(BlockchainClient client) {
-        // Find all known wallets and check their unvalidated deposits
-        List<KfeWalletEntity> allActive = walletRepository.findByKindInAndStatus(
-                List.of(KfeWalletKind.CUSTODIAL_ONCHAIN, KfeWalletKind.INTERNAL),
-                KfeWalletStatus.ACTIVE);
-
-        for (KfeWalletEntity wallet : allActive.stream().limit(batchSize).toList()) {
-            List<KfeTransactionEntity> validating =
-                    transactionRepository.findByWalletIdAndStatusIn(
-                            wallet.getId(),
-                            List.of(KfeTransactionStatus.VALIDATING, KfeTransactionStatus.EXECUTING));
-            for (KfeTransactionEntity tx : validating) {
-                if (tx.getDirection() != KfeDirection.INBOUND
-                        || tx.getRail() != KfeRail.ONCHAIN
-                        || tx.getBlockchainTxid() == null
-                        || tx.getBlockchainTxid().isBlank()
-                        || tx.getStatus() == KfeTransactionStatus.DROPPED
-                        || tx.getStatus() == KfeTransactionStatus.SETTLED) {
-                    continue;
-                }
-                try {
-                    checkSingleDepositDisappeared(client, tx);
-                } catch (RuntimeException exception) {
-                    log.warn(
-                            "[KFE Custodial Deposit] disappeared check failed txId={}: {}",
-                            tx.getId(),
-                            exception.getMessage());
-                }
-            }
-        }
-    }
-
-    private void checkSingleDepositDisappeared(BlockchainClient client, KfeTransactionEntity tx) {
-        transactionTemplate.executeWithoutResult(status -> {
-            KfeTransactionEntity locked = transactionRepository
-                    .findByIdForUpdate(tx.getId()).orElse(null);
-            if (locked == null || locked.getStatus() == KfeTransactionStatus.DROPPED
-                    || locked.getStatus() == KfeTransactionStatus.SETTLED) {
-                return;
-            }
-
-            String txid = locked.getBlockchainTxid().trim();
-            // Query txid directly via Bitcoin Core
-            boolean exists;
+    private void monitorKnownDepositFinality(BlockchainClient client) {
+        List<KfeTransactionEntity> candidates = transactionRepository.findInboundUnderReorgMonitoring(
+                KfeRail.ONCHAIN,
+                KfeDirection.INBOUND,
+                List.of(
+                        KfeTransactionStatus.VALIDATING,
+                        KfeTransactionStatus.SETTLED,
+                        KfeTransactionStatus.REORG_RECONCILIATION),
+                PageRequest.of(0, batchSize));
+        for (KfeTransactionEntity candidate : candidates) {
+            OptionalInt confirmations = client.findTransactionConfirmations(candidate.getBlockchainTxid());
             try {
-                com.fasterxml.jackson.databind.JsonNode raw = client.getRawTransaction(txid, false);
-                exists = raw != null && !raw.isNull() && !raw.isMissingNode();
-            } catch (RuntimeException e) {
-                exists = false;
+                transactionTemplate.executeWithoutResult(
+                        ignored -> reconcileKnownDeposit(candidate.getId(), confirmations));
+            } catch (RuntimeException exception) {
+                log.warn(
+                        "[KFE Custodial Deposit] finality reconciliation failed txId={}: {}",
+                        candidate.getId(),
+                        exception.getMessage());
             }
-
-            if (!exists) {
-                // Check if tx was seen on network before (has had confirmations or mempool)
-                if (locked.getNetworkFirstSeenAt() != null) {
-                    locked.setStatus(KfeTransactionStatus.DROPPED);
-                    locked.setFailureCode("DEPOSIT_DROPPED");
-                    locked.setFailureMessage(
-                            "Transaction no longer exists on chain. May have been RBF-replaced or evicted.");
-                    locked.setConfirmationMonitoringActive(false);
-                    transactionRepository.save(locked);
-
-                    Map<String, Object> stmt = new LinkedHashMap<>(
-                            responseMapper.buildDisplayPayload(locked, locked.getUserId()));
-                    stmt.put("dropped", true);
-                    stmt.put("originalTxid", txid);
-                    statementService.recordUserStatement(
-                            locked.getUserId(),
-                            locked.getDestinationWalletId(),
-                            locked,
-                            stmt);
-
-                    auditLogService.record(
-                            "KFE_INBOUND_DROPPED",
-                            locked.getId(),
-                            locked.getDestinationWalletId(),
-                            KfeTransactionStatus.VALIDATING,
-                            KfeTransactionStatus.DROPPED,
-                            Map.of("txid", txid));
-
-                    log.warn(
-                            "[KFE Custodial Deposit] DROPPED deposit walletId={} txid={} — tx no longer on chain",
-                            locked.getDestinationWalletId(),
-                            txid);
-
-                    scheduleDepositDropNotification(locked);
-                }
-            } else if (locked.getNetworkFirstSeenAt() == null) {
-                locked.setNetworkFirstSeenAt(
-                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
-                transactionRepository.save(locked);
-            }
-        });
+        }
     }
 
-    private void scheduleDepositDropNotification(KfeTransactionEntity tx) {
-        final Long userId = tx.getUserId();
-        final UUID txId = tx.getId();
-        final UUID walletId = tx.getDestinationWalletId();
-        final long amount = Math.max(0L, tx.getReceiverAmountSats());
-        if (!org.springframework.transaction.support.TransactionSynchronizationManager
-                .isSynchronizationActive()) {
-            fireDepositDropNotification(userId, txId, walletId, amount);
+    private void reconcileKnownDeposit(UUID transactionId, OptionalInt observedConfirmations) {
+        KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
+        if (tx == null || !tx.isConfirmationMonitoringActive()) {
             return;
         }
-        org.springframework.transaction.support.TransactionSynchronizationManager
-                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
-                    @Override
-                    public void afterCommit() {
-                        fireDepositDropNotification(userId, txId, walletId, amount);
-                    }
-                });
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        tx.setLastChainProbeAt(now);
+        if (observedConfirmations.isEmpty()) {
+            recordMissingDepositProbe(tx, now);
+            transactionRepository.save(tx);
+            return;
+        }
+
+        int confirmations = observedConfirmations.getAsInt();
+        tx.setLastChainProbeStatus(confirmations < 0 ? "CONFLICTED" : "FOUND");
+        tx.setNetworkLastSeenAt(now);
+        tx.setNetworkNotFoundSince(null);
+        tx.setNetworkNotFoundCount(0);
+        tx.setConfirmations(confirmations);
+
+        if (confirmations < minConfirmations) {
+            if (alreadyCreditedAvailable(tx.getId())) {
+                compensateCreditedDeposit(tx, confirmations < 0 ? "CHAIN_CONFLICT" : "CONFIRMATIONS_REORGED");
+            } else if (confirmations < 0) {
+                markUncreditedDepositDropped(tx, "CHAIN_CONFLICT");
+            } else {
+                transactionRepository.save(tx);
+            }
+            return;
+        }
+
+        if (tx.getStatus() == KfeTransactionStatus.REORG_RECONCILIATION) {
+            restoreReorgedDeposit(tx);
+        } else if (tx.getStatus() != KfeTransactionStatus.SETTLED) {
+            settleKnownDeposit(tx);
+        }
+        if (confirmations >= finalityPolicy.getReorgMonitorConfirmations()) {
+            tx.setConfirmationMonitoringActive(false);
+        }
+        transactionRepository.save(tx);
     }
 
-    private void fireDepositDropNotification(Long userId, UUID txId, UUID walletId, long amount) {
-        FinancialNotificationPort port = notificationPort.getIfAvailable();
-        if (port == null) {
+    private void recordMissingDepositProbe(KfeTransactionEntity tx, LocalDateTime now) {
+        tx.setLastChainProbeStatus("NOT_FOUND");
+        if (tx.getNetworkNotFoundSince() == null) {
+            tx.setNetworkNotFoundSince(now);
+            tx.setNetworkNotFoundCount(1);
             return;
         }
-        try {
-            // Use notifyPaymentFailed as fallback for deposit drop (notifyDepositDropped may not exist yet)
-            port.notifyPaymentFailed(userId, txId, walletId, "ONCHAIN", amount,
-                    "DEPOSIT_DROPPED", "Deposit transaction no longer on chain.");
-        } catch (RuntimeException exception) {
-            log.warn("[KFE Custodial Deposit] drop notification failed txId={}: {}", txId, exception.getMessage());
+        tx.setNetworkNotFoundCount(tx.getNetworkNotFoundCount() + 1);
+        boolean observationsMet = tx.getNetworkNotFoundCount() >= missingObservationsBeforeReorg;
+        boolean durationMet = !tx.getNetworkNotFoundSince().plusSeconds(missingSecondsBeforeReorg).isAfter(now);
+        if (!observationsMet || !durationMet) {
+            return;
         }
+        if (alreadyCreditedAvailable(tx.getId())) {
+            compensateCreditedDeposit(tx, "TRANSACTION_DISAPPEARED");
+        } else {
+            markUncreditedDepositDropped(tx, "TRANSACTION_DISAPPEARED");
+        }
+    }
+
+    private void compensateCreditedDeposit(KfeTransactionEntity tx, String reason) {
+        if (tx.getStatus() == KfeTransactionStatus.REORG_RECONCILIATION) {
+            return;
+        }
+        UUID walletId = tx.getDestinationWalletId();
+        long creditSats = Math.max(0L, tx.getReceiverAmountSats());
+        if (creditSats <= 0L || walletId == null) {
+            throw new IllegalStateException("Credited deposit lacks wallet or amount for reorg compensation.");
+        }
+        boolean wrote = movementRecorder.record(
+                tx.getId(),
+                walletId,
+                KfeLedgerMovementTypes.REVERSAL_DEBIT,
+                creditSats,
+                "AVAILABLE_OR_DEBT",
+                "CHAIN_REORG");
+        if (!wrote) {
+            throw new IllegalStateException(
+                    "Reorg reversal movement already exists while transaction is not in reconciliation.");
+        }
+        KfeBalanceService.ReorgDebitResult result =
+                balanceService.reverseAvailableCreditForReorg(walletId, ASSET_BTC, creditSats);
+        if (result.debtAddedSats() > 0L) {
+            movementRecorder.record(
+                    tx.getId(),
+                    walletId,
+                    KfeLedgerMovementTypes.REORG_DEBT,
+                    result.debtAddedSats(),
+                    null,
+                    "REORG_DEBT");
+        }
+        feeSettlementService.reverseKeroseneFeeForReorg(tx);
+        KfeTransactionStatus previous = tx.getStatus();
+        tx.setStatus(KfeTransactionStatus.REORG_RECONCILIATION);
+        tx.setFailureCode("DEPOSIT_REORG");
+        tx.setFailureMessage("Deposit backing was lost or fell below the credit confirmation threshold.");
+        transactionRepository.save(tx);
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("reason", reason);
+        audit.put("confirmations", tx.getConfirmations());
+        audit.put("creditSats", creditSats);
+        audit.put("debitedSats", result.debitedSats());
+        audit.put("debtAddedSats", result.debtAddedSats());
+        auditLogService.record(
+                "KFE_INBOUND_REORG_COMPENSATED",
+                tx.getId(),
+                walletId,
+                previous,
+                KfeTransactionStatus.REORG_RECONCILIATION,
+                audit);
+        recordDepositStatement(tx, walletId, true);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void restoreReorgedDeposit(KfeTransactionEntity tx) {
+        UUID walletId = tx.getDestinationWalletId();
+        long creditSats = Math.max(0L, tx.getReceiverAmountSats());
+        if (creditSats <= 0L || walletId == null) {
+            throw new IllegalStateException("Reorged deposit lacks wallet or amount for restoration.");
+        }
+        boolean wrote = movementRecorder.record(
+                tx.getId(),
+                walletId,
+                KfeLedgerMovementTypes.REORG_RESTORE_CREDIT,
+                creditSats,
+                "CHAIN_REORG",
+                "AVAILABLE_OR_DEBT");
+        if (!wrote) {
+            throw new IllegalStateException(
+                    "Reorg restoration movement already exists while transaction remains in reconciliation.");
+        }
+        balanceService.creditAvailable(walletId, ASSET_BTC, creditSats);
+        feeSettlementService.restoreKeroseneFeeAfterReorg(tx);
+        tx.setStatus(KfeTransactionStatus.SETTLED);
+        tx.setFailureCode(null);
+        tx.setFailureMessage(null);
+        auditLogService.record(
+                "KFE_INBOUND_REORG_RECOVERED",
+                tx.getId(),
+                walletId,
+                KfeTransactionStatus.REORG_RECONCILIATION,
+                KfeTransactionStatus.SETTLED,
+                Map.of("confirmations", tx.getConfirmations(), "creditSats", creditSats));
+        recordDepositStatement(tx, walletId, false);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void settleKnownDeposit(KfeTransactionEntity tx) {
+        UUID walletId = tx.getDestinationWalletId();
+        long creditSats = Math.max(0L, tx.getReceiverAmountSats());
+        if (!alreadyCreditedAvailable(tx.getId())
+                && creditAvailableOnce(tx.getId(), walletId, creditSats)) {
+            feeSettlementService.creditKeroseneFee(tx);
+        }
+        tx.setStatus(KfeTransactionStatus.SETTLED);
+        recordDepositStatement(tx, walletId, false);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void markUncreditedDepositDropped(KfeTransactionEntity tx, String reason) {
+        tx.setStatus(KfeTransactionStatus.DROPPED);
+        tx.setFailureCode("DEPOSIT_DROPPED");
+        tx.setFailureMessage("Deposit transaction is no longer confirmed by Bitcoin Core.");
+        tx.setConfirmationMonitoringActive(false);
+        auditLogService.record(
+                "KFE_INBOUND_DROPPED",
+                tx.getId(),
+                tx.getDestinationWalletId(),
+                KfeTransactionStatus.VALIDATING,
+                KfeTransactionStatus.DROPPED,
+                Map.of("reason", reason));
+        recordDepositStatement(tx, tx.getDestinationWalletId(), false);
+        dashboardPublisher.publishAfterCommit(tx.getUserId());
+    }
+
+    private void recordDepositStatement(KfeTransactionEntity tx, UUID walletId, boolean reorg) {
+        Map<String, Object> statement = new LinkedHashMap<>(responseMapper.buildDisplayPayload(tx, tx.getUserId()));
+        statement.put("reorg", reorg);
+        statementService.recordUserStatement(tx.getUserId(), walletId, tx, statement);
     }
 
     /** Public entry for ZMQ / reactive path. */
@@ -623,6 +710,13 @@ public class KfeCustodialDepositObservationService {
         tx.setProviderReference(txid);
         tx.setBlockchainTxid(txid);
         tx.setConfirmations(confs);
+        LocalDateTime observedAt = LocalDateTime.now(ZoneOffset.UTC);
+        tx.setNetworkFirstSeenAt(observedAt);
+        tx.setNetworkLastSeenAt(observedAt);
+        tx.setLastChainProbeAt(observedAt);
+        tx.setLastChainProbeStatus("FOUND");
+        tx.setConfirmationMonitoringActive(
+                confs < finalityPolicy.getReorgMonitorConfirmations());
         tx.setStatus(status);
         tx = transactionRepository.save(tx);
 

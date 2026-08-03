@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -54,8 +55,7 @@ public class KfeNetworkMonitor {
             ObjectProvider<LightningInvoiceGateway> lightningInvoiceGateway,
             ObjectMapper objectMapper,
             @Value("${kfe.network-monitor.batch-size:50}") int batchSize,
-            @Value("${kfe.network-monitor.onchain.min-confirmations:${bitcoin.min-confirmations:3}}")
-            int minOnchainConfirmations) {
+            KfeBitcoinFinalityPolicy finalityPolicy) {
         this.outboxRepository = outboxRepository;
         this.transactionRepository = transactionRepository;
         this.settlementService = settlementService;
@@ -63,8 +63,7 @@ public class KfeNetworkMonitor {
         this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.objectMapper = objectMapper;
         this.batchSize = Math.max(1, batchSize);
-        // Allow 0 for mempool-settlement (local/dev). Production should keep >= 1.
-        this.minOnchainConfirmations = Math.max(0, minOnchainConfirmations);
+        this.minOnchainConfirmations = finalityPolicy.getCreditConfirmations();
     }
 
     @Scheduled(

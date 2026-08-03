@@ -88,6 +88,22 @@ public interface KfeTransactionRepository extends JpaRepository<KfeTransactionEn
             @Param("maxConfirmations") int maxConfirmations,
             Pageable pageable);
 
+    @Query("""
+            select t from KfeTransactionEntity t
+            where t.rail = :rail
+              and t.direction = :direction
+              and t.status in :statuses
+              and t.confirmationMonitoringActive = true
+              and t.blockchainTxid is not null
+              and t.blockchainTxid <> ''
+            order by t.updatedAt asc
+            """)
+    List<KfeTransactionEntity> findInboundUnderReorgMonitoring(
+            @Param("rail") KfeRail rail,
+            @Param("direction") KfeDirection direction,
+            @Param("statuses") Collection<KfeTransactionStatus> statuses,
+            Pageable pageable);
+
     List<KfeTransactionEntity> findTop25ByUserIdOrderByCreatedAtDesc(Long userId);
 
     List<KfeTransactionEntity> findTop200ByUserIdOrderByCreatedAtDesc(Long userId);

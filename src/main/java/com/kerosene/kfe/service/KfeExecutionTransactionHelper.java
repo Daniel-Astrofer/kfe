@@ -138,35 +138,38 @@ public class KfeExecutionTransactionHelper {
             String idempotencyKey,
             String quorumProposalHash,
             Long feeRateSatsPerVbyte,
-            Integer feeTargetBlocks
+            Integer feeTargetBlocks,
+            UUID claimToken
     ) {
-        private static PreparationResult skip() {
+        private static PreparationResult skip(UUID claimToken) {
             return new PreparationResult(
-                    false, null, null, null, null, null, null, 0, 0, null, null, null, null, null);
+                    false, null, null, null, null, null, null, 0, 0, null, null, null, null, null,
+                    claimToken);
         }
     }
 
     @Transactional
-    public PreparationResult prepare(UUID outboxId) {
+    public PreparationResult prepare(UUID outboxId, UUID claimToken) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId).orElse(null);
-        if (outbox == null || !"PROCESSING".equals(outbox.getStatus()) || outbox.getClaimedBy() == null || outbox.getClaimedAt() == null) {
-            return PreparationResult.skip();
+        if (outbox == null) {
+            return PreparationResult.skip(claimToken);
         }
+        requireClaimOwnership(outbox, claimToken);
 
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(outbox.getTransactionId()).orElse(null);
         if (tx == null) {
             markOutboxFailed(outbox, "TRANSACTION_NOT_FOUND", "KFE transaction does not exist.", false);
-            return PreparationResult.skip();
+            return PreparationResult.skip(claimToken);
         }
         if (tx.getStatus() == KfeTransactionStatus.SETTLED || tx.getStatus() == KfeTransactionStatus.FAILED) {
             markOutboxDispatched(outbox, firstNonBlank(tx.getProviderReference(), tx.getBlockchainTxid(), tx.getPaymentHash()));
-            return PreparationResult.skip();
+            return PreparationResult.skip(claimToken);
         }
         if (tx.getStatus() != KfeTransactionStatus.EXECUTING
                 && tx.getStatus() != KfeTransactionStatus.REQUIRES_RECONCILIATION) {
             markOutboxFailed(outbox, "INVALID_TRANSACTION_STATUS",
                     "KFE transaction is not executable in status " + tx.getStatus() + ".", false);
-            return PreparationResult.skip();
+            return PreparationResult.skip(claimToken);
         }
 
         String op = outbox.getOperation() != null ? outbox.getOperation().trim().toUpperCase() : "";
@@ -183,23 +186,25 @@ public class KfeExecutionTransactionHelper {
             log.info(
                     "[KFE Outbox] skip re-broadcast txId={} already has blockchainTxid",
                     tx.getId());
-            return PreparationResult.skip();
+            return PreparationResult.skip(claimToken);
         }
         if (!"ONCHAIN_OUTBOUND".equals(op) && !"LIGHTNING_OUTBOUND".equals(op)) {
             if ("ONCHAIN_INBOUND".equals(op) || "LIGHTNING_INBOUND".equals(op)) {
                 markRequiresReconciliation(
                         outbox.getId(),
                         tx.getId(),
+                        claimToken,
                         "INBOUND_REQUIRES_TRUSTED_MONITOR",
                         "Inbound settlement must be performed by a trusted KFE network monitor.");
             } else {
                 markFinalFailure(
                         outbox.getId(),
                         tx.getId(),
+                        claimToken,
                         "UNSUPPORTED_OPERATION",
                         "Unsupported KFE outbox operation " + outbox.getOperation() + ".");
             }
-            return PreparationResult.skip();
+            return PreparationResult.skip(claimToken);
         }
 
         KfeWalletEntity sourceWallet = walletRepository.findById(tx.getSourceWalletId())
@@ -233,9 +238,10 @@ public class KfeExecutionTransactionHelper {
                 markFinalFailure(
                         outbox.getId(),
                         tx.getId(),
+                        claimToken,
                         "INVALID_QUOTE",
                         "Fee quote validation failed: " + quoteError.getMessage());
-                return PreparationResult.skip();
+                return PreparationResult.skip(claimToken);
             }
         }
 
@@ -253,7 +259,8 @@ public class KfeExecutionTransactionHelper {
                 tx.getIdempotencyKey(),
                 tx.getQuorumProposalHash(),
                 feeRate,
-                feeTarget
+                feeTarget,
+                claimToken
         );
     }
 
@@ -265,6 +272,7 @@ public class KfeExecutionTransactionHelper {
     public void recordOutboundBroadcast(
             UUID outboxId,
             UUID transactionId,
+            UUID claimToken,
             String provider,
             String providerReference,
             String blockchainTxid,
@@ -273,6 +281,7 @@ public class KfeExecutionTransactionHelper {
             String providerPayload) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        requireClaimOwnership(outbox, claimToken);
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, providerReference)) {
@@ -606,6 +615,7 @@ public class KfeExecutionTransactionHelper {
     public void settleOutbound(
             UUID outboxId,
             UUID transactionId,
+            UUID claimToken,
             String provider,
             String providerReference,
             String blockchainTxid,
@@ -616,6 +626,7 @@ public class KfeExecutionTransactionHelper {
         // recordOutboundBroadcast + settleOutboundWhenConfirmed.
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        requireClaimOwnership(outbox, claimToken);
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, providerReference)) {
@@ -662,6 +673,7 @@ public class KfeExecutionTransactionHelper {
     public void settleOutboundLightning(
             UUID outboxId,
             UUID transactionId,
+            UUID claimToken,
             String provider,
             String providerReference,
             String blockchainTxid,
@@ -671,6 +683,7 @@ public class KfeExecutionTransactionHelper {
             String providerPayload) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        requireClaimOwnership(outbox, claimToken);
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, firstNonBlank(providerReference, paymentHash, blockchainTxid))) {
@@ -861,11 +874,13 @@ public class KfeExecutionTransactionHelper {
     public void markUnknown(
             UUID outboxId,
             UUID transactionId,
+            UUID claimToken,
             String providerReference,
             String providerPayload,
             String message) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        requireClaimOwnership(outbox, claimToken);
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, providerReference)) {
@@ -884,7 +899,8 @@ public class KfeExecutionTransactionHelper {
         outbox.setStatus("UNKNOWN");
         outbox.setProviderReference(providerReference);
         outbox.setLastError(trim(message, 1000));
-        outbox.setNextAttemptAt(null);
+        long retryDelaySeconds = Math.min(300L, 1L << Math.min(outbox.getAttempts(), 8));
+        outbox.setNextAttemptAt(LocalDateTime.now(java.time.ZoneOffset.UTC).plusSeconds(retryDelaySeconds));
         clearClaim(outbox);
         outboxRepository.save(outbox);
         dashboardPublisher.publishAfterCommit(tx.getUserId());
@@ -912,10 +928,12 @@ public class KfeExecutionTransactionHelper {
     public void markRetryableFailure(
             UUID outboxId,
             UUID transactionId,
+            UUID claimToken,
             String code,
             String message) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        requireClaimOwnership(outbox, claimToken);
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, null)) {
@@ -947,8 +965,20 @@ public class KfeExecutionTransactionHelper {
             UUID transactionId,
             String code,
             String message) {
-        KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
-                .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        markFinalFailure(outboxId, transactionId, null, code, message);
+    }
+
+    @Transactional
+    public void markFinalFailure(
+            UUID outboxId,
+            UUID transactionId,
+            UUID claimToken,
+            String code,
+            String message) {
+        KfeExecutionOutboxEntity outbox = resolveOutbox(outboxId, transactionId);
+        if (outboxId != null) {
+            requireClaimOwnership(outbox, claimToken);
+        }
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
         if (completeTerminalOutboxIfTransactionTerminal(outbox, tx, null)) {
@@ -1170,8 +1200,20 @@ public class KfeExecutionTransactionHelper {
             UUID transactionId,
             String code,
             String message) {
-        KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
-                .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        markRequiresReconciliation(outboxId, transactionId, null, code, message);
+    }
+
+    @Transactional
+    public void markRequiresReconciliation(
+            UUID outboxId,
+            UUID transactionId,
+            UUID claimToken,
+            String code,
+            String message) {
+        KfeExecutionOutboxEntity outbox = resolveOutbox(outboxId, transactionId);
+        if (outboxId != null) {
+            requireClaimOwnership(outbox, claimToken);
+        }
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId)
                 .orElseThrow(() -> new IllegalStateException("Transaction not found: " + transactionId));
 
@@ -1407,9 +1449,35 @@ public class KfeExecutionTransactionHelper {
         }
     }
 
+    private KfeExecutionOutboxEntity resolveOutbox(UUID outboxId, UUID transactionId) {
+        if (outboxId != null) {
+            return outboxRepository.findByIdForUpdate(outboxId)
+                    .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
+        }
+        UUID resolvedId = outboxRepository.findByTransactionId(transactionId).stream()
+                .map(KfeExecutionOutboxEntity::getId)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Outbox not found for transaction: " + transactionId));
+        return outboxRepository.findByIdForUpdate(resolvedId)
+                .orElseThrow(() -> new IllegalStateException("Outbox not found: " + resolvedId));
+    }
+
+    private void requireClaimOwnership(KfeExecutionOutboxEntity outbox, UUID claimToken) {
+        if (outbox == null
+                || claimToken == null
+                || !"PROCESSING".equals(outbox.getStatus())
+                || outbox.getClaimToken() == null
+                || !outbox.getClaimToken().equals(claimToken)) {
+            throw new KfeExecutionClaimLostException(outbox != null ? outbox.getId() : null);
+        }
+    }
+
     private void clearClaim(KfeExecutionOutboxEntity outbox) {
         outbox.setClaimedBy(null);
         outbox.setClaimedAt(null);
+        outbox.setClaimToken(null);
+        outbox.setLeaseExpiresAt(null);
     }
 
     private String text(JsonNode payload, String field, String fallback) {

@@ -1,5 +1,7 @@
 package com.kerosene.kfe.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
@@ -17,51 +19,90 @@ import java.util.UUID;
 public class KfeExecutionOutboxService {
 
     private static final List<String> DUE_STATUSES = List.of("PENDING", "FAILED_RETRYABLE");
-    private static final Duration STALE_CLAIM_AFTER = Duration.ofMinutes(10);
-
+    private static final List<String> RECOVERABLE_OPERATIONS =
+            List.of("ONCHAIN_OUTBOUND", "LIGHTNING_OUTBOUND");
     private final KfeExecutionOutboxRepository repository;
+    private final Duration leaseDuration;
 
-    public KfeExecutionOutboxService(KfeExecutionOutboxRepository repository) {
+    @Autowired
+    public KfeExecutionOutboxService(
+            KfeExecutionOutboxRepository repository,
+            @Value("${kfe.execution.outbox.lease-seconds:600}") long leaseSeconds) {
         this.repository = repository;
+        if (leaseSeconds < 30L || leaseSeconds > 3600L) {
+            throw new IllegalArgumentException("kfe.execution.outbox.lease-seconds must be between 30 and 3600.");
+        }
+        this.leaseDuration = Duration.ofSeconds(leaseSeconds);
+    }
+
+    KfeExecutionOutboxService(KfeExecutionOutboxRepository repository) {
+        this(repository, 600L);
+    }
+
+    public record ExecutionClaim(UUID outboxId, UUID claimToken) {
     }
 
     @Transactional
-    public List<KfeExecutionOutboxEntity> claimDue(String workerId) {
+    public List<ExecutionClaim> claimDue(String workerId) {
         String normalizedWorkerId = normalizeWorkerId(workerId);
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
-        LocalDateTime staleClaimBefore = now.minus(STALE_CLAIM_AFTER);
-        return repository.findTop100ClaimCandidates(DUE_STATUSES, now, staleClaimBefore)
+        return repository.findTop100ClaimCandidates(DUE_STATUSES, RECOVERABLE_OPERATIONS, now)
                 .stream()
                 .limit(100)
-                .map(candidate -> claim(candidate.getId(), normalizedWorkerId, now, staleClaimBefore))
+                .map(candidate -> claim(candidate.getId(), normalizedWorkerId, now))
                 .flatMap(Optional::stream)
                 .toList();
     }
 
-    private Optional<KfeExecutionOutboxEntity> claim(
+    private Optional<ExecutionClaim> claim(
             UUID outboxId,
             String workerId,
-            LocalDateTime now,
-            LocalDateTime staleClaimBefore) {
-        int updated = repository.claimDue(outboxId, DUE_STATUSES, now, staleClaimBefore, workerId);
+            LocalDateTime now) {
+        UUID claimToken = UUID.randomUUID();
+        int updated = repository.claimDue(
+                outboxId,
+                DUE_STATUSES,
+                RECOVERABLE_OPERATIONS,
+                now,
+                workerId,
+                claimToken,
+                now.plus(leaseDuration));
         if (updated == 0) {
             return Optional.empty();
         }
-        return repository.findById(outboxId);
+        return Optional.of(new ExecutionClaim(outboxId, claimToken));
     }
 
-    /**
-     * Claim one outbox item right after submit so Lightning can settle in the request path.
-     * Returns true when this caller owns the claim and should call the processor.
-     */
+    /** Claim one outbox item right after submit and return its fenced ownership token. */
     @Transactional
-    public boolean claimImmediate(UUID outboxId, String workerId) {
+    public Optional<ExecutionClaim> claimImmediate(UUID outboxId, String workerId) {
         if (outboxId == null) {
-            return false;
+            return Optional.empty();
         }
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
-        int updated = repository.claimImmediate(outboxId, now, normalizeWorkerId(workerId));
-        return updated > 0;
+        UUID claimToken = UUID.randomUUID();
+        int updated = repository.claimImmediate(
+                outboxId,
+                now,
+                normalizeWorkerId(workerId),
+                claimToken,
+                now.plus(leaseDuration));
+        return updated > 0
+                ? Optional.of(new ExecutionClaim(outboxId, claimToken))
+                : Optional.empty();
+    }
+
+    @Transactional
+    public boolean heartbeat(ExecutionClaim claim) {
+        if (claim == null || claim.outboxId() == null || claim.claimToken() == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        return repository.heartbeat(
+                claim.outboxId(),
+                claim.claimToken(),
+                now,
+                now.plus(leaseDuration)) == 1;
     }
 
     private String normalizeWorkerId(String workerId) {

@@ -1,8 +1,21 @@
 package com.kerosene.kfe.rail;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class LndRestLightningClientPaymentTest {
 
@@ -47,5 +60,57 @@ class LndRestLightningClientPaymentTest {
         assertThat(LndRestLightningClient.isPermanentLightningClientError(
                 "payment attempt not completed before timeout"))
                 .isFalse();
+    }
+
+    @Test
+    void reconcilesSucceededPaymentWithoutSendingItAgain() {
+        String paymentHash = "ab".repeat(32);
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.exchange(
+                contains("/v1/payreq/"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"payment_hash\":\"" + paymentHash
+                        + "\",\"num_satoshis\":\"1000\"}"));
+        when(restTemplate.exchange(
+                contains("/v1/payments?"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"payments\":[{\"payment_hash\":\""
+                        + paymentHash + "\",\"status\":\"SUCCEEDED\",\"fee_sat\":\"2\"}]}"));
+        @SuppressWarnings("unchecked")
+        ObjectProvider<LnurlPayResolver> resolver = mock(ObjectProvider.class);
+        when(resolver.getIfAvailable()).thenReturn(null);
+        LndRestLightningClient client = new LndRestLightningClient(
+                restTemplate,
+                new ObjectMapper(),
+                "https://lnd.internal:8080",
+                "00",
+                30,
+                3600,
+                resolver);
+        CustodyGateway.LightningPaymentCommand command = new CustodyGateway.LightningPaymentCommand(
+                42L,
+                null,
+                "wallet",
+                "lntb10u1p49n88hpp5j50pdjyzl5rvxh6v6f28lzhltvswwkrvpyp93zlht0d",
+                1_000L,
+                20L,
+                "memo",
+                "idempotency-key",
+                "proof");
+
+        LightningPaymentGateway.PreparedLightningPayment prepared = client.prepareLightning(command);
+        CustodyGateway.PaymentResult result = client.payPreparedLightning(prepared);
+
+        assertThat(result.paymentHash()).isEqualTo(paymentHash);
+        assertThat(result.status()).isEqualTo("SUCCEEDED");
+        verify(restTemplate, never()).exchange(
+                contains("/v2/router/send"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(String.class));
     }
 }

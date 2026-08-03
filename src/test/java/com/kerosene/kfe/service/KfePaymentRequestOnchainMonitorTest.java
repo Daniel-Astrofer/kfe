@@ -11,6 +11,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
 import com.kerosene.kfe.model.KfePaymentRequestStatus;
 import com.kerosene.kfe.model.KfeRail;
@@ -82,7 +83,13 @@ class KfePaymentRequestOnchainMonitorTest {
             provider(onchainBalanceSyncService),
             provider(null),
             50,
-            3);
+            finalityPolicy());
+
+    private static KfeBitcoinFinalityPolicy finalityPolicy() {
+        KfeBitcoinFinalityPolicy policy = new KfeBitcoinFinalityPolicy();
+        policy.setCreditConfirmations(3);
+        return policy;
+    }
 
     @Test
     void recordsObservedPaymentBeforeMinimumConfirmationsWithoutCrediting() throws Exception {

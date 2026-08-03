@@ -15,13 +15,16 @@ public class KfeExecutionOutboxProcessor {
 
     private final KfeExecutionTransactionHelper transactionHelper;
     private final List<KfeRailExecution> railExecutors;
+    private final KfeExecutionOutboxService outboxService;
 
     @Autowired
     public KfeExecutionOutboxProcessor(
             KfeExecutionTransactionHelper transactionHelper,
-            List<KfeRailExecution> railExecutors) {
+            List<KfeRailExecution> railExecutors,
+            KfeExecutionOutboxService outboxService) {
         this.transactionHelper = transactionHelper;
         this.railExecutors = List.copyOf(railExecutors);
+        this.outboxService = outboxService;
     }
 
     KfeExecutionOutboxProcessor(
@@ -29,18 +32,23 @@ public class KfeExecutionOutboxProcessor {
             KfeOnchainPaymentGateway onchainPaymentGateway,
             LightningPaymentGateway lightningPaymentGateway) {
         this.transactionHelper = transactionHelper;
+        this.outboxService = null;
         this.railExecutors = List.of(
                 new InlineOnchainOutboundExecutor(transactionHelper, onchainPaymentGateway),
                 new InlineLightningOutboundExecutor(transactionHelper, lightningPaymentGateway));
     }
 
-    public void process(UUID outboxId) {
-        KfeExecutionTransactionHelper.PreparationResult prep = transactionHelper.prepare(outboxId);
+    public void process(KfeExecutionOutboxService.ExecutionClaim claim) {
+        UUID outboxId = claim.outboxId();
+        requireLease(claim);
+        KfeExecutionTransactionHelper.PreparationResult prep =
+                transactionHelper.prepare(outboxId, claim.claimToken());
         if (prep == null || !prep.proceed()) {
             return;
         }
 
         try {
+            requireLease(claim);
             KfeRailExecution executor = railExecutors.stream()
                     .filter(candidate -> candidate.supports(prep.operation()))
                     .findFirst()
@@ -49,27 +57,53 @@ public class KfeExecutionOutboxProcessor {
                 transactionHelper.markFinalFailure(
                         outboxId,
                         prep.transactionId(),
+                        claim.claimToken(),
                         "UNSUPPORTED_OPERATION",
                         "Unsupported KFE outbox operation " + prep.operation() + ".");
                 return;
             }
             executor.execute(outboxId, prep);
+        } catch (KfeExecutionClaimLostException claimLost) {
+            return;
         } catch (KfeOnchainPaymentGateway.ProviderExecutionAmbiguous ambiguous) {
-            transactionHelper.markUnknown(outboxId, prep.transactionId(), ambiguous.providerReference(), ambiguous.rawPayload(), ambiguous.getMessage());
+            transactionHelper.markUnknown(
+                    outboxId,
+                    prep.transactionId(),
+                    claim.claimToken(),
+                    ambiguous.providerReference(),
+                    ambiguous.rawPayload(),
+                    ambiguous.getMessage());
         } catch (LightningPaymentInFlightException inFlight) {
             transactionHelper.markUnknown(
                     outboxId,
                     prep.transactionId(),
+                    claim.claimToken(),
                     inFlight.providerReference(),
                     inFlight.rawPayload(),
                     inFlight.getMessage());
         } catch (RuntimeException exception) {
             boolean retryable = isRetryable(exception);
             if (retryable) {
-                transactionHelper.markRetryableFailure(outboxId, prep.transactionId(), "PROVIDER_RETRYABLE_FAILURE", safeMessage(exception));
+                transactionHelper.markRetryableFailure(
+                        outboxId,
+                        prep.transactionId(),
+                        claim.claimToken(),
+                        "PROVIDER_RETRYABLE_FAILURE",
+                        safeMessage(exception));
             } else {
-                transactionHelper.markFinalFailure(outboxId, prep.transactionId(), "PROVIDER_FINAL_FAILURE", safeMessage(exception));
+                transactionHelper.markFinalFailure(
+                        outboxId,
+                        prep.transactionId(),
+                        claim.claimToken(),
+                        "PROVIDER_FINAL_FAILURE",
+                        safeMessage(exception));
             }
+        }
+    }
+
+    private void requireLease(KfeExecutionOutboxService.ExecutionClaim claim) {
+        if (outboxService != null && !outboxService.heartbeat(claim)) {
+            throw new KfeExecutionClaimLostException(claim.outboxId());
         }
     }
 
@@ -142,6 +176,7 @@ public class KfeExecutionOutboxProcessor {
             transactionHelper.settleOutbound(
                     outboxId,
                     prep.transactionId(),
+                    prep.claimToken(),
                     onchainPaymentGateway.providerName(),
                     providerReference,
                     result.txid(),
@@ -187,6 +222,7 @@ public class KfeExecutionOutboxProcessor {
             transactionHelper.settleOutboundLightning(
                     outboxId,
                     prep.transactionId(),
+                    prep.claimToken(),
                     lightningPaymentGateway.providerName(),
                     result.providerReference(),
                     result.txid(),

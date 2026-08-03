@@ -299,6 +299,22 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
             Integer confirmationTarget,
             Long feeRateSatsPerVbyte,
             String changeType) {
+        return createFundedPsbt(
+                destinationAddress,
+                amountSats,
+                confirmationTarget,
+                feeRateSatsPerVbyte,
+                changeType,
+                false);
+    }
+
+    public FundedPsbt createFundedPsbt(
+            String destinationAddress,
+            long amountSats,
+            Integer confirmationTarget,
+            Long feeRateSatsPerVbyte,
+            String changeType,
+            boolean lockUnspents) {
         Map<String, Object> output = new LinkedHashMap<>();
         output.put(destinationAddress, satsToBtc(amountSats));
 
@@ -307,6 +323,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         options.put(
                 "change_type",
                 changeType == null || changeType.isBlank() ? "bech32" : changeType.trim());
+        options.put("lockUnspents", lockUnspents);
         boolean explicitFeeRate = feeRateSatsPerVbyte != null && feeRateSatsPerVbyte > 0L;
         if (explicitFeeRate) {
             // Bitcoin Core: fee_rate = sat/vB ; feeRate (legacy) = BTC/kvB.
@@ -327,6 +344,53 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
         String psbt = text(result, "psbt");
         long feeSats = btcNodeToSats(result.path("fee"));
         return new FundedPsbt(psbt, feeSats);
+    }
+
+    public boolean unlockPsbtInputs(String psbt) {
+        JsonNode decoded = decodePsbt(psbt);
+        return unlockDecodedInputs(decoded != null ? decoded.path("tx") : null);
+    }
+
+    public boolean unlockRawTransactionInputs(String rawTransaction) {
+        return unlockDecodedInputs(decodeRawTransaction(rawTransaction));
+    }
+
+    public void unlockPsbtInputsBestEffort(String psbt) {
+        try {
+            if (!unlockPsbtInputs(psbt)) {
+                log.warn("Bitcoin Core did not confirm release of abandoned PSBT inputs.");
+            }
+        } catch (RuntimeException exception) {
+            log.warn("Bitcoin Core could not release abandoned PSBT inputs: {}", exception.getMessage());
+        }
+    }
+
+    public void unlockRawTransactionInputsBestEffort(String rawTransaction) {
+        try {
+            if (!unlockRawTransactionInputs(rawTransaction)) {
+                log.warn("Bitcoin Core did not confirm release of prepared transaction inputs.");
+            }
+        } catch (RuntimeException exception) {
+            log.warn("Bitcoin Core could not release prepared transaction inputs: {}", exception.getMessage());
+        }
+    }
+
+    private boolean unlockDecodedInputs(JsonNode transaction) {
+        JsonNode inputs = transaction != null ? transaction.path("vin") : null;
+        if (inputs == null || !inputs.isArray() || inputs.isEmpty()) {
+            throw new IllegalArgumentException("Transaction inputs are required for UTXO unlock.");
+        }
+        List<Map<String, Object>> outputs = new java.util.ArrayList<>();
+        for (JsonNode input : inputs) {
+            String txid = text(input, "txid");
+            JsonNode vout = input.path("vout");
+            if (txid == null || !txid.matches("(?i)[0-9a-f]{64}") || !vout.isIntegralNumber()) {
+                throw new IllegalArgumentException("Transaction contains an invalid input reference.");
+            }
+            outputs.add(Map.of("txid", txid.toLowerCase(java.util.Locale.ROOT), "vout", vout.asInt()));
+        }
+        JsonNode result = unwrapResult(executeRpc("lockunspent", true, outputs));
+        return result != null && result.asBoolean(false);
     }
 
     /**
@@ -902,6 +966,7 @@ public class BitcoinCoreRpcClient implements BlockchainClient {
      * </ul>
      * Callers must handle negative confirmations explicitly — conflating with zero hides reorgs.
      */
+    @Override
     public java.util.OptionalInt findTransactionConfirmations(String txid) {
         if (txid == null || txid.isBlank()) {
             return java.util.OptionalInt.empty();
