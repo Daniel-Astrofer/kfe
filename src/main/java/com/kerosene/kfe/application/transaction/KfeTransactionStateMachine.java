@@ -1,6 +1,7 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
@@ -26,6 +27,15 @@ public class KfeTransactionStateMachine {
         this.hashService = hashService;
     }
 
+    /**
+     * Atomically transitions a KFE transaction to a new state.
+     *
+     * <p>Runs within the caller's transaction. Callers operating outside a transaction
+     * must wrap this in {@code @Transactional} to guarantee state-machine atomicity:
+     * a crash between {@code save(tx)} and {@code audit(...)} must not leave the
+     * transaction in the new state without forensic evidence.
+     */
+    @Transactional
     public void transition(
             KfeTransactionEntity tx,
             KfeTransactionStatus target,

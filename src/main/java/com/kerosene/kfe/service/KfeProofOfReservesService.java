@@ -15,12 +15,11 @@ import java.time.Instant;
  * This is NOT a local balance check — it proves UTXOs exist, belong to the vault
  * mesh, are spendable, cover user liabilities, and are not reused elsewhere.
  *
- * <p>Currently computes liabilities from ledger. Asset queries (scantxoutset /
- * descriptor from vault mesh, Lightning channel state) are configured but the
- * actual remote calls depend on vault mesh availability.
+ * <p>Computes liabilities from ledger. Assets must be provided by the caller
+ * (settlement gate or reserve overview) after querying on-chain and Lightning probes.
  *
- * <p>When the vault mesh is unreachable, the service fail-closes: settlement is
- * blocked because assets cannot be verified.
+ * <p>When asset probes are unavailable, the service reports UNKNOWN and fail-closes:
+ * settlement is blocked because assets cannot be verified.
  */
 @Service
 public class KfeProofOfReservesService {
@@ -44,19 +43,28 @@ public class KfeProofOfReservesService {
     }
 
     /**
-     * Computes the solvency snapshot from ledger liabilities.
-     * Asset queries are deferred to vault mesh integration.
+     * Computes the solvency snapshot.
      *
      * @param customerLiabilitiesSats sum of user available + locked + pending + hold balances
+     *                                for CUSTODIAL_ONCHAIN and INTERNAL wallets only
      * @param systemProfitSats SYSTEM_PROFIT wallet balance (liability until segregated)
      * @param inFlightWithdrawalSats in-flight withdrawal amounts not yet broadcast/confirmed
-     * @return snapshot with liabilities filled; assets populated from available data
+     * @param eligibleAssetsSats confirmed on-chain UTXOs + Lightning channel local balance
+     *                           (sum from external probes — not ledger observedSats)
+     * @param onchainReserveAssetsSats on-chain portion of eligible assets
+     * @param lightningReserveAssetsSats Lightning portion of eligible assets
+     * @param snapshotBlockHash block hash or height marker from the probe
+     * @return snapshot with both sides populated
      */
     @Transactional(readOnly = true)
     public SolvencySnapshot computeSnapshot(
             long customerLiabilitiesSats,
             long systemProfitSats,
-            long inFlightWithdrawalSats) {
+            long inFlightWithdrawalSats,
+            long eligibleAssetsSats,
+            long onchainReserveAssetsSats,
+            long lightningReserveAssetsSats,
+            String snapshotBlockHash) {
 
         long totalLiabilities = customerLiabilitiesSats;
         if (profitReconcileWithVault) {
@@ -64,41 +72,61 @@ public class KfeProofOfReservesService {
         }
         totalLiabilities = Math.addExact(totalLiabilities, inFlightWithdrawalSats);
 
-        // Assets are computed externally by the vault mesh.
-        // This service computes the liability side; the BinarySettlementGate
-        // enforces the invariant once both sides are known.
-        long eligibleAssets = 0L; // Filled by vault mesh block snapshot
-        long onchainReserveAssetsSats = 0L;
-        long lightningReserveAssetsSats = 0L;
-
         long safetyBufferSats = (long) (totalLiabilities * safetyBufferBps / 10_000L);
         long requiredAssets = Math.addExact(totalLiabilities, safetyBufferSats);
 
         double coverageRatio = totalLiabilities > 0
-                ? (double) eligibleAssets / (double) totalLiabilities
+                ? (double) eligibleAssetsSats / (double) totalLiabilities
                 : Double.POSITIVE_INFINITY;
 
         boolean solvent = coverageRatio >= minimumCoverageRatio
-                && eligibleAssets >= requiredAssets;
+                && eligibleAssetsSats >= requiredAssets;
 
         return new SolvencySnapshot(
                 totalLiabilities,
                 customerLiabilitiesSats,
                 systemProfitSats,
                 inFlightWithdrawalSats,
-                eligibleAssets,
+                eligibleAssetsSats,
                 onchainReserveAssetsSats,
                 lightningReserveAssetsSats,
                 safetyBufferSats,
                 coverageRatio,
                 minimumCoverageRatio,
                 solvent,
-                null, // snapshot block hash — filled when vault mesh provides it
+                snapshotBlockHash,
                 Instant.now());
+    }
+
+    /**
+     * Convenience overload for callers that only have liability data.
+     * Assets are set to zero — the resulting snapshot will always be INSOLVENT,
+     * which is the correct fail-closed behavior when asset probes are unavailable.
+     */
+    public SolvencySnapshot computeSnapshotLiabilitiesOnly(
+            long customerLiabilitiesSats,
+            long systemProfitSats,
+            long inFlightWithdrawalSats) {
+        return computeSnapshot(
+                customerLiabilitiesSats,
+                systemProfitSats,
+                inFlightWithdrawalSats,
+                0L,
+                0L,
+                0L,
+                null);
     }
 
     public boolean isEnabled() {
         return porEnabled;
+    }
+
+    public long safetyBufferBps() {
+        return safetyBufferBps;
+    }
+
+    public double minimumCoverageRatio() {
+        return minimumCoverageRatio;
     }
 
     /**
@@ -129,7 +157,8 @@ public class KfeProofOfReservesService {
             if (eligibleAssetsSats <= 0 && totalLiabilitiesSats <= 0) {
                 return "UNKNOWN";
             }
-            if (coverageRatio >= minimumCoverageRatio && eligibleAssetsSats >= (totalLiabilitiesSats + safetyBufferSats)) {
+            if (coverageRatio >= minimumCoverageRatio
+                    && eligibleAssetsSats >= (totalLiabilitiesSats + safetyBufferSats)) {
                 return "SOLVENT";
             }
             if (coverageRatio < 1.0) {

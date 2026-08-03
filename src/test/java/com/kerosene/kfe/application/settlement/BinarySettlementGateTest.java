@@ -8,6 +8,7 @@ import com.kerosene.kfe.model.KfeBalanceId;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.repository.KfeBalanceRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 import com.kerosene.kfe.service.KfeAuditLogService;
 import com.kerosene.kfe.service.KfeBalanceService;
 import com.kerosene.kfe.service.KfeLightningJammingGuard;
@@ -36,6 +37,7 @@ class BinarySettlementGateTest {
 
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
     private final KfeBalanceRepository balanceRepository = mock(KfeBalanceRepository.class);
+    private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
     private final KfeProofOfReservesService porService = mock(KfeProofOfReservesService.class);
     private final KfeQuorumGateway quorumGateway = mock(KfeQuorumGateway.class);
     private final KfeAuditLogService auditLogService = mock(KfeAuditLogService.class);
@@ -63,9 +65,11 @@ class BinarySettlementGateTest {
         when(capacitySignals.getIfAvailable()).thenReturn(null);
         when(porService.isEnabled()).thenReturn(false);
         when(balanceRepository.findAll()).thenReturn(java.util.List.of());
+        when(walletRepository.findKindsByIds(any())).thenReturn(java.util.List.of());
         gate = new BinarySettlementGate(
                 balanceService,
                 balanceRepository,
+                walletRepository,
                 porService,
                 quorumGateway,
                 auditLogService,
@@ -139,6 +143,7 @@ class BinarySettlementGateTest {
         gate = new BinarySettlementGate(
                 balanceService,
                 balanceRepository,
+                walletRepository,
                 porService,
                 quorumGateway,
                 auditLogService,

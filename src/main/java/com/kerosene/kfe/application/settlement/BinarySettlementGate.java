@@ -2,8 +2,6 @@ package com.kerosene.kfe.application.settlement;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
@@ -11,7 +9,9 @@ import com.kerosene.kfe.model.KfeBalanceEntity;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionStatus;
+import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.repository.KfeBalanceRepository;
+import com.kerosene.kfe.repository.KfeWalletRepository;
 import com.kerosene.kfe.service.KfeAuditLogService;
 import com.kerosene.kfe.service.KfeBalanceService;
 import com.kerosene.kfe.service.KfeLightningJammingGuard;
@@ -24,8 +24,13 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Strict binary AND gate for KFE liquidation (architecture doc §2).
@@ -47,8 +52,14 @@ public class BinarySettlementGate {
     private static final String ASSET_BTC = "BTC";
     private static final long MAX_SATOSHIS = 2_100_000_000_000_000L;
 
+    /** Wallet kinds that represent customer obligations (exclude equity and watch-only). */
+    private static final Set<KfeWalletKind> CUSTOMER_KINDS = Set.of(
+            KfeWalletKind.CUSTODIAL_ONCHAIN,
+            KfeWalletKind.INTERNAL);
+
     private final KfeBalanceService balanceService;
     private final KfeBalanceRepository balanceRepository;
+    private final KfeWalletRepository walletRepository;
     private final KfeProofOfReservesService porService;
     private final KfeQuorumGateway quorumGateway;
     private final KfeAuditLogService auditLogService;
@@ -66,6 +77,7 @@ public class BinarySettlementGate {
     public BinarySettlementGate(
             KfeBalanceService balanceService,
             KfeBalanceRepository balanceRepository,
+            KfeWalletRepository walletRepository,
             KfeProofOfReservesService porService,
             KfeQuorumGateway quorumGateway,
             KfeAuditLogService auditLogService,
@@ -81,6 +93,7 @@ public class BinarySettlementGate {
             @Value("${kfe.vaultmesh.constitution.threshold:2}") int constitutionThreshold) {
         this.balanceService = balanceService;
         this.balanceRepository = balanceRepository;
+        this.walletRepository = walletRepository;
         this.porService = porService;
         this.quorumGateway = quorumGateway;
         this.auditLogService = auditLogService;
@@ -313,8 +326,9 @@ public class BinarySettlementGate {
      * This is NOT a local balance check — it proves UTXOs exist, belong to the vault
      * mesh, are spendable, and cover user liabilities.
      *
-     * <p>Computes liabilities from ledger balances. Asset verification (scantxoutset /
-     * vault mesh descriptor) is integrated via KfeProofOfReservesService.
+     * <p>Liabilities are computed from ledger excluding WATCH_ONLY, SYSTEM_FUNDS, and
+     * SYSTEM_PROFIT wallets. Assets are computed from ledger observedSats (cached on-chain
+     * scan mirror) as the best available proxy when live probes are unavailable.
      */
     private FlagEvaluation evaluateReservaMat(SettlementGateCommand command, LockSaldoOutcome lockSaldo) {
         if (!porGateEnabled) {
@@ -336,14 +350,25 @@ public class BinarySettlementGate {
             return FlagEvaluation.fail(SettlementFlag.V_RESERVA_MAT, "NEGATIVE_AVAILABLE_AFTER");
         }
 
-        // Global solvency check: compute liabilities from ledger and verify against assets
+        // Global solvency check: compute liabilities and assets from ledger
         try {
-            long customerLiabilities = computeCustomerLiabilities();
-            long systemProfitSats = computeSystemProfitBalance();
+            List<KfeBalanceEntity> allBalances = balanceRepository.findAll();
+            Map<UUID, KfeWalletKind> kinds = loadWalletKinds(allBalances);
+
+            long customerLiabilities = computeCustomerLiabilities(allBalances, kinds);
+            long systemProfitSats = computeSystemProfitBalance(allBalances, kinds);
+            long eligibleAssets = computeEligibleAssets(allBalances, kinds);
             long inFlightWithdrawals = 0L; // Computed from transaction status scan (can add later)
 
             KfeProofOfReservesService.SolvencySnapshot snapshot =
-                    porService.computeSnapshot(customerLiabilities, systemProfitSats, inFlightWithdrawals);
+                    porService.computeSnapshot(
+                            customerLiabilities,
+                            systemProfitSats,
+                            inFlightWithdrawals,
+                            eligibleAssets,
+                            eligibleAssets, // on-chain portion (Lightning not broken out here)
+                            0L,             // lightning portion
+                            null);          // block hash not available in gate path
 
             if (!snapshot.solvent()) {
                 return FlagEvaluation.fail(
@@ -371,27 +396,80 @@ public class BinarySettlementGate {
     }
 
     /**
-     * Compute total customer liabilities = available + pending + locked + hold across all
-     * non-WATCH_ONLY wallets. This is the ledger's view of what is owed to users.
+     * Compute total customer liabilities = available + pending + locked + hold for
+     * CUSTODIAL_ONCHAIN and INTERNAL wallets only. Excludes WATCH_ONLY (user keys),
+     * SYSTEM_FUNDS (equity), and SYSTEM_PROFIT (tracked separately).
      */
-    private long computeCustomerLiabilities() {
-        return balanceRepository.findAll().stream()
-                .mapToLong(b -> b.getAvailableSats() + b.getPendingSats() + b.getLockedSats() + b.getAutoHoldSats())
-                .sum();
+    private long computeCustomerLiabilities(List<KfeBalanceEntity> balances, Map<UUID, KfeWalletKind> kinds) {
+        long total = 0L;
+        for (KfeBalanceEntity b : balances) {
+            UUID walletId = b.getId() != null ? b.getId().getWalletId() : null;
+            if (walletId == null) continue;
+            KfeWalletKind kind = kinds.get(walletId);
+            if (kind != null && CUSTOMER_KINDS.contains(kind)) {
+                total = Math.addExact(total,
+                        b.getAvailableSats() + b.getPendingSats() + b.getLockedSats() + b.getAutoHoldSats());
+            }
+        }
+        return total;
     }
 
     /**
      * Compute SYSTEM_PROFIT wallet balance. Profit is a liability within USERS until
      * physically segregated into a dedicated vault bucket.
      */
-    private long computeSystemProfitBalance() {
-        return balanceRepository.findAll().stream()
-                .filter(b -> b.getId() != null && b.getId().getWalletId() != null)
-                .mapToLong(KfeBalanceEntity::getAvailableSats)
-                .sum();
-        // Note: SYSTEM_PROFIT balance specifically would require a wallet-kind-aware join.
-        // For now, this is a conservative upper bound — including all system balances
-        // in liabilities errs on the fail-closed side.
+    private long computeSystemProfitBalance(List<KfeBalanceEntity> balances, Map<UUID, KfeWalletKind> kinds) {
+        long total = 0L;
+        for (KfeBalanceEntity b : balances) {
+            UUID walletId = b.getId() != null ? b.getId().getWalletId() : null;
+            if (walletId == null) continue;
+            if (kinds.get(walletId) == KfeWalletKind.SYSTEM_PROFIT) {
+                total = Math.addExact(total, b.getAvailableSats());
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Compute eligible assets = observedSats for CUSTODIAL_ONCHAIN and INTERNAL wallets.
+     * observedSats is the ledger-cached mirror of the last confirmed on-chain scan
+     * (scantxoutset / listunspent). It is the best available asset proxy when live
+     * probes are not reachable from the gate path.
+     */
+    private long computeEligibleAssets(List<KfeBalanceEntity> balances, Map<UUID, KfeWalletKind> kinds) {
+        long total = 0L;
+        for (KfeBalanceEntity b : balances) {
+            UUID walletId = b.getId() != null ? b.getId().getWalletId() : null;
+            if (walletId == null) continue;
+            KfeWalletKind kind = kinds.get(walletId);
+            if (kind != null && CUSTOMER_KINDS.contains(kind)) {
+                total = Math.addExact(total, b.getObservedSats());
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Load wallet kinds for all balance rows in a single batch query.
+     */
+    private Map<UUID, KfeWalletKind> loadWalletKinds(List<KfeBalanceEntity> balances) {
+        Set<UUID> walletIds = balances.stream()
+                .map(KfeBalanceEntity::getId)
+                .filter(id -> id != null && id.getWalletId() != null)
+                .map(com.kerosene.kfe.model.KfeBalanceId::getWalletId)
+                .collect(Collectors.toSet());
+
+        if (walletIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, KfeWalletKind> kinds = new HashMap<>();
+        for (Object[] row : walletRepository.findKindsByIds(walletIds)) {
+            if (row[0] instanceof UUID id && row[1] instanceof KfeWalletKind kind) {
+                kinds.put(id, kind);
+            }
+        }
+        return kinds;
     }
 
     private FlagEvaluation evaluateNoJamming(SettlementGateCommand command) {

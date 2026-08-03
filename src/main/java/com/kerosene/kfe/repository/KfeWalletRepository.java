@@ -73,4 +73,12 @@ public interface KfeWalletRepository extends JpaRepository<KfeWalletEntity, UUID
             ORDER BY created_at DESC
             """, nativeQuery = true)
     List<KfeDashboardWalletRow> findDashboardRows(@Param("userId") Long userId);
+
+    /**
+     * Returns wallet kinds for a batch of wallet IDs. Used by reserve overview and
+     * settlement gate to exclude WATCH_ONLY / SYSTEM_FUNDS / SYSTEM_PROFIT wallets
+     * from customer liability calculations.
+     */
+    @Query("select w.id, w.kind from KfeWalletEntity w where w.id in :walletIds")
+    List<Object[]> findKindsByIds(@Param("walletIds") Collection<UUID> walletIds);
 }
