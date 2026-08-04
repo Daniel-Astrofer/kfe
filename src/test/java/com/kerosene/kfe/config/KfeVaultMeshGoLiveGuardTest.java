@@ -92,4 +92,38 @@ class KfeVaultMeshGoLiveGuardTest {
                         "", "/c", "/k", "/ca", "", "", "direct", true);
         assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
     }
+
+    @Test
+    void productionModeRejectsDirectTransport() {
+        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(
+                false, true, false, true, true, true, false,
+                "", "/c", "/k", "/ca", "", "", "direct", true);
+        assertThrows(IllegalStateException.class,
+                () -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void productionModeAcceptsTorTransport() {
+        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(
+                false, true, false, true, true, true, false,
+                "", "/c", "/k", "/ca", "", "", "tor", true);
+        assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void productionModeAcceptsOnionTransport() {
+        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(
+                false, true, false, true, true, true, false,
+                "", "/c", "/k", "/ca", "", "", "onion", true);
+        assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
+    }
+
+    @Test
+    void productionModeRejectsDisabledHostnameVerification() {
+        KfeVaultMeshGoLiveGuard guard = new KfeVaultMeshGoLiveGuard(
+                false, true, false, true, true, true, false,
+                "", "/c", "/k", "/ca", "", "", "tor", false);
+        assertThrows(IllegalStateException.class,
+                () -> guard.run(new DefaultApplicationArguments()));
+    }
 }

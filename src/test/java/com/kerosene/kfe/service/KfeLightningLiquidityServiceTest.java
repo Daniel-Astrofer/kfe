@@ -27,6 +27,8 @@ class KfeLightningLiquidityServiceTest {
     private final ObjectProvider<LightningClient> clientProvider = mock(ObjectProvider.class);
     @SuppressWarnings("unchecked")
     private final ObjectProvider<LightningPaymentGateway> paymentProvider = mock(ObjectProvider.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<KfeCapacitySignalStore> signalStoreProvider = mock(ObjectProvider.class);
     private final KfeLightningLiquidityReservationRepository repository =
             mock(KfeLightningLiquidityReservationRepository.class);
     private final LightningClient client = mock(LightningClient.class);
@@ -42,8 +44,9 @@ class KfeLightningLiquidityServiceTest {
         when(client.getLocalBalance()).thenReturn(1_000_000L);
         when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(200_000L);
         when(repository.findByTransactionId(any())).thenReturn(Optional.empty());
+        when(signalStoreProvider.getIfAvailable()).thenReturn(null);
         service = new KfeLightningLiquidityService(
-                clientProvider, paymentProvider, repository, null, 0L, 0L, 10);
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 0L, 10);
     }
 
     @Test
@@ -87,5 +90,62 @@ class KfeLightningLiquidityServiceTest {
         held.setStatus(KfeLiquidityReservationStatus.HELD);
         service.releaseForTransaction(txId);
         assertThat(held.getStatus()).isEqualTo(KfeLiquidityReservationStatus.RELEASED);
+    }
+
+    // Circuit breaker tests with floor=500k (free=800k initial)
+
+    @Test
+    void circuitBreakerStaysClosedWhenFreeCapacityAboveFloor() {
+        KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        // free = 1M - 200k = 800k > 500k floor
+        assertThat(breaker.circuitBreakerOpen()).isFalse();
+    }
+
+    @Test
+    void circuitBreakerOpensWhenFreeCapacityBelowFloor() {
+        when(client.getLocalBalance()).thenReturn(400_000L);
+        when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(0L);
+        KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        // free = 400k < 500k floor
+        assertThat(breaker.circuitBreakerOpen()).isTrue();
+    }
+
+    @Test
+    void circuitBreakerStaysLatchedUntilRecoveryThreshold() {
+        when(client.getLocalBalance()).thenReturn(400_000L);
+        when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(0L);
+        KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        // Trip: 400k < 500k floor
+        assertThat(breaker.circuitBreakerOpen()).isTrue();
+
+        // Recovery attempt: 550k > 500k floor but < 600k recovery (1.2 * 500k)
+        when(client.getLocalBalance()).thenReturn(550_000L);
+        assertThat(breaker.circuitBreakerOpen())
+                .describedAs("should stay latched below recovery threshold")
+                .isTrue();
+
+        // Recovery: 650k > 600k recovery threshold
+        when(client.getLocalBalance()).thenReturn(650_000L);
+        assertThat(breaker.circuitBreakerOpen())
+                .describedAs("should close above recovery threshold")
+                .isFalse();
+    }
+
+    @Test
+    void circuitBreakerTripsOnProbeFailure() {
+        when(client.getLocalBalance()).thenReturn(-1L);
+        KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        assertThat(breaker.circuitBreakerOpen()).isTrue();
+    }
+
+    @Test
+    void zeroFloorDisablesCircuitBreaker() {
+        KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
+                clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 0L, 10);
+        assertThat(breaker.circuitBreakerOpen()).isFalse();
     }
 }
