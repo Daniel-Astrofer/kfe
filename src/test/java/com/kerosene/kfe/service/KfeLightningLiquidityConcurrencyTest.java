@@ -79,7 +79,7 @@ class KfeLightningLiquidityConcurrencyTest {
                 });
 
         KfeLightningLiquidityService service = new KfeLightningLiquidityService(
-                clientProvider, paymentProvider, repository, 0L, 0L);
+                clientProvider, paymentProvider, repository, null, 0L, 0L, 10);
 
         AtomicInteger successes = new AtomicInteger();
         AtomicInteger failures = new AtomicInteger();

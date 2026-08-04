@@ -26,21 +26,28 @@ public class KfeLightningLiquidityService {
     private final ObjectProvider<LightningClient> lightningClientProvider;
     private final ObjectProvider<LightningPaymentGateway> paymentGatewayProvider;
     private final KfeLightningLiquidityReservationRepository reservationRepository;
+    private final ObjectProvider<KfeCapacitySignalStore> capacitySignalStore;
     private final long minOutboundSats;
     private final long circuitBreakerFloorSats;
+    private final int circuitBreakerStressThreshold;
+    private volatile boolean circuitBreakerLatched;
 
     public KfeLightningLiquidityService(
             ObjectProvider<LightningClient> lightningClientProvider,
             @org.springframework.beans.factory.annotation.Qualifier("kfeExternalLightningPaymentGateway")
             ObjectProvider<LightningPaymentGateway> paymentGatewayProvider,
             KfeLightningLiquidityReservationRepository reservationRepository,
+            ObjectProvider<KfeCapacitySignalStore> capacitySignalStore,
             @Value("${kfe.lightning.min-outbound-sats:0}") long minOutboundSats,
-            @Value("${kfe.lightning.circuit-breaker-floor-sats:0}") long circuitBreakerFloorSats) {
+            @Value("${kfe.lightning.circuit-breaker-floor-sats:0}") long circuitBreakerFloorSats,
+            @Value("${kfe.lightning.circuit-breaker-stress-threshold:10}") int circuitBreakerStressThreshold) {
         this.lightningClientProvider = lightningClientProvider;
         this.paymentGatewayProvider = paymentGatewayProvider;
         this.reservationRepository = reservationRepository;
+        this.capacitySignalStore = capacitySignalStore;
         this.minOutboundSats = Math.max(0L, minOutboundSats);
         this.circuitBreakerFloorSats = Math.max(0L, circuitBreakerFloorSats);
+        this.circuitBreakerStressThreshold = Math.max(1, circuitBreakerStressThreshold);
     }
 
     public boolean isLive() {
@@ -92,15 +99,54 @@ public class KfeLightningLiquidityService {
         return free >= totalDebitSats;
     }
 
+    /**
+     * Circuit breaker with hysteresis and sustained-stress awareness.
+     *
+     * <p>Trips when free (post-reservation) outbound capacity drops below the floor OR
+     * sustained liquidity-reject count exceeds the stress threshold. Once tripped, stays
+     * open until free capacity recovers above the recovery threshold (1.2× floor).
+     */
     public boolean circuitBreakerOpen() {
         if (circuitBreakerFloorSats <= 0L) {
             return false;
         }
-        long capacity = outboundCapacitySats();
-        if (capacity < 0L) {
+
+        long free = freeOutboundCapacitySats();
+
+        // Probe failure → fail closed (trip)
+        if (free < 0L) {
+            circuitBreakerLatched = true;
             return true;
         }
-        return capacity < circuitBreakerFloorSats;
+
+        long recoveryThreshold = (long) (circuitBreakerFloorSats * 1.2);
+
+        // Sustained stress: trip on repeated liquidity rejects
+        KfeCapacitySignalStore signals = capacitySignalStore.getIfAvailable();
+        if (signals != null) {
+            long recentRejects = signals.liquidityRejectsInWindow();
+            if (recentRejects >= circuitBreakerStressThreshold) {
+                circuitBreakerLatched = true;
+                return true;
+            }
+        }
+
+        // Already latched → stay open until recovery threshold met
+        if (circuitBreakerLatched) {
+            if (free >= recoveryThreshold) {
+                circuitBreakerLatched = false;
+                return false;
+            }
+            return true;
+        }
+
+        // Below floor → trip and latch
+        if (free < circuitBreakerFloorSats) {
+            circuitBreakerLatched = true;
+            return true;
+        }
+
+        return false;
     }
 
     /**

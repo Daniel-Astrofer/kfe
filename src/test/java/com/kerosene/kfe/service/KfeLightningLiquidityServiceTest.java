@@ -43,7 +43,7 @@ class KfeLightningLiquidityServiceTest {
         when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(200_000L);
         when(repository.findByTransactionId(any())).thenReturn(Optional.empty());
         service = new KfeLightningLiquidityService(
-                clientProvider, paymentProvider, repository, 0L, 0L);
+                clientProvider, paymentProvider, repository, null, 0L, 0L, 10);
     }
 
     @Test

@@ -67,11 +67,9 @@ public class KfeJwtVerifier {
 
         // Require audience claim if configured
         if (audience != null) {
-            String tokenAudience = claims.getAudience().stream()
-                    .filter(aud -> audience.equals(aud))
-                    .findFirst()
-                    .orElse(null);
-            if (tokenAudience == null) {
+            Collection<String> audiences = claims.getAudience();
+            if (audiences == null || audiences.isEmpty()
+                    || audiences.stream().noneMatch(aud -> audience.equals(aud))) {
                 throw new IllegalStateException("JWT has invalid or missing 'aud' claim");
             }
         }

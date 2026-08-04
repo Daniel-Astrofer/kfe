@@ -28,7 +28,9 @@ class KfeVaultMeshGoLiveGuardTest {
                 requireMtls && tlsEnabled ? "/tmp/key.pem" : "",
                 requireMtls && tlsEnabled ? "/tmp/ca.pem" : "",
                 "",
-                "");
+                "",
+                "tor",
+                true);
     }
 
     @Test
@@ -61,7 +63,7 @@ class KfeVaultMeshGoLiveGuardTest {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
                         true, true, false, true, true, false, false,
-                        "lab-token", "/c", "/k", "/ca", "", "");
+                        "lab-token", "/c", "/k", "/ca", "", "", "direct", true);
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
@@ -70,7 +72,7 @@ class KfeVaultMeshGoLiveGuardTest {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
                         true, true, false, true, false, false, false,
-                        "", "/c", "/k", "/ca", "", "");
+                        "", "/c", "/k", "/ca", "", "", "direct", true);
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
@@ -78,7 +80,7 @@ class KfeVaultMeshGoLiveGuardTest {
     void requireMtlsRequiresClientMaterials() {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
-                        true, true, false, true, true, false, false, "", "", "", "", "", "");
+                        true, true, false, true, true, false, false, "", "", "", "", "", "", "direct", true);
         assertThrows(IllegalStateException.class, () -> guard.run(new DefaultApplicationArguments()));
     }
 
@@ -87,7 +89,7 @@ class KfeVaultMeshGoLiveGuardTest {
         KfeVaultMeshGoLiveGuard guard =
                 new KfeVaultMeshGoLiveGuard(
                         true, true, false, true, true, false, false,
-                        "", "/c", "/k", "/ca", "", "");
+                        "", "/c", "/k", "/ca", "", "", "direct", true);
         assertDoesNotThrow(() -> guard.run(new DefaultApplicationArguments()));
     }
 }

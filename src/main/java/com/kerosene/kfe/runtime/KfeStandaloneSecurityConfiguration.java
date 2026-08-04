@@ -51,7 +51,7 @@ public class KfeStandaloneSecurityConfiguration {
                         .requestMatchers("/internal/kfe/vault-mesh/**").permitAll()
                         .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")
-                        .requestMatchers("/kfe/**").permitAll()
+                        .requestMatchers("/kfe/**").authenticated()
                         .anyRequest().denyAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
@@ -63,8 +63,8 @@ public class KfeStandaloneSecurityConfiguration {
             ObjectProvider<StringRedisTemplate> redisTemplate,
             @Value("${kfe.security.jwt.revocation-check-enabled:true}") boolean revocationCheckEnabled,
             @Value("${kfe.auth.revocation.required:false}") boolean revocationRequired,
-            @Value("${kfe.auth.jwt.issuer:}") String issuer,
-            @Value("${kfe.auth.jwt.audience:}") String audience) {
+            @Value("${kfe.auth.jwt.issuer:Kerosene-Auth}") String issuer,
+            @Value("${kfe.auth.jwt.audience:kerosene-app}") String audience) {
         return new KfeJwtVerifier(secret, redisTemplate, revocationCheckEnabled, revocationRequired, issuer, audience);
     }
 

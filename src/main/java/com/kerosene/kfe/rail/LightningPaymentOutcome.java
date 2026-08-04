@@ -17,7 +17,7 @@ public enum LightningPaymentOutcome {
         return switch (normalized) {
             case "SUCCEEDED", "SUCCESS", "COMPLETE", "COMPLETED", "PAID", "SETTLED" -> SUCCEEDED;
             case "FAILED", "FAILURE", "ERROR", "CANCELLED", "CANCELED", "TIMEOUT" -> FAILED;
-            case "IN_FLIGHT", "INFLIGHT", "PENDING", "IN_PROGRESS", "SENDING" -> IN_FLIGHT;
+            case "IN_FLIGHT", "INFLIGHT", "PENDING", "IN_PROGRESS", "SENDING", "SUBMITTED" -> IN_FLIGHT;
             default -> UNKNOWN;
         };
     }

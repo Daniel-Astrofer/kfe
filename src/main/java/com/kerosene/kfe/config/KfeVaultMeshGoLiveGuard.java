@@ -38,6 +38,8 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
     private final String tlsCaPath;
     private final String tlsKeystorePath;
     private final String tlsTruststorePath;
+    private final String vaultMeshTransport;
+    private final boolean tlsHostnameVerification;
 
     public KfeVaultMeshGoLiveGuard(
             @Value("${kfe.vaultmesh.mesh-only:false}") boolean meshOnly,
@@ -52,7 +54,9 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
             @Value("${kfe.vaultmesh.tls.key-path:}") String tlsKeyPath,
             @Value("${kfe.vaultmesh.tls.ca-path:}") String tlsCaPath,
             @Value("${kfe.vaultmesh.tls.keystore-path:}") String tlsKeystorePath,
-            @Value("${kfe.vaultmesh.tls.truststore-path:}") String tlsTruststorePath) {
+            @Value("${kfe.vaultmesh.tls.truststore-path:}") String tlsTruststorePath,
+            @Value("${kfe.vaultmesh.transport:direct}") String vaultMeshTransport,
+            @Value("${kfe.vaultmesh.tls.hostname-verification:true}") boolean tlsHostnameVerification) {
         this.meshOnly = meshOnly;
         this.vaultMeshEnabled = vaultMeshEnabled;
         this.mpcSigningEnabled = mpcSigningEnabled;
@@ -66,6 +70,8 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
         this.tlsCaPath = blankToEmpty(tlsCaPath);
         this.tlsKeystorePath = blankToEmpty(tlsKeystorePath);
         this.tlsTruststorePath = blankToEmpty(tlsTruststorePath);
+        this.vaultMeshTransport = vaultMeshTransport == null ? "direct" : vaultMeshTransport.trim();
+        this.tlsHostnameVerification = tlsHostnameVerification;
     }
 
     @Override
@@ -159,8 +165,19 @@ public class KfeVaultMeshGoLiveGuard implements ApplicationRunner {
                     "kfe.auth.production-mode=true refuses kfe.vaultmesh.api-token "
                     + "(static_token is forbidden in production; use mTLS only)");
         }
-        // Hostname verification is checked via config already (default true).
-        // Fallback quorum and local Core signer are checked in mesh-only path or via config.
+        if (!"tor".equalsIgnoreCase(vaultMeshTransport)
+                && !"onion".equalsIgnoreCase(vaultMeshTransport)
+                && !"socks".equalsIgnoreCase(vaultMeshTransport)) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires kfe.vaultmesh.transport=tor "
+                    + "(direct clearnet is forbidden in production; got: " + vaultMeshTransport + ")");
+        }
+        if (!tlsHostnameVerification) {
+            throw new IllegalStateException(
+                    "kfe.auth.production-mode=true requires "
+                    + "kfe.vaultmesh.tls.hostname-verification=true "
+                    + "(cannot disable hostname verification in production)");
+        }
 
         log.info("vault_mesh_go_live_guard: all production invariants pass.");
     }

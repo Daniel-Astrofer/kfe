@@ -297,9 +297,10 @@ public class LndRestLightningClient
     public CustodyGateway.GeneratedLightningInvoice createLightningInvoice(
             CustodyGateway.LightningInvoiceCommand command) {
         requireLive();
-        if (command.amountSats() <= 0L) {
-            throw new IllegalArgumentException("Lightning invoice amountSats must be positive.");
+        if (command.amountSats() < 0L) {
+            throw new IllegalArgumentException("Lightning invoice amountSats must be non-negative.");
         }
+        // Allow amountless invoices (0 sats) — payer supplies amount at payment time
         int expiry = command.expiresInSeconds() > 0
                 ? command.expiresInSeconds()
                 : defaultInvoiceExpirySeconds;

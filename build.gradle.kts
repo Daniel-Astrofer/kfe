@@ -2,6 +2,17 @@ plugins {
     `java-library`
     id("org.springframework.boot") version "3.5.15"
     id("io.spring.dependency-management") version "1.1.6"
+    id("org.owasp.dependencycheck") version "10.0.4"
+}
+
+dependencyCheck {
+    failBuildOnCVSS = 7.0f
+    nvd {
+        apiKey = System.getenv("NVD_API_KEY") ?: ""
+    }
+    analyzers {
+        assemblyEnabled = false
+    }
 }
 
 group = "kerosene"
