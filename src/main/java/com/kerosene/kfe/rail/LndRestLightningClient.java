@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -42,6 +43,7 @@ public class LndRestLightningClient
 
     /** TLV type for keysend preimage (LND / BOLT). */
     private static final String KEYSEND_PREIMAGE_RECORD = "5482373484";
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LndRestLightningClient.class);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -1145,6 +1147,62 @@ public class LndRestLightningClient
 
     private static String nullToEmpty(String value) {
         return value != null ? value : "";
+    }
+
+    // ------------------------------------------------------------------ //
+    //  SSE streaming subscription (ITEM 47 — Lightning monitor)           //
+    // ------------------------------------------------------------------ //
+
+    @Override
+    public LightningInvoiceGateway.InvoiceSubscription subscribeInvoices(
+            java.util.function.Consumer<CustodyGateway.IncomingLightningInvoiceStatus> handler) {
+        java.util.concurrent.atomic.AtomicBoolean active = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Thread subscriber = new Thread(() -> {
+            try {
+                String url = baseUrl + "/v2/invoices/subscribe";
+                java.net.URL target = java.net.URI.create(url).toURL();
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) target.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Grpc-Metadata-macaroon", macaroonHex);
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(0); // stream indefinitely
+                int status = conn.getResponseCode();
+                if (status != 200) {
+                    log.warn("[LND SSE] subscribeInvoices failed httpStatus={}", status);
+                    return;
+                }
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while (active.get() && (line = reader.readLine()) != null) {
+                    if (line.isBlank()) continue;
+                    try {
+                        JsonNode node = objectMapper.readTree(line);
+                        JsonNode result = node.path("result");
+                        if (result.isMissingNode()) continue;
+                        String paymentHash = text(result, "r_hash");
+                        long addIndex = result.path("add_index").asLong(0L);
+                        long settleIndex = result.path("settle_index").asLong(0L);
+                        String state = result.path("state").asText("UNKNOWN");
+                        long amtPaid = result.path("amt_paid_sat").asLong(
+                                result.path("amt_paid_msat").asLong(0L) / 1000);
+                        handler.accept(new CustodyGateway.IncomingLightningInvoiceStatus(
+                                state, amtPaid > 0 ? amtPaid : null, null,
+                                node.toString(), paymentHash, addIndex, settleIndex));
+                    } catch (RuntimeException e) {
+                        log.debug("[LND SSE] parse error: {}", e.getMessage());
+                    }
+                }
+            } catch (java.io.IOException e) {
+                if (active.get()) {
+                    log.warn("[LND SSE] stream error: {}", e.getMessage());
+                }
+            }
+        }, "kfe-lnd-sse-invoices");
+        subscriber.setDaemon(true);
+        subscriber.start();
+        return () -> { active.set(false); subscriber.interrupt(); };
     }
 
     public record LightningPaymentResult(

@@ -185,6 +185,14 @@ public class KfePaymentRequestLightningMonitor {
         if (status == null) {
             return;
         }
+        // Advance cursor indices from stream
+        if (status.addIndex() > 0L) {
+            lastAddIndex.updateAndGet(current -> Math.max(current, status.addIndex()));
+        }
+        if (status.settleIndex() > 0L) {
+            lastSettleIndex.updateAndGet(current -> Math.max(current, status.settleIndex()));
+        }
+
         LightningPaymentState state = classifyPaymentState(status.status());
         if (state != LightningPaymentState.SUCCEEDED) {
             return;
@@ -192,12 +200,22 @@ public class KfePaymentRequestLightningMonitor {
         if (status.receivedSats() == null || status.receivedSats() <= 0L) {
             return;
         }
-        // Find matching OPEN payment request by payment_hash (network identity — ITEM 21 rule 6).
-        // The polling loop remains the reconciliation safety net for stream-missed events (ITEM 21 rule 4).
-        String paymentHash = null; // IncomingLightningInvoiceStatus doesn't carry paymentHash directly;
-        // the adapter would need to populate it. For now, we rely on polling to catch matched PRs.
-        // The stream provides real-time settlement confirmation; the poller handles matching+credit.
-        // This design keeps the stream lightweight and avoids duplicating the PR-matching logic.
+        // Match OPEN LIGHTNING payment request by payment_hash from stream
+        if (status.paymentHash() != null && !status.paymentHash().isBlank()) {
+            paymentRequestRepository.findFirstByPaymentHashIgnoreCase(status.paymentHash())
+                    .filter(pr -> pr.getStatus() == KfePaymentRequestStatus.OPEN)
+                    .filter(pr -> pr.getRail() == KfeRail.LIGHTNING)
+                    .ifPresent(pr -> {
+                        try {
+                            settleLightningPaymentRequest(pr, status.receivedSats(), status.rawPayload());
+                            log.info("[KFE LN Stream] settled paymentRequestId={} paymentHash={}",
+                                    pr.getId(), status.paymentHash());
+                        } catch (RuntimeException ex) {
+                            log.warn("[KFE LN Stream] settle failed paymentRequestId={}: {}",
+                                    pr.getId(), ex.getMessage());
+                        }
+                    });
+        }
     }
 
     // ------------------------------------------------------------------ //
@@ -211,21 +229,27 @@ public class KfePaymentRequestLightningMonitor {
         if (!enabled || !lightningInvoiceGateway.isLive()) {
             return;
         }
-        // Read-only list — no row lock. LND is probed outside any DB transaction.
-        List<KfePaymentRequestEntity> requests = paymentRequestRepository.findByStatusAndRailOrderByCreatedAtAsc(
-                KfePaymentRequestStatus.OPEN,
-                KfeRail.LIGHTNING,
-                PageRequest.of(0, batchSize));
-        for (KfePaymentRequestEntity request : requests) {
-            try {
-                probeAndMaybeSettle(request);
-            } catch (RuntimeException ex) {
-                log.warn(
-                        "[KFE LN PR Monitor] failed paymentRequestId={}: {}",
-                        request.getId(),
-                        ex.getMessage());
+        // Iterate through all pages of OPEN LIGHTNING payment requests.
+        // Previously only read page 0, starving the tail when backlog > batchSize.
+        int page = 0;
+        List<KfePaymentRequestEntity> requests;
+        do {
+            requests = paymentRequestRepository.findByStatusAndRailOrderByCreatedAtAsc(
+                    KfePaymentRequestStatus.OPEN,
+                    KfeRail.LIGHTNING,
+                    PageRequest.of(page, batchSize));
+            for (KfePaymentRequestEntity request : requests) {
+                try {
+                    probeAndMaybeSettle(request);
+                } catch (RuntimeException ex) {
+                    log.warn(
+                            "[KFE LN PR Monitor] failed paymentRequestId={}: {}",
+                            request.getId(),
+                            ex.getMessage());
+                }
             }
-        }
+            page++;
+        } while (requests.size() == batchSize);
     }
 
     /**

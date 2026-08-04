@@ -14,12 +14,18 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMsg;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Option 1: subscribe to Bitcoin Core ZMQ {@code hashblock} (+ optional {@code rawtx}),
@@ -44,6 +50,8 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
     private final NetworkParameters networkParameters;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final List<Thread> workers = new ArrayList<>();
+    private final Map<String, AtomicInteger> lastSequenceByTopic = new ConcurrentHashMap<>();
+    private final AtomicLong zmqSequenceGaps = new AtomicLong(0L);
     private ZContext zContext;
 
     public KfeBitcoinZmqWatcher(
@@ -170,9 +178,17 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                         continue; // timeout
                     }
                     byte[] body = socket.recv(0);
-                    // drain optional sequence / trailing frames
-                    while (socket.hasReceiveMore()) {
-                        socket.recv(0);
+                    // Capture sequence frame for gap detection (Bitcoin Core sends LE uint32)
+                    int sequence = -1;
+                    if (socket.hasReceiveMore()) {
+                        byte[] seqFrame = socket.recv(0);
+                        if (seqFrame != null && seqFrame.length >= 4) {
+                            sequence = ByteBuffer.wrap(seqFrame).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                        }
+                        // Drain any remaining trailing frames
+                        while (socket.hasReceiveMore()) {
+                            socket.recv(0);
+                        }
                     }
                     if (body == null) {
                         continue;
@@ -181,13 +197,28 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                     if (!topic.equalsIgnoreCase(receivedTopic)) {
                         continue;
                     }
+
+                    // Sequence gap detection
+                    if (sequence >= 0) {
+                        AtomicInteger lastSeq = lastSequenceByTopic.computeIfAbsent(
+                                topic, k -> new AtomicInteger(-1));
+                        int prev = lastSeq.getAndSet(sequence);
+                        if (prev >= 0 && sequence != prev + 1) {
+                            zmqSequenceGaps.incrementAndGet();
+                            log.warn("[KFE ZMQ] sequence gap detected topic={} expected={} actual={}",
+                                    topic, prev + 1, sequence);
+                            onSequenceGap(topic);
+                        }
+                    }
+
                     received++;
                     if (received == 1L || received % 100L == 0L) {
                         log.info(
-                                "[KFE ZMQ] topic={} messages={} bodyBytes={}",
+                                "[KFE ZMQ] topic={} messages={} bodyBytes={} seq={}",
                                 topic,
                                 received,
-                                body.length);
+                                body.length,
+                                sequence);
                     }
                     handler.handle(body);
                 }
@@ -205,6 +236,31 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                 backoffMs = Math.min(15_000, backoffMs * 2);
             }
         }
+    }
+
+    private void onSequenceGap(String topic) {
+        // For rawtx gaps, trigger full rescan of all monitored addresses to recover
+        // missed 0-conf deposit events. Hashblock gaps self-heal on next block.
+        if ("rawtx".equalsIgnoreCase(topic)) {
+            log.warn("[KFE ZMQ] rawtx sequence gap — triggering full address rescan");
+            try {
+                refreshService.onWalletsTouched(addressIndex.allColdWalletIds());
+            } catch (RuntimeException e) {
+                log.error("[KFE ZMQ] failed to trigger rescan after rawtx gap: {}", e.getMessage());
+            }
+        }
+    }
+
+    /** Last known sequence per topic (for health monitoring). */
+    public Map<String, Integer> lastSequences() {
+        Map<String, Integer> snapshot = new java.util.LinkedHashMap<>();
+        lastSequenceByTopic.forEach((k, v) -> snapshot.put(k, v.get()));
+        return Map.copyOf(snapshot);
+    }
+
+    /** Total sequence gaps detected since startup. */
+    public long totalSequenceGaps() {
+        return zmqSequenceGaps.get();
     }
 
     private void onHashBlock(byte[] body) {

@@ -72,7 +72,16 @@ public interface CustodyGateway extends LightningInvoiceGateway, LightningPaymen
             String status,
             Long receivedSats,
             LocalDateTime settledAt,
-            String rawPayload) {
+            String rawPayload,
+            String paymentHash,
+            long addIndex,
+            long settleIndex) {
+
+        /** Legacy constructor for callers that don't provide cursor fields. */
+        public IncomingLightningInvoiceStatus(
+                String status, Long receivedSats, LocalDateTime settledAt, String rawPayload) {
+            this(status, receivedSats, settledAt, rawPayload, null, 0L, 0L);
+        }
     }
 
     record OnchainPaymentCommand(
