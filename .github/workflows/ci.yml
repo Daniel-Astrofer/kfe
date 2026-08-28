@@ -1,0 +1,33 @@
+name: KFE CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: kerosene-kfe
+      - uses: actions/checkout@v4
+        with:
+          repository: Daniel-Astrofer/kerosene-contracts
+          path: kerosene-contracts
+      - uses: actions/checkout@v4
+        with:
+          repository: Daniel-Astrofer/kerosene-shared
+          path: kerosene-shared
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify KFE
+        working-directory: kerosene-kfe
+        run: ./gradlew check --no-daemon

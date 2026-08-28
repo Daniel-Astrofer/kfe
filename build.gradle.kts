@@ -17,7 +17,7 @@ dependencyCheck {
 
 group = "kerosene"
 version = "PRE-ALPHA"
-description = "Krinse Financial Engine service module"
+description = "Kerosene Financial Engine service module"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -41,8 +41,8 @@ configurations.configureEach {
 }
 
 dependencies {
-    api(project(":kerosene-contracts"))
-    implementation(project(":kerosene-shared"))
+    api("io.kerosene.contracts:kerosene-contracts:0.2.0-SNAPSHOT")
+    implementation("kerosene:kerosene-shared:PRE-ALPHA")
 
     implementation("io.jsonwebtoken:jjwt-api:0.13.0")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
@@ -80,12 +80,6 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 
 tasks.named<Jar>("jar") {
     enabled = true
-}
-
-tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
-    from("../src/main/resources") {
-        include("db/migration/**")
-    }
 }
 
 tasks.withType<Test> {
