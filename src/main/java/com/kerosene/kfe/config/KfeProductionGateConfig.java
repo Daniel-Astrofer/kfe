@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -37,25 +39,50 @@ public class KfeProductionGateConfig implements ApplicationRunner {
     private final String columnCryptoKeyBase64;
     private final boolean allowSharedSecretDerivation;
     private final KfeBitcoinFinalityPolicy finalityPolicy;
+    private final boolean workloadIdentityEnabled;
+    private final String workloadSocket;
+    private final String ownSpiffeId;
+    private final String peerSpiffeId;
+    private final String authRemoteBaseUrl;
+    private final String internalSharedSecret;
+    private final int publicPort;
+    private final int internalPort;
 
     public KfeProductionGateConfig(
             @Value("${api.secret.token.secret:}") String jwtSecret,
             @Value("${kfe.auth.jwt.issuer:}") String jwtIssuer,
             @Value("${kfe.auth.jwt.audience:}") String jwtAudience,
             @Value("${kfe.auth.production-mode:false}") boolean productionMode,
+            Environment environment,
             @Value("${kfe.auth.revocation.required:false}") boolean revocationRequired,
             @Value("${kfe.column-crypto.key-base64:}") String columnCryptoKeyBase64,
             @Value("${kfe.crypto.allow-shared-secret-derivation:false}") boolean allowSharedSecretDerivation,
+            @Value("${kerosene.workload-identity.enabled:false}") boolean workloadIdentityEnabled,
+            @Value("${kerosene.workload-identity.socket:}") String workloadSocket,
+            @Value("${kerosene.workload-identity.own-spiffe-id:}") String ownSpiffeId,
+            @Value("${kerosene.workload-identity.peer-spiffe-id:}") String peerSpiffeId,
+            @Value("${auth.remote.base-url:}") String authRemoteBaseUrl,
+            @Value("${kfe.internal.shared-secret:}") String internalSharedSecret,
+            @Value("${server.port:8080}") int publicPort,
+            @Value("${kerosene.workload-identity.internal-port:8443}") int internalPort,
             KfeBitcoinFinalityPolicy finalityPolicy,
             org.springframework.beans.factory.ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.jwtSecret = blankToEmpty(jwtSecret);
         this.jwtIssuer = blankToEmpty(jwtIssuer);
         this.jwtAudience = blankToEmpty(jwtAudience);
-        this.productionMode = productionMode;
+        this.productionMode = resolveProductionMode(productionMode, environment);
         this.revocationRequired = revocationRequired;
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
         this.columnCryptoKeyBase64 = blankToEmpty(columnCryptoKeyBase64);
         this.allowSharedSecretDerivation = allowSharedSecretDerivation;
+        this.workloadIdentityEnabled = workloadIdentityEnabled;
+        this.workloadSocket = blankToEmpty(workloadSocket);
+        this.ownSpiffeId = blankToEmpty(ownSpiffeId);
+        this.peerSpiffeId = blankToEmpty(peerSpiffeId);
+        this.authRemoteBaseUrl = blankToEmpty(authRemoteBaseUrl);
+        this.internalSharedSecret = blankToEmpty(internalSharedSecret);
+        this.publicPort = publicPort;
+        this.internalPort = internalPort;
         this.finalityPolicy = finalityPolicy;
     }
 
@@ -66,6 +93,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         checkRevocationRedis();
         checkColumnCryptoKey();
         checkDepositMinConfirmations();
+        checkWorkloadIdentity();
 
         if (productionMode) {
             log.warn("KFE AUTH PRODUCTION-MODE: JWT claims enforced, revocation fail-closed, "
@@ -113,7 +141,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         if (!columnCryptoKeyBase64.isEmpty()) {
             return;
         }
-        if (allowSharedSecretDerivation) {
+        if (allowSharedSecretDerivation && !productionMode) {
             log.warn("KFE column crypto is deriving AES key from KFE_INTERNAL_SHARED_SECRET "
                     + "(kfe.crypto.allow-shared-secret-derivation=true). "
                     + "Set KFE_COLUMN_CRYPTO_KEY_BASE64 for production-grade separation.");
@@ -123,6 +151,33 @@ public class KfeProductionGateConfig implements ApplicationRunner {
                 "KFE column crypto key (KFE_COLUMN_CRYPTO_KEY_BASE64) is not set and "
                         + "shared-secret derivation is disabled (kfe.crypto.allow-shared-secret-derivation=false). "
                         + "Set KFE_COLUMN_CRYPTO_KEY_BASE64 to a base64-encoded 32-byte AES key.");
+    }
+
+    private void checkWorkloadIdentity() {
+        if (!productionMode) {
+            return;
+        }
+        if (!workloadIdentityEnabled) {
+            throw new IllegalStateException("SPIFFE workload identity must be enabled in KFE production mode");
+        }
+        if (!workloadSocket.startsWith("unix://")) {
+            throw new IllegalStateException("SPIFFE Workload API must use a unix:// endpoint");
+        }
+        if (!ownSpiffeId.startsWith("spiffe://") || !ownSpiffeId.endsWith("/service/kfe")) {
+            throw new IllegalStateException("KFE own SPIFFE ID must end with /service/kfe");
+        }
+        if (!peerSpiffeId.startsWith("spiffe://") || !peerSpiffeId.endsWith("/service/auth")) {
+            throw new IllegalStateException("KFE peer SPIFFE ID must end with /service/auth");
+        }
+        if (!authRemoteBaseUrl.startsWith("https://")) {
+            throw new IllegalStateException("auth.remote.base-url must use https:// in production");
+        }
+        if (!internalSharedSecret.isEmpty()) {
+            throw new IllegalStateException("KFE_INTERNAL_SHARED_SECRET must be empty under SPIFFE mTLS");
+        }
+        if (publicPort == internalPort) {
+            throw new IllegalStateException("internal mTLS port must differ from server.port");
+        }
     }
 
     private void checkDepositMinConfirmations() {
@@ -148,5 +203,9 @@ public class KfeProductionGateConfig implements ApplicationRunner {
 
     private static String blankToEmpty(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    static boolean resolveProductionMode(boolean explicitlyEnabled, Environment environment) {
+        return explicitlyEnabled || environment.acceptsProfiles(Profiles.of("prod", "production"));
     }
 }

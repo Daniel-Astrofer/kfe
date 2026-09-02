@@ -2,7 +2,7 @@ package com.kerosene.kfe.integration;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import com.kerosene.common.financial.FinancialUserDirectoryPort;
 import com.kerosene.kfe.config.KfeFinancialFallbackConfiguration;
 
@@ -12,7 +12,9 @@ class KfeRemoteFinancialUserDirectoryConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withInitializer(context -> context.getEnvironment().setActiveProfiles("kfe"))
-            .withBean(RestTemplateBuilder.class, RestTemplateBuilder::new)
+            .withBean(
+                    InternalServiceRestTemplateFactory.class,
+                    () -> WorkloadIdentityTestClients.legacy("credential"))
             .withUserConfiguration(
                     KfeFinancialFallbackConfiguration.class,
                     KfeRemoteFinancialUserDirectoryClient.class)

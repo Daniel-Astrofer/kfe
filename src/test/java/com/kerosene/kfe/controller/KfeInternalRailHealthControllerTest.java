@@ -1,21 +1,19 @@
 package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.web.server.ResponseStatusException;
 import com.kerosene.common.financial.FinancialRailHealthPort;
 import com.kerosene.kfe.integration.KfeFinancialRailHealthAdapter;
 
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class KfeInternalRailHealthControllerTest {
 
     private final KfeFinancialRailHealthAdapter adapter = mock(KfeFinancialRailHealthAdapter.class);
-    private final KfeInternalRailHealthController controller = new KfeInternalRailHealthController(adapter, "credential");
+    private final KfeInternalRailHealthController controller = new KfeInternalRailHealthController(adapter);
 
     @Test
     void returnsCustodyProviderWhenCredentialMatches() {
@@ -24,7 +22,7 @@ class KfeInternalRailHealthControllerTest {
                 true,
                 "Adapter"));
 
-        FinancialRailHealthPort.ProviderStatus status = controller.custodyProvider("credential");
+        FinancialRailHealthPort.ProviderStatus status = controller.custodyProvider();
 
         assertEquals("BITCOIN_CORE", status.providerName());
         assertEquals("Adapter", status.implementation());
@@ -36,13 +34,9 @@ class KfeInternalRailHealthControllerTest {
                 "onchain",
                 new FinancialRailHealthPort.ProviderStatus("BITCOIN_CORE", true, "Onchain")));
 
-        Map<String, FinancialRailHealthPort.ProviderStatus> providers = controller.activeRailProviders("credential");
+        Map<String, FinancialRailHealthPort.ProviderStatus> providers = controller.activeRailProviders();
 
         assertEquals("BITCOIN_CORE", providers.get("onchain").providerName());
     }
 
-    @Test
-    void rejectsInvalidCredential() {
-        assertThrows(ResponseStatusException.class, () -> controller.custodyProvider("wrong"));
-    }
 }

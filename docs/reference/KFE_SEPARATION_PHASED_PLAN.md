@@ -22,7 +22,9 @@ Split finance (KFE) from Core (identity/auth/notify/ops). KFE = money SoT. Treas
 | KFE | wallets, balances, txs, rails, PSBT orchestration, reserves, tax, finance audit/outbox; emits Intent to mesh |
 | Vault mesh | FROST shares, DKG/reshare, Taproot cosign, day-advance, governance rewards |
 
-Core ↔ KFE via HTTP/event/ports only. KFE ↔ mesh via vaultmesh adapter (token lab / mTLS go-live).
+Core ↔ KFE usa HTTPS/mTLS SPIFFE nativo, com portas internas separadas. KFE ↔
+Vault permanece no adapter vaultmesh e será migrado para identidade SPIFFE e
+intenção assinada na etapa seguinte.
 
 ## Phase 0 — Lock KFE-only
 - goal: garantir que o monólito atual esteja limpo antes de separar fisicamente.
@@ -69,7 +71,8 @@ Core ↔ KFE via HTTP/event/ports only. KFE ↔ mesh via vaultmesh adapter (toke
 - Criar imagem/container `kfe-service` separado de `auth-service-*`. Caminho canônico: `infra/docker/images/kfe-service/Dockerfile`.
 - Adicionar `kfe-service` ao compose/k8s. Iniciado com manifests Kubernetes…
 - Variáveis próprias: banco, Redis/outbox, Bitcoin Core, LND, **vault mesh** (`kfe.vaultmesh.*`), políticas de release — **não** mpc-sidecar no path local-full/deploy.
-- Colocar Core → KFE atrás de cliente HTTP interno ou mensageria confiável. Iniciado…
+- Manter Core → KFE atrás do cliente HTTPS interno com SPIFFE ID exato. Código
+  concluído; prova end-to-end no cluster ainda pendente.
 - Split health: Core `/health` must not hide finance failure; KFE exposes own finance health; treasury via mesh `/v1/health`.
 - `kfe-service` has own image/workload via Kustomize. Done for local/staging/production overlays…
 - Local Compose overlay `kfe-split` / local-full mesh bridge. Done for local sim.

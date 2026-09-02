@@ -1,7 +1,6 @@
 package com.kerosene.kfe.integration;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -10,7 +9,7 @@ import org.springframework.web.client.RestTemplate;
 import java.lang.reflect.Field;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -199,11 +198,10 @@ class KfeRemoteFinancialNotificationClientTest {
     }
 
     @Test
-    void rejectsMissingInternalCredentialBeforeCallingAuthServer() {
+    void missingLegacyCredentialDoesNotRollbackFinancialOperation() {
         KfeRemoteFinancialNotificationClient client = client("");
 
-        assertThrows(
-                IllegalStateException.class,
+        assertDoesNotThrow(
                 () -> client.notifyDepositConfirmed(
                         42L,
                         UUID.randomUUID(),
@@ -215,9 +213,8 @@ class KfeRemoteFinancialNotificationClientTest {
 
     private KfeRemoteFinancialNotificationClient client(String credential) {
         return new KfeRemoteFinancialNotificationClient(
-                new RestTemplateBuilder(),
+                WorkloadIdentityTestClients.legacy(credential),
                 "http://server.test",
-                credential,
                 100,
                 100);
     }

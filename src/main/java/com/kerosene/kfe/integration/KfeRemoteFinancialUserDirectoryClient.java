@@ -2,7 +2,7 @@ package com.kerosene.kfe.integration;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
@@ -20,7 +20,6 @@ import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.common.financial.FinancialUserDirectoryLookupRequest;
 import com.kerosene.common.financial.FinancialUserDirectoryPort;
 
-import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -29,7 +28,6 @@ import java.util.Optional;
 @ConditionalOnProperty(name = "kfe.remote.user-directory.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirectoryPort {
 
-    private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
     private static final String DEFAULT_BASE_URL = "http://server:8080";
     private static final String LOOKUP_PATH = "/internal/kfe/user-directory/lookup";
     private static final ParameterizedTypeReference<ApiResponse<FinancialUserHandle>> RESPONSE_TYPE =
@@ -37,20 +35,16 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
-    private final String internalSecret;
 
     public KfeRemoteFinancialUserDirectoryClient(
-            RestTemplateBuilder restTemplateBuilder,
+            InternalServiceRestTemplateFactory restTemplateFactory,
             @Value("${auth.remote.base-url:http://server:8080}") String baseUrl,
-            @Value("${kfe.internal.shared-secret:}") String internalSecret,
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
-        this.restTemplate = restTemplateBuilder
-                .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .setReadTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
-        this.baseUrl = trimTrailingSlash(baseUrl);
-        this.internalSecret = internalSecret;
+        InternalServiceRestTemplateFactory.ConfiguredClient client = restTemplateFactory.create(
+                baseUrl, DEFAULT_BASE_URL, connectTimeoutMs, readTimeoutMs);
+        this.restTemplate = client.restTemplate();
+        this.baseUrl = client.baseUrl();
     }
 
     @Override
@@ -93,11 +87,7 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
     }
 
     private <T> HttpEntity<T> internalJsonEntity(T body) {
-        if (internalSecret == null || internalSecret.isBlank()) {
-            throw unavailable("KFE internal shared secret is not configured.", null);
-        }
         HttpHeaders headers = new HttpHeaders();
-        headers.set(INTERNAL_HEADER, internalSecret);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return new HttpEntity<>(body, headers);
     }
@@ -114,10 +104,4 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
                 && !handle.username().isBlank();
     }
 
-    private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) {
-            return DEFAULT_BASE_URL;
-        }
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
-    }
 }
