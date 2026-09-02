@@ -2,7 +2,6 @@ package com.kerosene.kfe.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -144,10 +143,9 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
 
     private KfeRemoteFinancialTransactionApprovalClient client(String credential) {
         return new KfeRemoteFinancialTransactionApprovalClient(
-                new RestTemplateBuilder(),
+                WorkloadIdentityTestClients.legacy(credential),
                 new ObjectMapper(),
                 "http://server.test",
-                credential,
                 100,
                 100);
     }

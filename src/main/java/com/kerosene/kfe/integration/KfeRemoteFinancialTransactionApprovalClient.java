@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpEntity;
@@ -24,7 +24,6 @@ import com.kerosene.common.financial.DeviceProof;
 import com.kerosene.common.financial.PasskeyAssertion;
 import com.kerosene.common.financial.RecoveryApproval;
 
-import java.time.Duration;
 import java.util.Map;
 
 @Component
@@ -32,28 +31,23 @@ import java.util.Map;
 @ConditionalOnProperty(name = "kfe.remote.transaction-approval.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTransactionApprovalPort {
 
-    private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
     private static final String DEFAULT_BASE_URL = "http://server:8080";
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final String baseUrl;
-    private final String internalSecret;
 
     public KfeRemoteFinancialTransactionApprovalClient(
-            RestTemplateBuilder restTemplateBuilder,
+            InternalServiceRestTemplateFactory restTemplateFactory,
             ObjectMapper objectMapper,
             @Value("${auth.remote.base-url:http://server:8080}") String baseUrl,
-            @Value("${kfe.internal.shared-secret:}") String internalSecret,
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
-        this.restTemplate = restTemplateBuilder
-                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .readTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
+        InternalServiceRestTemplateFactory.ConfiguredClient client = restTemplateFactory.create(
+                baseUrl, DEFAULT_BASE_URL, connectTimeoutMs, readTimeoutMs);
+        this.restTemplate = client.restTemplate();
         this.objectMapper = objectMapper;
-        this.baseUrl = trimTrailingSlash(baseUrl);
-        this.internalSecret = internalSecret;
+        this.baseUrl = client.baseUrl();
     }
 
     @Override
@@ -151,20 +145,9 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
     }
 
     private <T> HttpEntity<T> internalJsonEntity(T body) {
-        if (internalSecret == null || internalSecret.isBlank()) {
-            throw new IllegalStateException("kfe.internal.shared-secret must be configured for KFE to Auth calls");
-        }
         HttpHeaders headers = new HttpHeaders();
-        headers.set(INTERNAL_HEADER, internalSecret);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return new HttpEntity<>(body, headers);
-    }
-
-    private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) {
-            return DEFAULT_BASE_URL;
-        }
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 
     private boolean hasText(String value) {

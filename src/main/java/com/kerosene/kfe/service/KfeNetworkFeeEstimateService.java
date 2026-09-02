@@ -42,7 +42,7 @@ public class KfeNetworkFeeEstimateService {
     private final long expectedBlockSeconds;
     private final long quoteTtlSeconds;
     private final String bitcoinNetwork;
-    private final byte[] sharedSecretBytes;
+    private final byte[] signingSecretBytes;
     private final Map<String, KfeFeeQuoteResponse> quoteStore = new ConcurrentHashMap<>();
 
     public KfeNetworkFeeEstimateService(
@@ -59,7 +59,7 @@ public class KfeNetworkFeeEstimateService {
             @Value("${kfe.fee-estimate.expected-block-seconds:600}") long expectedBlockSeconds,
             @Value("${kfe.fee-estimate.quote-ttl-seconds:120}") long quoteTtlSeconds,
             @Value("${bitcoin.network:mainnet}") String bitcoinNetwork,
-            @Value("${kfe.internal.shared-secret:}") String sharedSecret) {
+            @Value("${kfe.fee-quote.signing-secret:}") String signingSecret) {
         this.bitcoinCoreProvider = bitcoinCoreProvider;
         this.pricingService = pricingService;
         this.estimatedVbytes = positive(estimatedVbytes, "estimatedVbytes");
@@ -76,14 +76,14 @@ public class KfeNetworkFeeEstimateService {
         this.expectedBlockSeconds = positive(expectedBlockSeconds, "expectedBlockSeconds");
         this.quoteTtlSeconds = positive(quoteTtlSeconds, "quoteTtlSeconds");
         this.bitcoinNetwork = bitcoinNetwork != null ? bitcoinNetwork.trim() : "mainnet";
-        this.sharedSecretBytes = resolveSharedSecret(sharedSecret);
+        this.signingSecretBytes = resolveSigningSecret(signingSecret);
     }
 
-    private static byte[] resolveSharedSecret(String sharedSecret) {
-        if (sharedSecret == null || sharedSecret.isBlank()) {
-            throw new IllegalArgumentException("kfe.internal.shared-secret must be configured for fee quote signing.");
+    private static byte[] resolveSigningSecret(String signingSecret) {
+        if (signingSecret == null || signingSecret.isBlank()) {
+            throw new IllegalArgumentException("kfe.fee-quote.signing-secret must be configured.");
         }
-        return sharedSecret.getBytes(StandardCharsets.UTF_8);
+        return signingSecret.getBytes(StandardCharsets.UTF_8);
     }
 
     /**
@@ -179,7 +179,7 @@ public class KfeNetworkFeeEstimateService {
                 quote.getExpiresAt() != null ? quote.getExpiresAt().toString() : "");
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(sharedSecretBytes, "HmacSHA256"));
+            mac.init(new SecretKeySpec(signingSecretBytes, "HmacSHA256"));
             byte[] hmac = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
             return Base64.getEncoder().encodeToString(hmac);
         } catch (Exception e) {

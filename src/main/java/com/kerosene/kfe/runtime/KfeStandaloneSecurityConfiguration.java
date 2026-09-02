@@ -47,7 +47,7 @@ public class KfeStandaloneSecurityConfiguration {
                                 "/api/public/kfe/**",
                                 "/error")
                         .permitAll()
-                        // Internal endpoints verify X-KFE-Internal-Secret in-controller (constant-time).
+                        // The workload-identity filter authenticates these routes before Spring Security.
                         .requestMatchers("/internal/kfe/vault-mesh/**").permitAll()
                         .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")

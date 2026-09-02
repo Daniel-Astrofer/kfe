@@ -2,7 +2,6 @@ package com.kerosene.kfe.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -11,7 +10,7 @@ import org.springframework.web.client.RestTemplate;
 import java.lang.reflect.Field;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -44,19 +43,17 @@ class KfeRemoteStompRelayClientTest {
     }
 
     @Test
-    void failsFastWhenInternalSecretMissing() {
+    void missingLegacySecretDoesNotBreakBestEffortRelay() {
         KfeRemoteStompRelayClient client = client(" ");
-        assertThrows(
-                IllegalStateException.class,
+        assertDoesNotThrow(
                 () -> client.publishToUser(1L, "/queue/balance", Map.of("walletId", "w")));
     }
 
     private static KfeRemoteStompRelayClient client(String secret) {
         return new KfeRemoteStompRelayClient(
-                new RestTemplateBuilder(),
+                WorkloadIdentityTestClients.legacy(secret),
                 new ObjectMapper(),
                 "http://server.test",
-                secret,
                 1000L,
                 1000L);
     }

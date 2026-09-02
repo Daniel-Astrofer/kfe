@@ -1,23 +1,20 @@
 package com.kerosene.kfe.controller;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.web.server.ResponseStatusException;
 import com.kerosene.common.financial.FinancialAuditIntegrityPort;
 import com.kerosene.kfe.integration.KfeFinancialAuditIntegrityAdapter;
 
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class KfeInternalAuditIntegrityControllerTest {
 
     private final KfeFinancialAuditIntegrityAdapter adapter = mock(KfeFinancialAuditIntegrityAdapter.class);
-    private final KfeInternalAuditIntegrityController controller = new KfeInternalAuditIntegrityController(
-            adapter,
-            "credential");
+    private final KfeInternalAuditIntegrityController controller =
+            new KfeInternalAuditIntegrityController(adapter);
 
     @Test
     void returnsAuditRootWhenCredentialMatches() {
@@ -34,7 +31,7 @@ class KfeInternalAuditIntegrityControllerTest {
                 "test-signature",
                 "checkpoint-7"));
 
-        FinancialAuditIntegrityPort.AuditRoot root = controller.root("credential");
+        FinancialAuditIntegrityPort.AuditRoot root = controller.root();
 
         assertEquals("abc123", root.merkleRoot());
         assertEquals(7L, root.eventCount());
@@ -42,8 +39,4 @@ class KfeInternalAuditIntegrityControllerTest {
         assertEquals(7L, root.toSequence());
     }
 
-    @Test
-    void rejectsInvalidCredential() {
-        assertThrows(ResponseStatusException.class, () -> controller.root("wrong"));
-    }
 }
