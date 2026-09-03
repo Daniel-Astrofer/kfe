@@ -13,7 +13,6 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.vaultmesh.VaultMeshDayAdvanceResult;
@@ -47,12 +46,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * HTTP adapter from {@code kfe-service} to the vault-mesh lab/prod node.
- * Maps Intent → {@code POST /sign/{intentId}/{messageHash}} (F3 vault API);
- * day rotation → {@code /v1/day/*} + {@code /v1/reshare/trigger}.
+ * Production HTTP adapter from {@code kfe-service} to the Vault mesh.
+ * Signing is available only through Intent-bound PSBT requests.
  *
  * <p>Optional client mTLS via {@code kfe.vaultmesh.tls.*} (PEM or keystore/truststore).
- * When TLS is enabled, {@code X-Vault-Token} is omitted (vault mTLS mode refuses static tokens).
+ * Every request uses the configured mTLS operator or workload identity.
  */
 @Component
 @ConditionalOnProperty(name = "kfe.vaultmesh.enabled", havingValue = "true")
@@ -66,7 +64,6 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     private final ObjectMapper objectMapper;
     private final String baseUrl;
     private final List<String> vaultUrls;
-    private final String apiToken;
     private final boolean tlsEnabled;
     private final String constitutionHash;
     private final int constitutionMemberCount;
@@ -78,11 +75,11 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
     public KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
-            @Value("${kfe.vaultmesh.base-url:http://127.0.0.1:7701}") String baseUrl,
+            @Value("${kfe.vaultmesh.base-url}") String baseUrl,
             @Value("${kfe.vaultmesh.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${kfe.vaultmesh.read-timeout-ms:5000}") long readTimeoutMs,
             @Value("${kfe.vaultmesh.api-token:}") String apiToken,
-            @Value("${kfe.vaultmesh.tls.enabled:false}") boolean tlsEnabled,
+            @Value("${kfe.vaultmesh.tls.enabled:true}") boolean tlsEnabled,
             @Value("${kfe.vaultmesh.tls.cert-path:}") String tlsCertPath,
             @Value("${kfe.vaultmesh.tls.key-path:}") String tlsKeyPath,
             @Value("${kfe.vaultmesh.tls.ca-path:}") String tlsCaPath,
@@ -97,13 +94,15 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             @Value("${kfe.vaultmesh.constitution.member-count:3}") int constitutionMemberCount,
             @Value("${kfe.vaultmesh.constitution.threshold:2}") int constitutionThreshold,
             @Value("${kfe.vaultmesh.urls:}") String vaultUrlsCsv,
-            @Value("${kfe.vaultmesh.transport:direct}") String transport,
+            @Value("${kfe.vaultmesh.transport:tor}") String transport,
             @Value("${kfe.vaultmesh.proxy.socks-host:}") String socksHost,
             @Value("${kfe.vaultmesh.proxy.socks-port:9050}") int socksPort) {
         this.objectMapper = objectMapper;
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.vaultUrls = parseVaultUrls(vaultUrlsCsv, this.baseUrl);
-        this.apiToken = apiToken == null ? "" : apiToken.trim();
+        if (apiToken != null && !apiToken.isBlank()) {
+            throw new IllegalStateException("kfe.vaultmesh.api-token was removed; use mTLS identity");
+        }
         this.tlsEnabled = KfeVaultMeshTlsSupport.tlsConfigured(
                 tlsEnabled, tlsCertPath, tlsKeyPath, tlsCaPath, tlsKeystorePath, tlsTruststorePath);
         this.constitutionHash = blankToEmpty(constitutionHash);
@@ -141,7 +140,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         }
     }
 
-    /** Test / lab helper: plaintext client (no mTLS, single vault). */
+    /** Package-private constructor retained for isolated HTTP contract tests. */
     KfeVaultMeshSettlementClient(
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
@@ -187,26 +186,8 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     @Override
     public VaultMeshReceipt submitIntent(VaultMeshIntent intent) {
-        if (intent == null || intent.intentId() == null || intent.intentId().isBlank()) {
-            return rejected("INVALID_INTENT", null);
-        }
-        String messageHash = messageHash(intent);
-        String sessionId = UriUtils.encodePathSegment(intent.intentId().trim(), StandardCharsets.UTF_8);
-        String path = baseUrl + "/sign/" + sessionId + "/" + messageHash;
-        try {
-            @SuppressWarnings("rawtypes")
-            ResponseEntity<Map> response =
-                    restTemplate.postForEntity(path, new HttpEntity<>(authHeaders(false)), Map.class);
-            return toReceipt(intent.intentId(), response.getBody());
-        } catch (RestClientResponseException ex) {
-            Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
-            if (body != null && body.get("error") != null) {
-                return meshError(intent.intentId(), String.valueOf(body.get("error")));
-            }
-            return rejected("MESH_HTTP_" + ex.getStatusCode().value(), intent.intentId());
-        } catch (Exception ex) {
-            return rejected("MESH_HTTP_ERROR:" + ex.getClass().getSimpleName(), intent.intentId());
-        }
+        String intentId = intent == null ? null : intent.intentId();
+        return rejected("INTENT_BOUND_PSBT_REQUIRED", intentId);
     }
 
     @Override
@@ -401,7 +382,8 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
             @SuppressWarnings("rawtypes")
             ResponseEntity<Map> response =
                     restTemplate.postForEntity(path, new HttpEntity<>(json, authHeaders(true)), Map.class);
-            return toPsbtReceipt(request.intentId(), response.getBody());
+            return toPsbtReceipt(
+                    request.intentId(), firstNonBlank(request.sessionId(), request.intentId()), response.getBody());
         } catch (RestClientResponseException ex) {
             Map<?, ?> body = parseBody(ex.getResponseBodyAsString());
             if (body != null && body.get("error") != null) {
@@ -539,10 +521,6 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         if (json) {
             headers.setContentType(MediaType.APPLICATION_JSON);
         }
-        // mTLS identity replaces X-Vault-Token; vault MutualTlsAuthAdapter refuses the header.
-        if (!tlsEnabled && !apiToken.isEmpty()) {
-            headers.set("X-Vault-Token", apiToken);
-        }
         return headers;
     }
 
@@ -554,7 +532,7 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         return VaultMeshDayAdvanceResult.failed("MESH_HTTP_" + ex.getStatusCode().value());
     }
 
-    private VaultMeshPsbtReceipt toPsbtReceipt(String intentId, Map<?, ?> body) {
+    private VaultMeshPsbtReceipt toPsbtReceipt(String intentId, String expectedSessionId, Map<?, ?> body) {
         if (body == null) {
             return psbtRejected("EMPTY_RESPONSE", intentId);
         }
@@ -576,51 +554,46 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
         String respSignature = body.get("signature") == null
                 ? null : String.valueOf(body.get("signature"));
 
-        // Verify constitution hash if configured
-        if (!constitutionHash.isEmpty()
-                && respConstitutionHash != null
-                && !constitutionHash.equals(respConstitutionHash.trim())) {
+        if (constitutionHash.isEmpty()) {
+            return psbtRejected("CONSTITUTION_HASH_NOT_CONFIGURED", intentId);
+        }
+        if (respConstitutionHash == null || !constitutionHash.equals(respConstitutionHash.trim())) {
             return psbtRejected(
                     "CONSTITUTION_HASH_MISMATCH: expected="
                             + constitutionHash + " got=" + respConstitutionHash, intentId);
         }
 
-        // Verify threshold if response includes it
         Object respThreshold = body.get("threshold");
-        if (respThreshold != null) {
-            int providedThreshold = Integer.parseInt(String.valueOf(respThreshold));
-            if (providedThreshold < constitutionThreshold) {
-                return psbtRejected(
-                        "THRESHOLD_BELOW_MINIMUM: provided=" + providedThreshold
-                                + " required=" + constitutionThreshold, intentId);
-            }
+        if (respThreshold == null || Integer.parseInt(String.valueOf(respThreshold)) != constitutionThreshold) {
+            return psbtRejected("THRESHOLD_MISMATCH", intentId);
         }
 
-        // Verify participant IDs are unique and count matches constitution
         @SuppressWarnings("unchecked")
         List<String> participants = (List<String>) body.get("participant_ids");
-        if (participants != null) {
-            long distinctCount = participants.stream().distinct().count();
-            if (distinctCount != participants.size()) {
-                return psbtRejected("DUPLICATE_PARTICIPANT_IDS", intentId);
-            }
-            if (participants.size() != constitutionMemberCount) {
-                return psbtRejected(
-                        "PARTICIPANT_COUNT_MISMATCH: provided=" + participants.size()
-                                + " required=" + constitutionMemberCount, intentId);
-            }
+        if (participants == null) {
+            return psbtRejected("MISSING_PARTICIPANT_IDS", intentId);
+        }
+        long distinctCount = participants.stream().distinct().count();
+        if (distinctCount != participants.size()) {
+            return psbtRejected("DUPLICATE_PARTICIPANT_IDS", intentId);
+        }
+        if (participants.size() < constitutionThreshold || participants.size() > constitutionMemberCount) {
+            return psbtRejected(
+                    "PARTICIPANT_COUNT_MISMATCH: provided=" + participants.size()
+                            + " allowed=" + constitutionThreshold + ".." + constitutionMemberCount, intentId);
         }
 
-        // Verify session ID matches if provided
-        if (respSessionId != null && !respSessionId.isBlank()
-                && !respSessionId.equals(intentId)) {
-            return psbtRejected("SESSION_ID_MISMATCH: expected=" + intentId
+        if (respSessionId == null || !respSessionId.equals(expectedSessionId)) {
+            return psbtRejected("SESSION_ID_MISMATCH: expected=" + expectedSessionId
                     + " got=" + respSessionId, intentId);
         }
 
         String proof = respSignature;
         if (proof == null) {
             proof = respTranscriptHash;
+        }
+        if (proof == null || proof.isBlank()) {
+            return psbtRejected("MISSING_SIGNATURE_PROOF", intentId);
         }
         return new VaultMeshPsbtReceipt(
                 intentId,
@@ -732,11 +705,14 @@ public class KfeVaultMeshSettlementClient implements VaultMeshSettlementPort {
 
     private static String trimTrailingSlash(String url) {
         if (url == null || url.isBlank()) {
-            return "http://127.0.0.1:7701";
+            throw new IllegalArgumentException("Vault mesh URL is required");
         }
         String trimmed = url.trim();
         while (trimmed.endsWith("/")) {
             trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        if (!trimmed.startsWith("https://")) {
+            throw new IllegalArgumentException("Vault mesh URL must use https:// mTLS");
         }
         return trimmed;
     }

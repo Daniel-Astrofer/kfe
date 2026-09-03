@@ -1,3 +1,12 @@
+<!--
+Kerosene documentation metadata
+status: review-required
+audience: internal/restricted
+owner: kfe
+source_of_truth: kfe
+last_reviewed: 2026-09-03
+-->
+
 # Auditoria API
 
 Documentação corporativa dos endpoints de auditoria disponíveis no backend atual.

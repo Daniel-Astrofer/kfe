@@ -39,50 +39,30 @@ class KfeVaultMeshSettlementClientTest {
     Path tempDir;
 
     @Test
-    void submitIntentPostsSignPathAndMapsAcceptedReceipt() throws Exception {
+    void submitIntentRequiresIntentBoundPsbt() {
         KfeVaultMeshSettlementClient client = client();
-        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
         VaultMeshIntent intent = new VaultMeshIntent(
                 "intent-1", "USERS", "bc1qtest", 12_345L, "policy-a", Instant.ofEpochMilli(1_700_000_000_000L),
                 null, null, null, null);
-        String hash = KfeVaultMeshSettlementClient.messageHash(intent);
-
-        server.expect(requestTo("http://vault.test:7701/sign/intent-1/" + hash))
-                .andExpect(method(HttpMethod.POST))
-                .andExpect(header("X-Vault-Token", "test-vault-token"))
-                .andRespond(withSuccess(
-                        """
-                        {"session_id":"intent-1","message_hash":"%s","value":42,"scheme":"lab-shamir-threshold-v1"}
-                        """.formatted(hash),
-                        MediaType.APPLICATION_JSON));
 
         VaultMeshReceipt receipt = client.submitIntent(intent);
 
-        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.ACCEPTED);
+        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
         assertThat(receipt.intentId()).isEqualTo("intent-1");
-        assertThat(receipt.txidOrProof()).isEqualTo("42");
-        server.verify();
+        assertThat(receipt.reasonCode()).isEqualTo("INTENT_BOUND_PSBT_REQUIRED");
     }
 
     @Test
-    void submitIntentMapsFailStopFromVaultError() throws Exception {
+    void submitIntentNeverCallsLegacySigningRoute() throws Exception {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
         VaultMeshIntent intent = new VaultMeshIntent(
                 "intent-2", "USERS", "bc1q", 1L, "p", Instant.ofEpochMilli(1L),
                 null, null, null, null);
-        String hash = KfeVaultMeshSettlementClient.messageHash(intent);
-
-        server.expect(requestTo("http://vault.test:7701/sign/intent-2/" + hash))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"error\":\"fail-stop: online < t\"}"));
 
         VaultMeshReceipt receipt = client.submitIntent(intent);
 
-        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.FAIL_STOP);
-        assertThat(receipt.reasonCode()).contains("fail-stop");
+        assertThat(receipt.status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
         server.verify();
     }
 
@@ -114,7 +94,7 @@ class KfeVaultMeshSettlementClientTest {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
 
-        server.expect(requestTo("http://vault.test:7701/v1/bitcoin/deposit?bucket=USERS"))
+        server.expect(requestTo("https://vault.test:7701/v1/bitcoin/deposit?bucket=USERS"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(
                         """
@@ -131,9 +111,8 @@ class KfeVaultMeshSettlementClientTest {
     void getDayStatusMapsCurrentEpoch() throws Exception {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
-        server.expect(requestTo("http://vault.test:7701/v1/day/current"))
+        server.expect(requestTo("https://vault.test:7701/v1/day/current"))
                 .andExpect(method(HttpMethod.GET))
-                .andExpect(header("X-Vault-Token", "test-vault-token"))
                 .andRespond(withSuccess(
                         "{\"day_epoch\":\"2099-01-01\"}", MediaType.APPLICATION_JSON));
 
@@ -148,7 +127,7 @@ class KfeVaultMeshSettlementClientTest {
     void getDayStatusMapsStaleConflict() throws Exception {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
-        server.expect(requestTo("http://vault.test:7701/v1/day/current"))
+        server.expect(requestTo("https://vault.test:7701/v1/day/current"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withStatus(HttpStatus.CONFLICT)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -168,15 +147,14 @@ class KfeVaultMeshSettlementClientTest {
         KfeVaultMeshSettlementClient client = client();
         MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
 
-        server.expect(requestTo("http://vault.test:7701/v1/day/vote"))
+        server.expect(requestTo("https://vault.test:7701/v1/day/vote"))
                 .andExpect(method(HttpMethod.POST))
-                .andExpect(header("X-Vault-Token", "test-vault-token"))
                 .andRespond(withSuccess("{\"ok\":true}", MediaType.APPLICATION_JSON));
-        server.expect(requestTo("http://vault.test:7701/v1/day/advance"))
+        server.expect(requestTo("https://vault.test:7701/v1/day/advance"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess(
                         "{\"day_epoch\":\"2026-07-22\",\"advanced\":true}", MediaType.APPLICATION_JSON));
-        server.expect(requestTo("http://vault.test:7701/v1/reshare/trigger"))
+        server.expect(requestTo("https://vault.test:7701/v1/reshare/trigger"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess(
                         "{\"reshared\":true,\"policy\":\"daily\",\"reason\":\"kfe-day-rotation\"}",
@@ -194,7 +172,7 @@ class KfeVaultMeshSettlementClientTest {
     }
 
     @Test
-    void tlsEnabledOmitsVaultTokenHeader() throws Exception {
+    void tlsClientAlsoRefusesNonPsbtSigning() throws Exception {
         Path certs = materializeLabCerts();
         KfeVaultMeshSettlementClient client = new KfeVaultMeshSettlementClient(
                 new RestTemplateBuilder(),
@@ -202,7 +180,7 @@ class KfeVaultMeshSettlementClientTest {
                 "https://vault.test:7701",
                 1000L,
                 1000L,
-                "must-not-send",
+                "",
                 true,
                 certs.resolve("vault-client.crt").toString(),
                 certs.resolve("vault-client.pkcs8.key").toString(),
@@ -223,18 +201,9 @@ class KfeVaultMeshSettlementClientTest {
                 9050);
         assertThat(client.tlsEnabled()).isTrue();
 
-        MockRestServiceServer server = MockRestServiceServer.createServer(restTemplate(client));
         VaultMeshIntent intent = new VaultMeshIntent("intent-tls", "USERS", "bc1q", 1L, "p", Instant.ofEpochMilli(1L),
                 null, null, null, null);
-        String hash = KfeVaultMeshSettlementClient.messageHash(intent);
-        server.expect(requestTo("https://vault.test:7701/sign/intent-tls/" + hash))
-                .andExpect(method(HttpMethod.POST))
-                .andExpect(request -> assertThat(request.getHeaders().get("X-Vault-Token")).isNull())
-                .andRespond(withSuccess(
-                        "{\"session_id\":\"intent-tls\",\"value\":1}", MediaType.APPLICATION_JSON));
-
-        assertThat(client.submitIntent(intent).status()).isEqualTo(VaultMeshReceipt.Status.ACCEPTED);
-        server.verify();
+        assertThat(client.submitIntent(intent).status()).isEqualTo(VaultMeshReceipt.Status.REJECTED);
     }
 
     @Test
@@ -364,10 +333,10 @@ class KfeVaultMeshSettlementClientTest {
         return new KfeVaultMeshSettlementClient(
                 new RestTemplateBuilder(),
                 new ObjectMapper(),
-                "http://vault.test:7701",
+                "https://vault.test:7701",
                 1000L,
                 1000L,
-                "test-vault-token");
+                "");
     }
 
     private static RestTemplate restTemplate(KfeVaultMeshSettlementClient client) throws Exception {

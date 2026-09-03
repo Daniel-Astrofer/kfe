@@ -47,8 +47,7 @@ public class KfeStandaloneSecurityConfiguration {
                                 "/api/public/kfe/**",
                                 "/error")
                         .permitAll()
-                        // Internal endpoints verify X-KFE-Internal-Secret in-controller (constant-time).
-                        .requestMatchers("/internal/kfe/vault-mesh/**").permitAll()
+                        // Internal endpoints still perform their controller-level credential check.
                         .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")
                         .requestMatchers("/kfe/**").authenticated()

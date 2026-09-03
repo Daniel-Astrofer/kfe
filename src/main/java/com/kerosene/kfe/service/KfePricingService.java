@@ -5,63 +5,28 @@ import com.kerosene.kfe.config.KfePricingPolicy;
 import com.kerosene.kfe.config.KfePricingPolicy.RailPricing;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
+import com.kerosene.kfe.domain.pricing.KfePricingCalculator;
+import com.kerosene.kfe.domain.pricing.PricingPolicySnapshot;
 
 @Service
 public class KfePricingService {
 
-    private static final long BPS_DENOMINATOR = 10_000L;
-
     private final KfePricingPolicy policy;
+    private final KfePricingCalculator calculator = new KfePricingCalculator();
 
     public KfePricingService(KfePricingPolicy policy) {
         this.policy = policy;
     }
 
     public Quote quote(KfeRail rail, KfeDirection direction, long amountSats, long networkFeeSats) {
-        if (amountSats <= 0) {
-            throw new IllegalArgumentException("amountSats must be positive.");
-        }
-        if (networkFeeSats < 0) {
-            throw new IllegalArgumentException("networkFeeSats must be non-negative.");
-        }
-
-        int policyVersion = policy.getVersion();
-
-        if (rail == KfeRail.INTERNAL || direction == KfeDirection.INTERNAL) {
-            return new Quote(amountSats, amountSats, 0L, amountSats, 0L, policyVersion);
-        }
-
         String railKey = rail.name() + "-" + direction.name();
-        RailPricing railPricing = policy.forRailDirection(railKey);
-
-        long keroseneFee;
-        if (railPricing != null && railPricing.getBasisPoints() > 0) {
-            keroseneFee = percentageFee(amountSats, railPricing.getBasisPoints());
-            if (railPricing.getMinSats() != null && keroseneFee < railPricing.getMinSats()) {
-                keroseneFee = railPricing.getMinSats();
-            }
-            if (railPricing.getMaxSats() != null && keroseneFee > railPricing.getMaxSats()) {
-                keroseneFee = railPricing.getMaxSats();
-            }
-        } else {
-            keroseneFee = 0L;
-        }
-
-        if (direction == KfeDirection.INBOUND) {
-            long receiverAmount = amountSats - keroseneFee;
-            if (receiverAmount <= 0) {
-                throw new IllegalArgumentException("Inbound amount is too small after Kerosene fee.");
-            }
-            return new Quote(amountSats, receiverAmount, networkFeeSats, 0L, keroseneFee, policyVersion);
-        }
-
-        long totalDebit = Math.addExact(amountSats, Math.addExact(networkFeeSats, keroseneFee));
-        return new Quote(amountSats, amountSats, networkFeeSats, totalDebit, keroseneFee, policyVersion);
-    }
-
-    private long percentageFee(long amountSats, int basisPoints) {
-        return Math.floorDiv(Math.addExact(Math.multiplyExact(amountSats, (long) basisPoints),
-                BPS_DENOMINATOR - 1), BPS_DENOMINATOR);
+        RailPricing configured = policy.forRailDirection(railKey);
+        PricingPolicySnapshot snapshot = new PricingPolicySnapshot(policy.getVersion(),
+                configured == null ? null : new PricingPolicySnapshot.RailPricing(
+                        configured.getBasisPoints(), configured.getMinSats(), configured.getMaxSats()));
+        KfePricingCalculator.Quote result = calculator.quote(rail, direction, amountSats, networkFeeSats, snapshot);
+        return new Quote(result.grossAmountSats(), result.receiverAmountSats(), result.networkFeeSats(),
+                result.totalDebitSats(), result.keroseneFeeSats(), result.pricingPolicyVersion());
     }
 
     public record Quote(

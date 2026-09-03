@@ -1,3 +1,12 @@
+<!--
+Kerosene documentation metadata
+status: review-required
+audience: internal
+owner: kfe
+source_of_truth: kfe
+last_reviewed: 2026-09-03
+-->
+
 # KFE API
 
 > Fonte de verdade desta página: controllers, DTOs, records, enums e `EndpointPolicyRegistry` do backend Spring Boot em `/src/main/java`.
