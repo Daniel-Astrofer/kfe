@@ -6,12 +6,14 @@ import java.time.ZoneOffset;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -32,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,6 +77,7 @@ public class KfeColdWalletObservationService {
     private final int descriptorRange;
     /** Per-wallet single-flight so schedule + ZMQ debounce cannot overwrite with a stale scan. */
     private final ConcurrentHashMap<UUID, Object> walletLocks = new ConcurrentHashMap<>();
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeColdWalletObservationService(
             KfeWalletRepository walletRepository,
@@ -108,10 +112,26 @@ public class KfeColdWalletObservationService {
         this.descriptorRange = Math.max(1, descriptorRange);
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
     @Scheduled(
             fixedDelayString = "${kfe.cold-observation.fixed-delay-ms:60000}",
             initialDelayString = "${kfe.cold-observation.initial-delay-ms:35000}")
     public void reconcileColdWallets() {
+        try {
+            maintenanceGuard.executeMutation("cold-observation.reconcile", () -> {
+                reconcileColdWalletsAdmitted();
+                return null;
+            }, ignored -> false);
+        } catch (KfeMaintenanceGuard.MaintenanceException rejection) {
+            log.debug("[KFE Cold Observation] reconciliation paused: {}", rejection.getMessage());
+        }
+    }
+
+    private void reconcileColdWalletsAdmitted() {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
             return;
@@ -146,6 +166,15 @@ public class KfeColdWalletObservationService {
         if (walletId == null) {
             return;
         }
+        // Descriptor scans, managed-entity changes and callbacks all need admission.
+        // Probe/after-commit success is not durable completion proof, including caught failures.
+        maintenanceGuard.executeMutation("cold-observation.observe-wallet", () -> {
+            observeWalletAdmitted(walletId);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void observeWalletAdmitted(UUID walletId) {
         Object lock = walletLocks.computeIfAbsent(walletId, id -> new Object());
         synchronized (lock) {
             KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
@@ -185,7 +214,10 @@ public class KfeColdWalletObservationService {
         if (parsed == null || walletIds == null || walletIds.isEmpty()) {
             return;
         }
-        transactionTemplate.executeWithoutResult(status -> doIngestZmqRawTx(parsed, walletIds));
+        maintenanceGuard.executeMutation("cold-observation.ingest-zmq-raw-tx", () -> {
+            transactionTemplate.executeWithoutResult(status -> doIngestZmqRawTx(parsed, walletIds));
+            return null;
+        }, ignored -> false);
     }
 
     private void doIngestZmqRawTx(KfeBitcoinZmqTxMatcher.ParsedRawTx parsed, Set<UUID> walletIds) {
@@ -638,6 +670,13 @@ public class KfeColdWalletObservationService {
         if (walletId == null) {
             return;
         }
+        maintenanceGuard.executeMutation("cold-observation.refresh-confirmations", () -> {
+            refreshConfirmationsAdmitted(walletId);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void refreshConfirmationsAdmitted(UUID walletId) {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
             return;
@@ -694,6 +733,21 @@ public class KfeColdWalletObservationService {
         if (txid == null || txid.isBlank()) {
             throw new IllegalArgumentException("txid is required for cold PSBT observation.");
         }
+        // A PSBT/workflow id is an idempotency key, not prior maintenance admission.
+        return maintenanceGuard.executeMutation("cold-observation.record-psbt-broadcast",
+                () -> recordColdPsbtBroadcastAdmitted(
+                        userId, walletId, workflowId, txid, amountSats, feeSats, destinationAddress),
+                ignored -> false);
+    }
+
+    private KfeTransactionEntity recordColdPsbtBroadcastAdmitted(
+            Long userId,
+            UUID walletId,
+            UUID workflowId,
+            String txid,
+            long amountSats,
+            long feeSats,
+            String destinationAddress) {
         String idempotencyKey = "cold-psbt:" + workflowId;
         return transactionRepository.findByIdempotencyKey(idempotencyKey).orElseGet(() -> {
             long safeAmount = Math.max(0L, amountSats);
@@ -729,6 +783,12 @@ public class KfeColdWalletObservationService {
 
     @Transactional
     public boolean touchColdConfirmations(UUID transactionId, int confirmations) {
+        // Admit before locking or changing a managed entity; transaction ids are not provenance.
+        return maintenanceGuard.executeMutation("cold-observation.touch-confirmations",
+                () -> touchColdConfirmationsAdmitted(transactionId, confirmations), ignored -> false);
+    }
+
+    private boolean touchColdConfirmationsAdmitted(UUID transactionId, int confirmations) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
         if (tx == null) {
             return false;

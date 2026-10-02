@@ -3,14 +3,17 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.kerosene.kfe.integration.KfeRemoteStompRelayClient;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Pushes statement/extrato rows to the authenticated user after commit.
@@ -28,12 +31,28 @@ public class TransactionEventPublisher {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final KfeRemoteStompRelayClient remoteRelay;
+    private final Executor executor;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
+    @Autowired
     public TransactionEventPublisher(
             ObjectProvider<SimpMessagingTemplate> messagingTemplate,
             ObjectProvider<KfeRemoteStompRelayClient> remoteRelay) {
+        this(messagingTemplate, remoteRelay, ForkJoinPool.commonPool());
+    }
+
+    TransactionEventPublisher(
+            ObjectProvider<SimpMessagingTemplate> messagingTemplate,
+            ObjectProvider<KfeRemoteStompRelayClient> remoteRelay,
+            Executor executor) {
         this.messagingTemplate = messagingTemplate.getIfAvailable();
         this.remoteRelay = remoteRelay.getIfAvailable();
+        this.executor = Objects.requireNonNull(executor);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = Objects.requireNonNull(guard);
     }
 
     public void publishAfterCommit(Long userId, Map<String, ?> payload) {
@@ -67,16 +86,13 @@ public class TransactionEventPublisher {
             }
         };
 
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            publish.run();
-            return;
-        }
-
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                publish.run();
-            }
+        maintenanceGuard.executeMutation("publisher.transaction.enqueue", () -> {
+            maintenanceGuard.scheduleContinuation("publisher.transaction.delivery", executor, () ->
+                    maintenanceGuard.executeMutation("publisher.transaction.delivery", () -> {
+                        publish.run();
+                        return Boolean.TRUE;
+                    }, ignored -> false)); // Includes caught and best-effort relay failures.
+            return Boolean.TRUE;
         });
     }
 }

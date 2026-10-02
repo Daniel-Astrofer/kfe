@@ -1,6 +1,7 @@
 # Cell operations implementation wave
 
-Coordinator: main Codex agent. Prior worker closed; new wave 2026-10-02 below.
+Coordinator: main Codex agent. All continuation-wave workers are now closed;
+main owns completion and verification of returned/interrupted work below.
 Shared filesystem: this isolated worktree; no edits in the primary checkout.
 
 Coordinator integration checkpoint: all wave agents have been closed. The main
@@ -92,6 +93,72 @@ Additional disjoint workers own exact channel-producer/retention and notificatio
 outbox boundaries, respectively, with their existing tests plus one new maintenance
 test and runbook each. Coordinator owns transaction cancellation and all shared
 guard/store/schema/status-count integration. No worker runs Gradle or writes Git.
+
+## Continuation wave — October 2
+
+Coordinator owns the payment-request Lightning/onchain monitors, cursor admission,
+shared API/status integration and all KFE Gradle execution. A bounded worker owns
+only KfeOnchainBalanceSyncService.java, its existing ApplyObservedTest, a new
+maintenance/KfeBalanceObservationMaintenanceTest.java and its runbook. Another
+owns only KfeBitcoinRuntimeBootstrap.java, KfeTaxEventService.java, their exact
+existing tests, a new maintenance/KfeBootstrapTaxMaintenanceTest.java and its
+runbook. No worker edits shared guard/schema/financial algorithms or clears
+coverage blockers. Missing injection remains unavailable, remote/after-commit
+uncertainty remains unresolved, and bootstrap during drain must preserve the
+ADMIN surface without starting new wallet/RPC mutations.
+
+Disjoint follow-on workers own (1) KfeCustodialDepositObservationService and its
+existing test plus new maintenance tests/runbook, (2) KfeColdWalletObservationService
+and its existing test plus new maintenance tests/runbook, and (3) the Dashboard,
+BalanceEvent and TransactionEvent publishers with their exact tests and a new
+maintenance test/runbook. Each must preserve financial algorithms, admit before
+effects, and retain remote/after-commit uncertainty. Publisher callbacks must
+capture a V58 child before enqueue, not admit fresh after parent commit. Main
+owns all integration/Gradle/status changes; no shared-file edits by those workers.
+
+A sixth worker owns only KfeInboundSettlementService, KfeNetworkMonitor and
+KfeOutboundConfirmationMonitor with their exact tests plus a new maintenance
+test/runbook. Protect their roots before ledger, managed-entity and provider
+effects, retain all unresolved proof/provider/callback uncertainty. Coordinator
+owns payment monitor proxy/cursor tests, address/key/statement/peer roots and
+execution workflow integration. No worker runs shared Gradle or writes Git.
+
+The coordinator authorizes the balance-observation worker's new disjoint scope:
+only src/main/java/com/kerosene/kfe/service/KfeExecutionOutboxWorker.java,
+KfeExecutionOutboxProcessor.java and KfeExecutionOutboxService.java in that same
+directory; their exact existing KfeExecutionOutboxServiceTest.java,
+KfeExecutionOutboxProcessorTest.java and KfeExecutionOutboxProcessorAdditionalTest.java
+under src/test/java/com/kerosene/kfe/service/; new
+src/test/java/com/kerosene/kfe/maintenance/KfeExecutionOutboxMaintenanceTest.java;
+and docs/operations/execution-outbox-maintenance.md. Guard the entire worker batch
+through processor execution, reject fresh processing/heartbeat during drain even
+with an outbox lease token, retain nonempty-claim/remote uncertainty, and preserve
+claim/lease/financial policies. This entry is the worker's only execution-plan
+edit. Main owns helper/prepared services, shared guard, integration and Gradle;
+this worker runs no Gradle, writes no Git and removes no coverage blocker.
+
+After custodial-observation handoff, that worker owns only
+KfeExecutionTransactionHelper.java, its exact existing test, a new
+maintenance/KfeExecutionHelperMaintenanceTest.java and its runbook. Guard all
+public helper mutation roots and replace detached after-commit threads with
+durable V58 children captured before enqueue/commit. No financial algorithm
+changes, shared guard/schema/status edits, Gradle or Git by that worker.
+
+Coordinator alone owns the additional ReceiveAddressIssuer, MpcKeyService,
+SystemWalletService, StatementService, PreparedExecutionService and
+PlatformPeerInboundService roots, exact existing tests, new address/key/statement
+and prepared/peer maintenance suites and the combined runbook. Publisher and
+bootstrap workers subsequently perform read-only coverage/embedded-host audits;
+they cannot clear blockers or mutate other owners' files. Those read-only audits
+were interrupted by account limits, so no audit conclusion is inferred. Main has
+taken over all returned/interrupted files, completing custodial notification V58
+integration and owning the two direct outbound rail executors and their new suite.
+Main also owns the real PostgreSQL transaction-publisher integration tests.
+Main extends its bounded scope to KfeBitcoinZmqWatcher callback dispatch and
+KfeColdWalletReactiveRefreshService, their new service-package maintenance tests
+and reactive-refresh runbook. Admit before sequence/refresh effects or pending
+target consumption; preserve hints on rejected admission, without claiming
+durable source replay or introducing real sockets/signers in verification.
 
 ## Invariants and verification
 

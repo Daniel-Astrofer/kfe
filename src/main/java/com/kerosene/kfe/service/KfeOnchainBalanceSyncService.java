@@ -3,11 +3,13 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
@@ -22,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -64,6 +67,7 @@ public class KfeOnchainBalanceSyncService {
      * (ZMQ must not overwrite a just-completed full Electrum-parity collect).
      */
     private final long optimisticLiveTtlSeconds;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeOnchainBalanceSyncService(
             KfeWalletRepository walletRepository,
@@ -90,10 +94,26 @@ public class KfeOnchainBalanceSyncService {
         this.optimisticLiveTtlSeconds = Math.max(0L, optimisticLiveTtlSeconds);
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
     @Scheduled(
             fixedDelayString = "${kfe.onchain-balance-sync.fixed-delay-ms:45000}",
             initialDelayString = "${kfe.onchain-balance-sync.initial-delay-ms:25000}")
     public void reconcileActiveOnchainWallets() {
+        try {
+            maintenanceGuard.executeMutation("balance-observation.reconcile", () -> {
+                reconcileActiveOnchainWalletsAdmitted();
+                return null;
+            }, ignored -> false);
+        } catch (KfeMaintenanceGuard.MaintenanceException rejection) {
+            log.debug("[KFE Onchain Balance] reconciliation paused: {}", rejection.getMessage());
+        }
+    }
+
+    private void reconcileActiveOnchainWalletsAdmitted() {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
             return;
@@ -125,6 +145,12 @@ public class KfeOnchainBalanceSyncService {
      * observed (cold live path owns Electrum parity).
      */
     public long syncWallet(UUID walletId) {
+        // RPC completion, including a swallowed probe failure, is not durable completion proof.
+        return maintenanceGuard.executeMutation("balance-observation.sync-wallet",
+                () -> syncWalletAdmitted(walletId), ignored -> false);
+    }
+
+    private long syncWalletAdmitted(UUID walletId) {
         KfeWalletEntity wallet = walletRepository.findById(walletId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
         if (!CHAIN_SYNC_KINDS.contains(wallet.getKind())) {
@@ -184,6 +210,12 @@ public class KfeOnchainBalanceSyncService {
         if (probe.sats() < 0L) {
             return -1L;
         }
+        // The existing dashboard after-commit hook has no durable completion receipt.
+        return maintenanceGuard.executeMutation("balance-observation.apply-observed",
+                () -> applyObservedAdmitted(walletId, probe), ignored -> false);
+    }
+
+    private long applyObservedAdmitted(UUID walletId, ChainProbeResult probe) {
         Long result = transactionTemplate.execute(status -> {
             KfeWalletEntity wallet = walletRepository.findById(walletId)
                     .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
@@ -347,6 +379,11 @@ public class KfeOnchainBalanceSyncService {
     }
 
     long probeChainBalanceSats(BlockchainClient client, KfeWalletEntity wallet) {
+        return maintenanceGuard.executeMutation("balance-observation.probe-chain",
+                () -> probeChainBalanceSatsAdmitted(client, wallet), ignored -> false);
+    }
+
+    private long probeChainBalanceSatsAdmitted(BlockchainClient client, KfeWalletEntity wallet) {
         if (wallet.getKind() == KfeWalletKind.WATCH_ONLY) {
             // Confirmed-only descriptor total — cold live path must prefer mempool-aware collect.
             // Do not cap range below cold observation default (aligned via shared resolver + config).

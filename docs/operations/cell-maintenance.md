@@ -68,9 +68,12 @@ leaves an unresolved admission. There is no expiry-based clearance or force-clea
 endpoint. Nested work reuses the admission of an already admitted workflow.
 
 Draining pauses new guarded submissions, claims, channel executions, PSBT writes,
-and Vault day rotation. Already claimed outbox work may finish and remains counted.
+and Vault day rotation. An already admitted synchronous outbox workflow may finish
+and remains counted; a claim token alone cannot authorize fresh execution.
 Queued work is preserved; draining never cancels, releases reserves, or changes
-financial consensus. Readiness/liveness and signer activation are untouched.
+financial consensus. Liveness and signer activation are untouched; a paused startup
+bootstrap refuses readiness without aborting the ADMIN process. Actual management
+routing to an unready pod still requires deployment qualification.
 
 Status is an observation, not a distributed Cell-wide shutdown certificate.
 It counts admissions, all PROCESSING claims (including expired claims), UNKNOWN,
@@ -81,9 +84,12 @@ failed observation returns an observation blocker with `safeToUpdate=false`.
 The integrated wave also guards wallet/payment-request/cancellation starts,
 expiry-on-read and UTXO scans, notification claims/status/delivery, channel queue
 producers/orphan release and statement retention. Coverage remains explicitly
-incomplete: direct address/key/tax/bootstrap entrypoints, asynchronous inbound,
-confirmation/reorg callbacks, embedded execution and remote completion/recovery
-have not all been proved. HTTP successes and remote best-effort results remain
+incomplete despite the additional guarded address/key/tax/bootstrap, observation,
+inbound/confirmation/payment-monitor, statement/prepared/peer and direct executor
+roots. Publishers, custodial deposit notifications and helper after-completion
+work capture durable V58 children before commit/enqueue. ZMQ/debounce producers,
+all embedded participants and actual remote completion/recovery have not all
+been proved. HTTP successes and remote best-effort results remain
 UNCERTAIN, so these patches are not a usable complete-Cell drain certificate.
 The three unknown coverage blockers stay nonzero.
 Do not remove these blockers through a configuration flag. Additional hooks need

@@ -18,6 +18,11 @@ import static org.mockito.Mockito.when;
 
 class KfeSystemWalletServiceTest {
 
+    @org.junit.jupiter.api.BeforeEach
+    void activeMaintenance() {
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+    }
+
     private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
     private final KfeBalanceService balanceService = mock(KfeBalanceService.class);
     private final KfeHashService hashService = mock(KfeHashService.class);

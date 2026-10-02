@@ -46,12 +46,13 @@ class KfeExecutionOutboxServiceTest {
     }
 
     @Test
-    void heartbeatForAlreadyAdmittedWorkRemainsAvailableWhileDraining() {
+    void standaloneHeartbeatRequiresAdmissionAndRemainsUncertain() {
         UUID id = UUID.randomUUID();
         UUID token = UUID.randomUUID();
         when(repository.heartbeat(eq(id), eq(token), any(), any())).thenReturn(1);
         assertThat(service.heartbeat(new KfeExecutionOutboxService.ExecutionClaim(id, token))).isTrue();
-        org.mockito.Mockito.verifyNoInteractions(maintenanceStore);
+        verify(maintenanceStore).admit("outbox.heartbeat");
+        verify(maintenanceStore).resolve(any(UUID.class), eq(false));
     }
 
     @Test
@@ -72,5 +73,16 @@ class KfeExecutionOutboxServiceTest {
         verify(repository).claimDue(
                 eq(candidate.getId()), anyCollection(), anyCollection(), any(),
                 eq("kfe-worker"), any(UUID.class), any());
+        verify(maintenanceStore).resolve(any(UUID.class), eq(false));
+    }
+
+    @Test
+    void emptyClaimPathsCanCompleteWithoutInventingExecutionProvenance() {
+        when(repository.findTop100ClaimCandidates(anyCollection(), anyCollection(), any()))
+                .thenReturn(List.of());
+        assertThat(service.claimDue("worker")).isEmpty();
+        assertThat(service.claimImmediate(UUID.randomUUID(), "worker")).isEmpty();
+        org.mockito.Mockito.verify(maintenanceStore, org.mockito.Mockito.times(2))
+                .resolve(any(UUID.class), eq(true));
     }
 }

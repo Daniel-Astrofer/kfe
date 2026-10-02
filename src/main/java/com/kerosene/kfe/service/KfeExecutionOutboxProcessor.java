@@ -1,5 +1,6 @@
 package com.kerosene.kfe.service;
 
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.rail.CustodyGateway;
@@ -8,6 +9,7 @@ import com.kerosene.kfe.rail.LightningPaymentGateway;
 import com.kerosene.kfe.rail.LightningPaymentInFlightException;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -16,6 +18,7 @@ public class KfeExecutionOutboxProcessor {
     private final KfeExecutionTransactionHelper transactionHelper;
     private final List<KfeRailExecution> railExecutors;
     private final KfeExecutionOutboxService outboxService;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     @Autowired
     public KfeExecutionOutboxProcessor(
@@ -38,7 +41,20 @@ public class KfeExecutionOutboxProcessor {
                 new InlineLightningOutboundExecutor(transactionHelper, lightningPaymentGateway));
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
     public void process(KfeExecutionOutboxService.ExecutionClaim claim) {
+        // The outbox token fences lease ownership; it is not maintenance admission provenance.
+        maintenanceGuard.executeMutation("outbox.process", () -> {
+            processAdmitted(claim);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void processAdmitted(KfeExecutionOutboxService.ExecutionClaim claim) {
         UUID outboxId = claim.outboxId();
         requireLease(claim);
         KfeExecutionTransactionHelper.PreparationResult prep =

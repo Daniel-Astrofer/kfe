@@ -6,6 +6,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import com.kerosene.common.financial.FinancialNotificationPort;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeIdempotencyEntity;
 import com.kerosene.kfe.model.KfeIdempotencyId;
@@ -105,6 +107,11 @@ class KfeInboundSettlementServiceTest {
                 onchainSync,
                 metrics
         );
+        // Explicit ACTIVE fixture; production construction remains unavailable.
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        service.setMaintenanceGuard(new KfeMaintenanceService(store));
     }
 
     @Test

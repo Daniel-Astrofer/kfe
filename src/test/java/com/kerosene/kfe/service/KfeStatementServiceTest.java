@@ -58,6 +58,7 @@ class KfeStatementServiceTest {
                 entityManager,
                 transactionEventPublisher,
                 null);
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
         lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
         lenient().when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
         lenient().when(nativeQuery.executeUpdate()).thenReturn(1);

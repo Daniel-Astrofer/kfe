@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -51,6 +53,12 @@ public class KfePaymentRequestLightningMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfePaymentRequestLightningMonitor.class);
     private static final String ASSET_BTC = "BTC";
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     /**
      * Lightning payment result state (ITEM 22).
@@ -185,13 +193,17 @@ public class KfePaymentRequestLightningMonitor {
         if (status == null) {
             return;
         }
-        // Advance cursor indices from stream
-        if (status.addIndex() > 0L) {
-            lastAddIndex.updateAndGet(current -> Math.max(current, status.addIndex()));
-        }
-        if (status.settleIndex() > 0L) {
-            lastSettleIndex.updateAndGet(current -> Math.max(current, status.settleIndex()));
-        }
+        maintenanceGuard.executeMutation("payment-request.lightning-stream", () -> {
+            handleStreamInvoiceUpdateAdmitted(status);
+            // Only an admitted, successfully processed callback can advance local
+            // telemetry. These cursors are not durable replay/settlement proof.
+            if (status.addIndex() > 0L) lastAddIndex.accumulateAndGet(status.addIndex(), Math::max);
+            if (status.settleIndex() > 0L) lastSettleIndex.accumulateAndGet(status.settleIndex(), Math::max);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void handleStreamInvoiceUpdateAdmitted(CustodyGateway.IncomingLightningInvoiceStatus status) {
 
         LightningPaymentState state = classifyPaymentState(status.status());
         if (state != LightningPaymentState.SUCCEEDED) {
@@ -206,14 +218,10 @@ public class KfePaymentRequestLightningMonitor {
                     .filter(pr -> pr.getStatus() == KfePaymentRequestStatus.OPEN)
                     .filter(pr -> pr.getRail() == KfeRail.LIGHTNING)
                     .ifPresent(pr -> {
-                        try {
-                            settleLightningPaymentRequest(pr, status.receivedSats(), status.rawPayload());
-                            log.info("[KFE LN Stream] settled paymentRequestId={} paymentHash={}",
-                                    pr.getId(), status.paymentHash());
-                        } catch (RuntimeException ex) {
-                            log.warn("[KFE LN Stream] settle failed paymentRequestId={}: {}",
-                                    pr.getId(), ex.getMessage());
-                        }
+                        // Use the transactional proxy and its locked reload, just
+                        // like polling. Failure must not advance callback cursors.
+                        self.settleSettledInvoice(pr.getId(), status.receivedSats(), status.rawPayload());
+                        log.info("[KFE LN Stream] settlement returned paymentRequestId={}", pr.getId());
                     });
         }
     }
@@ -241,6 +249,9 @@ public class KfePaymentRequestLightningMonitor {
             for (KfePaymentRequestEntity request : requests) {
                 try {
                     probeAndMaybeSettle(request);
+                } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                    log.debug("[KFE LN PR Monitor] maintenance paused polling");
+                    return;
                 } catch (RuntimeException ex) {
                     log.warn(
                             "[KFE LN PR Monitor] failed paymentRequestId={}: {}",
@@ -271,6 +282,13 @@ public class KfePaymentRequestLightningMonitor {
         if (request.getPaymentHash() == null || request.getPaymentHash().isBlank()) {
             return;
         }
+        maintenanceGuard.executeMutation("payment-request.lightning-probe", () -> {
+            probeAndMaybeSettleAdmitted(request);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void probeAndMaybeSettleAdmitted(KfePaymentRequestEntity request) {
         if (request.isExpired(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC))) {
             // Last-chance LND probe before expiring — prevents race between LND settlement and KFE clock.
             CustodyGateway.IncomingLightningInvoiceStatus lastChance =
@@ -414,6 +432,13 @@ public class KfePaymentRequestLightningMonitor {
 
     @Transactional
     public void markFailed(UUID paymentRequestId, String rawStatus, String rawPayload) {
+        maintenanceGuard.executeMutation("payment-request.lightning-fail", () -> {
+            markFailedAdmitted(paymentRequestId, rawStatus, rawPayload);
+            return Boolean.TRUE;
+        });
+    }
+
+    private void markFailedAdmitted(UUID paymentRequestId, String rawStatus, String rawPayload) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElse(null);
         if (request == null || request.getStatus() != KfePaymentRequestStatus.OPEN) {
@@ -436,6 +461,13 @@ public class KfePaymentRequestLightningMonitor {
 
     @Transactional
     public void expireRequest(UUID paymentRequestId) {
+        maintenanceGuard.executeMutation("payment-request.lightning-expire", () -> {
+            expireRequestAdmitted(paymentRequestId);
+            return Boolean.TRUE;
+        });
+    }
+
+    private void expireRequestAdmitted(UUID paymentRequestId) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElse(null);
         if (request == null || request.getStatus() != KfePaymentRequestStatus.OPEN) {
@@ -449,6 +481,13 @@ public class KfePaymentRequestLightningMonitor {
 
     @Transactional
     public void settleSettledInvoice(UUID paymentRequestId, long receivedSats, String rawPayload) {
+        maintenanceGuard.executeMutation("payment-request.lightning-settle", () -> {
+            settleSettledInvoiceAdmitted(paymentRequestId, receivedSats, rawPayload);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void settleSettledInvoiceAdmitted(UUID paymentRequestId, long receivedSats, String rawPayload) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElse(null);
         if (request == null || request.getStatus() != KfePaymentRequestStatus.OPEN) {
@@ -488,6 +527,13 @@ public class KfePaymentRequestLightningMonitor {
      */
     @Transactional
     public void reconcileExpiredButSettled(UUID paymentRequestId, long receivedSats, String rawPayload) {
+        maintenanceGuard.executeMutation("payment-request.lightning-expired-settled", () -> {
+            reconcileExpiredButSettledAdmitted(paymentRequestId, receivedSats, rawPayload);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void reconcileExpiredButSettledAdmitted(UUID paymentRequestId, long receivedSats, String rawPayload) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElse(null);
         if (request == null) {
@@ -556,6 +602,13 @@ public class KfePaymentRequestLightningMonitor {
     @Deprecated
     @Transactional
     public void inspect(UUID paymentRequestId) {
+        maintenanceGuard.executeMutation("payment-request.lightning-inspect", () -> {
+            inspectAdmitted(paymentRequestId);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void inspectAdmitted(UUID paymentRequestId) {
         KfePaymentRequestEntity request = paymentRequestRepository.findById(paymentRequestId).orElse(null);
         if (request == null) {
             return;

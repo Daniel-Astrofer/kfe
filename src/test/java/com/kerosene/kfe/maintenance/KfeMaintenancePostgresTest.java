@@ -3,6 +3,11 @@ package com.kerosene.kfe.maintenance;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.kerosene.kfe.service.TransactionEventPublisher;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -17,6 +22,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.Connection;
 import java.time.Duration;
 import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -24,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.*;
 import static com.kerosene.kfe.maintenance.KfeMaintenanceGuard.*;
+import static org.mockito.Mockito.*;
 
 /** Dedicated disposable fixture only; does not claim full financial-schema integration. */
 @EnabledIfEnvironmentVariable(named = "KFE_MAINTENANCE_POSTGRES_DISPOSABLE", matches = "true")
@@ -250,6 +258,92 @@ class KfeMaintenancePostgresTest {
             assertThat(List.of(first.get(5, TimeUnit.SECONDS), second.get(5, TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder(true, false);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actualTransactionPublisherCapturesBeforeCommitAndDeliversAsChildDuringDrain(boolean transportFails)
+            throws Exception {
+        var service = new KfeMaintenanceService(store);
+        var queued = new ArrayDeque<Runnable>();
+        var transport = mock(SimpMessagingTemplate.class);
+        Map<String, Object> body = Map.of("transactionId", "synthetic-display-only");
+        if (transportFails) {
+            doThrow(new IllegalStateException("synthetic transport failure")).when(transport)
+                    .convertAndSendToUser("7", TransactionEventPublisher.DESTINATION, body);
+        }
+        var publisher = transactionPublisher(service, transport, queued);
+        var financial = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        financial.executeWithoutResult(status -> {
+            publisher.publishAfterCommit(7L, body);
+            assertThat(publisherChildState()).isEqualTo("WAITING");
+            assertThat(queued).isEmpty(); verifyNoInteractions(transport);
+            store.transition(Action.DRAIN, new Command("publisher-update", "synthetic drain", 0), 42);
+        });
+        assertThat(publisherChildState()).isEqualTo("READY");
+        assertThat(queued).hasSize(1);
+        assertThat(newStore(dataSource).observe().blockers()).containsEntry("continuationsReady", 1L);
+        assertThatThrownBy(() -> publisher.publishAfterCommit(7L, body)).isInstanceOf(MaintenanceException.class);
+        assertThat(queued).hasSize(1); verifyNoInteractions(transport);
+        // Run the retained closure after Spring has released the transaction context.
+        queued.remove().run();
+        verify(transport).convertAndSendToUser("7", TransactionEventPublisher.DESTINATION, body);
+        assertThat(publisherChildState()).isEqualTo("UNCERTAIN");
+        UUID childId = jdbc.queryForObject("SELECT id FROM financial.kfe_maintenance_admissions "
+                + "WHERE operation = 'publisher.transaction.delivery'", UUID.class);
+        newStore(dataSource).resolve(childId, true);
+        assertThat(publisherChildState()).isEqualTo("UNCERTAIN");
+        assertThat(service.status().safeToUpdate()).isFalse();
+    }
+
+    @Test
+    void actualPublisherRollbackCancelsOnlyUnstartedChildAndNeverCallsTransport() throws Exception {
+        var queued = new ArrayDeque<Runnable>();
+        var transport = mock(SimpMessagingTemplate.class);
+        var publisher = transactionPublisher(new KfeMaintenanceService(store), transport, queued);
+        new TransactionTemplate(new DataSourceTransactionManager(dataSource)).executeWithoutResult(status -> {
+            publisher.publishAfterCommit(7L, Map.of("transactionId", "synthetic-rollback"));
+            assertThat(publisherChildState()).isEqualTo("WAITING");
+            status.setRollbackOnly();
+        });
+        assertThat(publisherChildState()).isEqualTo("CANCELLED");
+        assertThat(queued).isEmpty(); verifyNoInteractions(transport);
+        assertThat(newStore(dataSource).observe().blockers()).containsEntry("admissionsUncertain", 1L);
+    }
+
+    @Test
+    void losingPublisherClosureDoesNotEraseReadyChildOrClaimRestartRecovery() throws Exception {
+        var queued = new ArrayDeque<Runnable>();
+        var transport = mock(SimpMessagingTemplate.class);
+        var publisher = transactionPublisher(new KfeMaintenanceService(store), transport, queued);
+        new TransactionTemplate(new DataSourceTransactionManager(dataSource)).executeWithoutResult(status ->
+                publisher.publishAfterCommit(7L, Map.of("transactionId", "synthetic-lost-closure")));
+        assertThat(queued).hasSize(1);
+        queued.clear(); // Model loss of the in-memory closure, not a durable replay implementation.
+        var restarted = newStore(dataSource);
+        restarted.transition(Action.DRAIN, new Command("publisher-update", "synthetic drain", 0), 42);
+        assertThat(restarted.observe().blockers()).containsEntry("continuationsReady", 1L);
+        assertThat(new KfeMaintenanceService(restarted).status().safeToUpdate()).isFalse();
+        assertThat(publisherChildState()).isEqualTo("READY"); verifyNoInteractions(transport);
+    }
+
+    private static TransactionEventPublisher transactionPublisher(KfeMaintenanceGuard guard,
+            SimpMessagingTemplate transport, ArrayDeque<Runnable> queued) throws Exception {
+        @SuppressWarnings("unchecked") ObjectProvider<SimpMessagingTemplate> provider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked") ObjectProvider<com.kerosene.kfe.integration.KfeRemoteStompRelayClient> relay = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(transport);
+        var constructor = TransactionEventPublisher.class.getDeclaredConstructor(
+                ObjectProvider.class, ObjectProvider.class, java.util.concurrent.Executor.class);
+        constructor.setAccessible(true);
+        TransactionEventPublisher publisher = constructor.newInstance(provider, relay,
+                (java.util.concurrent.Executor) queued::add);
+        publisher.setMaintenanceGuard(guard);
+        return publisher;
+    }
+
+    private String publisherChildState() {
+        return jdbc.queryForObject("SELECT state FROM financial.kfe_maintenance_admissions "
+                + "WHERE operation = 'publisher.transaction.delivery'", String.class);
     }
 
     private void competingAdmission(boolean admissionWins) throws Exception {

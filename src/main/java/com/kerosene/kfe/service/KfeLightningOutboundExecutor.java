@@ -1,6 +1,8 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.rail.CustodyGateway;
 import com.kerosene.kfe.rail.LightningPaymentGateway;
@@ -10,6 +12,13 @@ import java.util.UUID;
 
 @Service
 public class KfeLightningOutboundExecutor implements KfeRailExecution {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final KfeExecutionTransactionHelper transactionHelper;
     private final LightningPaymentGateway lightningPaymentGateway;
@@ -32,6 +41,13 @@ public class KfeLightningOutboundExecutor implements KfeRailExecution {
 
     @Override
     public void execute(UUID outboxId, KfeExecutionTransactionHelper.PreparationResult prep) {
+        maintenanceGuard.executeMutation("rail.lightning-outbound", () -> {
+            executeAdmitted(outboxId, prep);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void executeAdmitted(UUID outboxId, KfeExecutionTransactionHelper.PreparationResult prep) {
         if (prep.externalReference() == null || prep.externalReference().isBlank()) {
             throw new IllegalArgumentException(
                     "externalReference must contain a Lightning destination (invoice / LNURL / address / pubkey).");

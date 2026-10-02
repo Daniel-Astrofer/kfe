@@ -1,7 +1,9 @@
 package com.kerosene.kfe.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.dto.KfeClassifyTaxEventRequest;
 import com.kerosene.kfe.dto.KfeTaxEventResponse;
 import com.kerosene.kfe.dto.KfeTaxEventsExportResponse;
@@ -16,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -28,12 +31,18 @@ public class KfeTaxEventService {
 
     private final KfeTransactionRepository transactionRepository;
     private final KfeTaxEventClassificationRepository classificationRepository;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeTaxEventService(
             KfeTransactionRepository transactionRepository,
             KfeTaxEventClassificationRepository classificationRepository) {
         this.transactionRepository = transactionRepository;
         this.classificationRepository = classificationRepository;
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
     }
 
     @Transactional(readOnly = true)
@@ -65,6 +74,12 @@ public class KfeTaxEventService {
                 .toUpperCase(Locale.ROOT);
         KfeTransactionEntity transaction = transactionRepository.findByIdAndUserId(resolveTransactionId(cleanEventId), userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE tax event not found."));
+        return maintenanceGuard.executeMutation("tax-event.classify",
+                () -> classifyAdmitted(userId, cleanEventId, classification, transaction));
+    }
+
+    private KfeTaxEventResponse classifyAdmitted(
+            Long userId, String cleanEventId, String classification, KfeTransactionEntity transaction) {
         KfeTaxEventClassificationEntity entity = classificationRepository
                 .findByUserIdAndEventId(userId, cleanEventId)
                 .orElseGet(KfeTaxEventClassificationEntity::new);

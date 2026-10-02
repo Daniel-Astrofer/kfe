@@ -21,6 +21,11 @@ import static org.mockito.Mockito.when;
 
 class KfePreparedExecutionServiceTest {
 
+    @org.junit.jupiter.api.BeforeEach
+    void activeMaintenance() {
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+    }
+
     private final KfeExecutionOutboxRepository repository = mock(KfeExecutionOutboxRepository.class);
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final KfePreparedExecutionService service = new KfePreparedExecutionService(

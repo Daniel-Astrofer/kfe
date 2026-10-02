@@ -3,6 +3,9 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -31,24 +34,47 @@ public class KfeColdWalletReactiveRefreshService {
     private final ConcurrentHashMap<UUID, Boolean> pendingWalletIds = new ConcurrentHashMap<>();
     private final AtomicBoolean allColdPending = new AtomicBoolean(false);
     private final AtomicBoolean flushScheduled = new AtomicBoolean(false);
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "kfe-cold-zmq-refresh");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ScheduledExecutorService scheduler;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
+    @Autowired
     public KfeColdWalletReactiveRefreshService(
             ObjectProvider<KfeColdWalletObservationService> coldObservationService,
             ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
             ObjectProvider<KfeOnchainBalanceSyncService> balanceSyncService,
             KfeMonitoredChainAddressIndex addressIndex,
             @Value("${kfe.bitcoin.zmq.debounce-ms:400}") long debounceMs) {
+        this(coldObservationService, custodialDepositObservationService, balanceSyncService,
+                addressIndex, debounceMs, Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "kfe-cold-zmq-refresh");
+                    t.setDaemon(true);
+                    return t;
+                }));
+    }
+
+    KfeColdWalletReactiveRefreshService(
+            ObjectProvider<KfeColdWalletObservationService> coldObservationService,
+            ObjectProvider<KfeCustodialDepositObservationService> custodialDepositObservationService,
+            ObjectProvider<KfeOnchainBalanceSyncService> balanceSyncService,
+            KfeMonitoredChainAddressIndex addressIndex, long debounceMs,
+            ScheduledExecutorService scheduler) {
         this.coldObservationService = coldObservationService;
         this.custodialDepositObservationService = custodialDepositObservationService;
         this.balanceSyncService = balanceSyncService;
         this.addressIndex = addressIndex;
         // Fast floor: ZMQ already did instant ingest; this pass is accuracy/confs only.
         this.debounceMs = Math.max(200L, debounceMs);
+        this.scheduler = java.util.Objects.requireNonNull(scheduler);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        scheduler.shutdownNow();
     }
 
     /** New block tip — refresh every active cold wallet (balance + history observations). */
@@ -80,6 +106,8 @@ public class KfeColdWalletReactiveRefreshService {
     private void flushSafe() {
         try {
             flush();
+        } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+            log.debug("[KFE ZMQ] debounced refresh paused by maintenance");
         } catch (RuntimeException exception) {
             log.warn("[KFE ZMQ] debounced refresh failed: {}", exception.getMessage());
         } finally {
@@ -91,6 +119,15 @@ public class KfeColdWalletReactiveRefreshService {
     }
 
     private void flush() {
+        // Admit before consuming pending targets: rejected refreshes must not lose
+        // the only in-memory request merely because downstream observers reject drain.
+        maintenanceGuard.executeMutation("reactive-observation.flush", () -> {
+            flushAdmitted();
+            return null;
+        }, ignored -> false);
+    }
+
+    private void flushAdmitted() {
         Set<UUID> targets;
         if (allColdPending.compareAndSet(true, false)) {
             pendingWalletIds.clear();

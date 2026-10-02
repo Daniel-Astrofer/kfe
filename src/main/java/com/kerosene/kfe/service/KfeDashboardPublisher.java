@@ -1,13 +1,16 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.kerosene.kfe.integration.KfeRemoteStompRelayClient;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 @Service
 public class KfeDashboardPublisher {
@@ -17,14 +20,31 @@ public class KfeDashboardPublisher {
     private final SimpMessagingTemplate messagingTemplate;
     private final KfeDashboardService dashboardService;
     private final KfeRemoteStompRelayClient remoteRelay;
+    private final Executor executor;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
+    @Autowired
     public KfeDashboardPublisher(
             ObjectProvider<SimpMessagingTemplate> messagingTemplate,
             KfeDashboardService dashboardService,
             ObjectProvider<KfeRemoteStompRelayClient> remoteRelay) {
+        this(messagingTemplate, dashboardService, remoteRelay, ForkJoinPool.commonPool());
+    }
+
+    KfeDashboardPublisher(
+            ObjectProvider<SimpMessagingTemplate> messagingTemplate,
+            KfeDashboardService dashboardService,
+            ObjectProvider<KfeRemoteStompRelayClient> remoteRelay,
+            Executor executor) {
         this.messagingTemplate = messagingTemplate.getIfAvailable();
         this.dashboardService = dashboardService;
         this.remoteRelay = remoteRelay.getIfAvailable();
+        this.executor = Objects.requireNonNull(executor);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = Objects.requireNonNull(guard);
     }
 
     public void publishAfterCommit(Long userId) {
@@ -49,15 +69,13 @@ public class KfeDashboardPublisher {
                             "type", "KFE_DASHBOARD_DIRTY",
                             "userId", userId));
         };
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            publish.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                publish.run();
-            }
+        maintenanceGuard.executeMutation("publisher.dashboard.enqueue", () -> {
+            maintenanceGuard.scheduleContinuation("publisher.dashboard.delivery", executor, () ->
+                    maintenanceGuard.executeMutation("publisher.dashboard.delivery", () -> {
+                        publish.run();
+                        return Boolean.TRUE;
+                    }, ignored -> false)); // Transport return is not recipient acknowledgement.
+            return Boolean.TRUE;
         });
     }
 }

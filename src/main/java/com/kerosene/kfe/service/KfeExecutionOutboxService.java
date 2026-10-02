@@ -52,7 +52,8 @@ public class KfeExecutionOutboxService {
 
     @Transactional
     public List<ExecutionClaim> claimDue(String workerId) {
-        return maintenanceGuard.executeMutation("outbox.claim-due", () -> claimDueAdmitted(workerId));
+        return maintenanceGuard.executeMutation("outbox.claim-due", () -> claimDueAdmitted(workerId),
+                List::isEmpty);
     }
 
     private List<ExecutionClaim> claimDueAdmitted(String workerId) {
@@ -92,7 +93,7 @@ public class KfeExecutionOutboxService {
             return Optional.empty();
         }
         return maintenanceGuard.executeMutation("outbox.claim-immediate",
-                () -> claimImmediateAdmitted(outboxId, workerId));
+                () -> claimImmediateAdmitted(outboxId, workerId), Optional::isEmpty);
     }
 
     private Optional<ExecutionClaim> claimImmediateAdmitted(UUID outboxId, String workerId) {
@@ -114,6 +115,12 @@ public class KfeExecutionOutboxService {
         if (claim == null || claim.outboxId() == null || claim.claimToken() == null) {
             return false;
         }
+        // A standalone lease extension provides no proof that the execution continuation is finished.
+        return maintenanceGuard.executeMutation("outbox.heartbeat", () -> heartbeatAdmitted(claim),
+                ignored -> false);
+    }
+
+    private boolean heartbeatAdmitted(ExecutionClaim claim) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         return repository.heartbeat(
                 claim.outboxId(),

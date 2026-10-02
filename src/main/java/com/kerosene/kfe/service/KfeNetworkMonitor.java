@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -12,6 +13,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -25,6 +27,7 @@ import com.kerosene.kfe.repository.KfeTransactionRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -36,6 +39,13 @@ public class KfeNetworkMonitor {
     private static final List<String> INBOUND_OPERATIONS = List.of("ONCHAIN_INBOUND", "LIGHTNING_INBOUND");
     private static final Pattern TXID = Pattern.compile("^[0-9a-fA-F]{64}$");
     private static final BigDecimal SATOSHIS_PER_BTC = new BigDecimal("100000000");
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final KfeExecutionOutboxRepository outboxRepository;
     private final KfeTransactionRepository transactionRepository;
@@ -76,6 +86,9 @@ public class KfeNetworkMonitor {
         for (KfeExecutionOutboxEntity outbox : candidates) {
             try {
                 inspect(outbox);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                // Preserve the candidate and stop this pass when admission is unavailable.
+                return;
             } catch (RuntimeException exception) {
                 log.warn("[KFE Monitor] Inbound reconciliation failed outboxId={}: {}",
                         outbox.getId(), exception.getMessage());
@@ -84,6 +97,13 @@ public class KfeNetworkMonitor {
     }
 
     private void inspect(KfeExecutionOutboxEntity outbox) {
+        maintenanceGuard.executeMutation("network.inbound-inspect", () -> {
+            inspectAdmitted(outbox);
+            return Boolean.TRUE;
+        }, ignored -> false); // Remote proof and callbacks are not completion evidence.
+    }
+
+    private void inspectAdmitted(KfeExecutionOutboxEntity outbox) {
         Optional<KfeTransactionEntity> optionalTx = transactionRepository.findById(outbox.getTransactionId());
         if (optionalTx.isEmpty()) {
             return;

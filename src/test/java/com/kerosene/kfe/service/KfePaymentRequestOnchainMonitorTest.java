@@ -85,6 +85,11 @@ class KfePaymentRequestOnchainMonitorTest {
             50,
             finalityPolicy());
 
+    @org.junit.jupiter.api.BeforeEach
+    void explicitlyActiveAdmission() {
+        monitor.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+    }
+
     private static KfeBitcoinFinalityPolicy finalityPolicy() {
         KfeBitcoinFinalityPolicy policy = new KfeBitcoinFinalityPolicy();
         policy.setCreditConfirmations(3);

@@ -5,6 +5,8 @@ import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -38,6 +40,13 @@ import java.util.UUID;
 @Service
 public class KfeStatementService {
 
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(KfeStatementService.class);
 
     private final KfeUserStatementRepository statementRepository;
@@ -69,6 +78,14 @@ public class KfeStatementService {
         if (userId == null || transaction == null || transaction.getId() == null) {
             return;
         }
+        maintenanceGuard.executeMutation("statement.record", () -> {
+            recordUserStatementAdmitted(userId, walletId, transaction, payload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void recordUserStatementAdmitted(
+            Long userId, UUID walletId, KfeTransactionEntity transaction, Map<String, ?> payload) {
         // Flush parent tx row so native INSERT FK sees it in this connection.
         if (entityManager != null) {
             try {
@@ -123,6 +140,17 @@ public class KfeStatementService {
      */
     public void recordUserStatementBestEffort(
             Long userId, UUID walletId, KfeTransactionEntity transaction, Map<String, ?> payload) {
+        if (userId == null || transaction == null || transaction.getId() == null) {
+            return;
+        }
+        maintenanceGuard.executeMutation("statement.best-effort", () -> {
+            recordUserStatementBestEffortAdmitted(userId, walletId, transaction, payload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void recordUserStatementBestEffortAdmitted(
+            Long userId, UUID walletId, KfeTransactionEntity transaction, Map<String, ?> payload) {
         try {
             self.recordUserStatement(userId, walletId, transaction, payload);
         } catch (RuntimeException exception) {
@@ -140,10 +168,12 @@ public class KfeStatementService {
         if (userId == null || transaction == null || transaction.getId() == null) {
             return;
         }
-        if (statementRepository.existsByUserIdAndTransactionId(userId, transaction.getId())) {
-            return;
-        }
-        self.recordUserStatement(userId, walletId, transaction, payload);
+        maintenanceGuard.executeMutation("statement.record-if-absent", () -> {
+            if (!statementRepository.existsByUserIdAndTransactionId(userId, transaction.getId())) {
+                self.recordUserStatement(userId, walletId, transaction, payload);
+            }
+            return null;
+        }, ignored -> false);
     }
 
     @Transactional
@@ -155,7 +185,10 @@ public class KfeStatementService {
         if (userId == null) {
             return;
         }
-        self.recordUserStatement(userId, null, transaction, payload);
+        maintenanceGuard.executeMutation("statement.refresh", () -> {
+            self.recordUserStatement(userId, null, transaction, payload);
+            return null;
+        }, ignored -> false);
     }
 
     private void nativeUpsert(

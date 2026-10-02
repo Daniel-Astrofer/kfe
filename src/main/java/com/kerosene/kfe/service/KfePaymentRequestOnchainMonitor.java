@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -46,6 +48,12 @@ public class KfePaymentRequestOnchainMonitor {
     private static final Pattern TXID = Pattern.compile("^[0-9a-fA-F]{64}$");
     private static final BigDecimal SATOSHIS_PER_BTC = new BigDecimal("100000000");
     private static final String ASSET_BTC = "BTC";
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfePaymentRequestRepository paymentRequestRepository;
     private final KfeTransactionRepository transactionRepository;
@@ -123,9 +131,15 @@ public class KfePaymentRequestOnchainMonitor {
                 PageRequest.of(0, batchSize));
         for (KfePaymentRequestEntity request : requests) {
             try {
-                findObservedPayment(client, request)
+                maintenanceGuard.executeMutation("payment-request.onchain-probe", () -> {
+                    findObservedPayment(client, request)
                         .ifPresent(payment -> transactionTemplate.executeWithoutResult(
                                 status -> reconcileObservedPayment(request.getId(), payment)));
+                    return Boolean.TRUE;
+                }, ignored -> false);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                log.debug("[KFE PaymentRequest Monitor] maintenance paused polling");
+                return;
             } catch (RuntimeException exception) {
                 log.warn(
                         "[KFE PaymentRequest Monitor] reconciliation failed paymentRequestId={}: {}",
@@ -164,6 +178,13 @@ public class KfePaymentRequestOnchainMonitor {
 
     @Transactional
     public void observePaymentRequest(java.util.UUID paymentRequestId, ObservedPayment payment) {
+        maintenanceGuard.executeMutation("payment-request.onchain-observe", () -> {
+            observePaymentRequestAdmitted(paymentRequestId, payment);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void observePaymentRequestAdmitted(UUID paymentRequestId, ObservedPayment payment) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
         if (!canObserve(request)) {
@@ -240,6 +261,13 @@ public class KfePaymentRequestOnchainMonitor {
 
     @Transactional
     public void settlePaymentRequest(java.util.UUID paymentRequestId, ObservedPayment payment) {
+        maintenanceGuard.executeMutation("payment-request.onchain-settle", () -> {
+            settlePaymentRequestAdmitted(paymentRequestId, payment);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void settlePaymentRequestAdmitted(UUID paymentRequestId, ObservedPayment payment) {
         KfePaymentRequestEntity request = paymentRequestRepository.findByIdForUpdate(paymentRequestId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
         if (!canObserve(request)) {

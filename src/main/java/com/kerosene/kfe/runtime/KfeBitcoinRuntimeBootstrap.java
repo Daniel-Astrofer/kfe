@@ -4,19 +4,27 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ApplicationEventPublisherAware;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 import com.kerosene.kfe.service.KfeSystemWalletService;
 
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 
 @Component
-public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner {
+public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner, ApplicationEventPublisherAware {
 
     private static final Logger log = LoggerFactory.getLogger(KfeBitcoinRuntimeBootstrap.class);
 
@@ -31,6 +39,9 @@ public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner {
     private final String primaryWalletName;
     private final String fundsWalletName;
     private final String profitWalletName;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+    private ApplicationEventPublisher eventPublisher;
+    private volatile boolean bootstrapCompleted;
 
     public KfeBitcoinRuntimeBootstrap(
             KfeSystemWalletService systemWalletService,
@@ -57,8 +68,55 @@ public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner {
         this.profitWalletName = profitWalletName;
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
     @Override
-    public void run(ApplicationArguments args) {
+    public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = Objects.requireNonNull(eventPublisher);
+    }
+
+    @EventListener
+    public void enforceBootstrapReadiness(AvailabilityChangeEvent<ReadinessState> event) {
+        // Boot publishes ACCEPTING_TRAFFIC after ApplicationReadyEvent. Intercept that
+        // transition rather than letting a paused runner manufacture successful readiness.
+        if (!bootstrapCompleted && event.getState() == ReadinessState.ACCEPTING_TRAFFIC) {
+            refuseReadiness();
+        }
+    }
+
+    private void refuseReadiness() {
+        if (eventPublisher != null) {
+            AvailabilityChangeEvent.publish(eventPublisher, this, ReadinessState.REFUSING_TRAFFIC);
+        }
+    }
+
+    @Override
+    public synchronized void run(ApplicationArguments args) {
+        bootstrapCompleted = false;
+        refuseReadiness();
+        boolean[] started = {false};
+        try {
+            maintenanceGuard.executeMutation("bitcoin.bootstrap", () -> {
+                started[0] = true;
+                return bootstrapAdmitted();
+            }, Boolean.TRUE::equals);
+            bootstrapCompleted = true;
+        } catch (KfeMaintenanceGuard.MaintenanceException rejection) {
+            if (started[0]) {
+                // A failure after admission may have effects; it is not a clean pause.
+                throw rejection;
+            }
+            // Keep the ADMIN status/resume surface running. Resume followed by another
+            // startup/run retries through fresh admission; no success marker is persisted.
+            log.warn("KFE Bitcoin bootstrap paused: maintenance admission unavailable or draining (status={}).",
+                    rejection.httpStatus());
+        }
+    }
+
+    private boolean bootstrapAdmitted() {
         KfeSystemWalletService.SystemWallets systemWallets = systemWalletService.ensureSystemWallets();
         log.info(
                 "KFE system wallets ready fundsWalletId={} profitWalletId={}",
@@ -66,13 +124,13 @@ public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner {
                 systemWallets.profitWalletId());
 
         if (!bitcoinRpcEnabled) {
-            return;
+            return true;
         }
         if (bitcoinCoreRpcClient == null) {
             if (bitcoinRpcRequired) {
                 throw new IllegalStateException("bitcoin.rpc.enabled=true but Bitcoin Core RPC client is unavailable.");
             }
-            return;
+            return true;
         }
 
         if (validateNetwork) {
@@ -81,7 +139,11 @@ public class KfeBitcoinRuntimeBootstrap implements ApplicationRunner {
         validateBitcoinCoreSyncState();
         if (bootstrapRpcWallets) {
             ensureRpcWalletsLoaded();
+            // The adapter can recover a load error using a later read. A successful
+            // return is not durable proof of all remote effects, even after local commit.
+            return walletNames().isEmpty();
         }
+        return true;
     }
 
     private void validateBitcoinCoreNetwork() {

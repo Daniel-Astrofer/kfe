@@ -3,12 +3,14 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -19,6 +21,7 @@ import com.kerosene.kfe.repository.KfeTransactionRepository;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Production confirmation monitor for on-chain outbounds and inbounds.
@@ -35,6 +38,13 @@ import java.util.List;
 public class KfeOutboundConfirmationMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfeOutboundConfirmationMonitor.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final KfeTransactionRepository transactionRepository;
     private final KfeExecutionTransactionHelper transactionHelper;
@@ -100,6 +110,8 @@ public class KfeOutboundConfirmationMonitor {
         for (KfeTransactionEntity tx : openOutbounds) {
             try {
                 inspect(core, tx);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                return;
             } catch (RuntimeException exception) {
                 log.warn(
                         "[KFE Outbound Monitor] confirmation check failed txId={}: {}",
@@ -110,6 +122,8 @@ public class KfeOutboundConfirmationMonitor {
         for (KfeTransactionEntity tx : settledOutbounds) {
             try {
                 inspect(core, tx);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                return;
             } catch (RuntimeException exception) {
                 log.warn(
                         "[KFE Outbound Monitor] confirmation check failed txId={}: {}",
@@ -132,6 +146,8 @@ public class KfeOutboundConfirmationMonitor {
         for (KfeTransactionEntity tx : openInbounds) {
             try {
                 inspectInbound(core, tx);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                return;
             } catch (RuntimeException exception) {
                 log.warn(
                         "[KFE Outbound Monitor] inbound conf check failed txId={}: {}",
@@ -142,6 +158,13 @@ public class KfeOutboundConfirmationMonitor {
     }
 
     private void inspectInbound(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
+        maintenanceGuard.executeMutation("network.inbound-confirmations", () -> {
+            inspectInboundAdmitted(core, tx);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void inspectInboundAdmitted(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
         String txid = tx.getBlockchainTxid();
         if (txid == null || txid.isBlank()) {
             return;
@@ -166,6 +189,13 @@ public class KfeOutboundConfirmationMonitor {
     }
 
     private void inspect(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
+        maintenanceGuard.executeMutation("network.outbound-confirmations", () -> {
+            inspectAdmitted(core, tx);
+            return Boolean.TRUE;
+        }, ignored -> false); // Probe/helper return does not prove all remote/callback work ended.
+    }
+
+    private void inspectAdmitted(BitcoinCoreRpcClient core, KfeTransactionEntity tx) {
         String txid = tx.getBlockchainTxid();
         if (txid == null || txid.isBlank()) {
             return;

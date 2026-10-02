@@ -5,6 +5,8 @@ import org.bitcoinj.core.NetworkParameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
@@ -53,6 +55,12 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
     private final Map<String, AtomicInteger> lastSequenceByTopic = new ConcurrentHashMap<>();
     private final AtomicLong zmqSequenceGaps = new AtomicLong(0L);
     private ZContext zContext;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeBitcoinZmqWatcher(
             KfeMonitoredChainAddressIndex addressIndex,
@@ -92,11 +100,11 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
         if (hashblockEndpoint != null) {
             // Prefer hashblock (32-byte tip hash). Some local bitcoind images only
             // publish rawblock on the same port — accept either topic name.
-            startWorker("kfe-zmq-hashblock", hashblockEndpoint, "hashblock", this::onHashBlock);
-            startWorker("kfe-zmq-rawblock", hashblockEndpoint, "rawblock", this::onHashBlock);
+            startWorker("kfe-zmq-hashblock", hashblockEndpoint, "hashblock");
+            startWorker("kfe-zmq-rawblock", hashblockEndpoint, "rawblock");
         }
         if (subscribeRawTx && rawtxEndpoint != null) {
-            startWorker("kfe-zmq-rawtx", rawtxEndpoint, "rawtx", this::onRawTx);
+            startWorker("kfe-zmq-rawtx", rawtxEndpoint, "rawtx");
         }
         log.info(
                 "[KFE ZMQ] watcher started hashblock={} rawtx={} addresses={}",
@@ -154,14 +162,14 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
         return Integer.MAX_VALUE - 50;
     }
 
-    private void startWorker(String name, String endpoint, String topic, PayloadHandler handler) {
-        Thread worker = new Thread(() -> listenLoop(endpoint, topic, handler), name);
+    private void startWorker(String name, String endpoint, String topic) {
+        Thread worker = new Thread(() -> listenLoop(endpoint, topic), name);
         worker.setDaemon(true);
         workers.add(worker);
         worker.start();
     }
 
-    private void listenLoop(String endpoint, String topic, PayloadHandler handler) {
+    private void listenLoop(String endpoint, String topic) {
         int backoffMs = 500;
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try (ZMQ.Socket socket = zContext.createSocket(SocketType.SUB)) {
@@ -198,19 +206,6 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                         continue;
                     }
 
-                    // Sequence gap detection
-                    if (sequence >= 0) {
-                        AtomicInteger lastSeq = lastSequenceByTopic.computeIfAbsent(
-                                topic, k -> new AtomicInteger(-1));
-                        int prev = lastSeq.getAndSet(sequence);
-                        if (prev >= 0 && sequence != prev + 1) {
-                            zmqSequenceGaps.incrementAndGet();
-                            log.warn("[KFE ZMQ] sequence gap detected topic={} expected={} actual={}",
-                                    topic, prev + 1, sequence);
-                            onSequenceGap(topic);
-                        }
-                    }
-
                     received++;
                     if (received == 1L || received % 100L == 0L) {
                         log.info(
@@ -220,7 +215,7 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                                 body.length,
                                 sequence);
                     }
-                    handler.handle(body);
+                    processMessage(topic, body, sequence);
                 }
             } catch (Exception exception) {
                 if (!running.get()) {
@@ -236,6 +231,32 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
                 backoffMs = Math.min(15_000, backoffMs * 2);
             }
         }
+    }
+
+    /** Callback boundary shared by the real subscriber workers; no socket needed for tests. */
+    void processMessage(String topic, byte[] body, int sequence) {
+        if (!Set.of("hashblock", "rawblock", "rawtx").contains(topic)) {
+            throw new IllegalArgumentException("Unsupported Bitcoin ZMQ topic.");
+        }
+        maintenanceGuard.executeMutation("bitcoin-zmq.message", () -> {
+            AtomicInteger last = sequence >= 0 ? lastSequenceByTopic.get(topic) : null;
+            if (last != null) {
+                int previous = last.get();
+                if (previous >= 0 && sequence != previous + 1) {
+                    zmqSequenceGaps.incrementAndGet();
+                    log.warn("[KFE ZMQ] sequence gap detected topic={} expected={} actual={}",
+                            topic, previous + 1, sequence);
+                    onSequenceGap(topic);
+                }
+            }
+            if ("rawtx".equals(topic)) onRawTx(body);
+            else onHashBlock(body);
+            // Admitted-handler telemetry only, not a durable financial acknowledgement.
+            // Propagated failure or rejected admission cannot advance it.
+            if (sequence >= 0) lastSequenceByTopic.computeIfAbsent(
+                    topic, ignored -> new AtomicInteger(-1)).set(sequence);
+            return null;
+        }, ignored -> false);
     }
 
     private void onSequenceGap(String topic) {
@@ -354,8 +375,4 @@ public class KfeBitcoinZmqWatcher implements SmartLifecycle {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    @FunctionalInterface
-    private interface PayloadHandler {
-        void handle(byte[] body);
-    }
 }

@@ -1,6 +1,8 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeWalletEntity;
@@ -33,6 +35,13 @@ import java.util.UUID;
  */
 @Service
 public class KfeSystemWalletService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     public static final String ASSET_BTC = "BTC";
 
@@ -76,6 +85,10 @@ public class KfeSystemWalletService {
      */
     @Transactional
     public SystemWallets ensureSystemWallets() {
+        return maintenanceGuard.executeMutation("system-wallet.ensure", this::ensureSystemWalletsAdmitted);
+    }
+
+    private SystemWallets ensureSystemWalletsAdmitted() {
         KfeWalletEntity funds = ensureWallet(KfeWalletKind.SYSTEM_FUNDS, fundsLabel, true);
         KfeWalletEntity profit = ensureWallet(KfeWalletKind.SYSTEM_PROFIT, profitLabel, true);
         return new SystemWallets(funds.getId(), profit.getId());

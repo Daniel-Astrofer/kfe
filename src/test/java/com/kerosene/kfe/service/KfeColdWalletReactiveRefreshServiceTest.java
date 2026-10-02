@@ -39,11 +39,12 @@ class KfeColdWalletReactiveRefreshServiceTest {
                 balanceProvider,
                 addressIndex,
                 200L);
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
     }
 
     @AfterEach
     void tearDown() {
-        // nothing to close — daemon scheduler dies with JVM
+        service.shutdown();
     }
 
     @Test

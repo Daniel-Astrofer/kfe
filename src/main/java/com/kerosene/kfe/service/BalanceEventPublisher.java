@@ -3,13 +3,16 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.kerosene.kfe.integration.KfeRemoteStompRelayClient;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.math.BigDecimal;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 @Service
 public class BalanceEventPublisher {
@@ -20,14 +23,31 @@ public class BalanceEventPublisher {
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectProvider<KfeBalanceMetrics> balanceMetrics;
     private final KfeRemoteStompRelayClient remoteRelay;
+    private final Executor executor;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
+    @Autowired
     public BalanceEventPublisher(
             ObjectProvider<SimpMessagingTemplate> messagingTemplate,
             ObjectProvider<KfeBalanceMetrics> balanceMetrics,
             ObjectProvider<KfeRemoteStompRelayClient> remoteRelay) {
+        this(messagingTemplate, balanceMetrics, remoteRelay, ForkJoinPool.commonPool());
+    }
+
+    BalanceEventPublisher(
+            ObjectProvider<SimpMessagingTemplate> messagingTemplate,
+            ObjectProvider<KfeBalanceMetrics> balanceMetrics,
+            ObjectProvider<KfeRemoteStompRelayClient> remoteRelay,
+            Executor executor) {
         this.messagingTemplate = messagingTemplate.getIfAvailable();
         this.balanceMetrics = balanceMetrics;
         this.remoteRelay = remoteRelay.getIfAvailable();
+        this.executor = Objects.requireNonNull(executor);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = Objects.requireNonNull(guard);
     }
 
     /** Legacy scalar publish — prefer {@link #publishBalanceUpdateAfterCommit(BalanceUpdateEvent)}. */
@@ -76,16 +96,13 @@ public class BalanceEventPublisher {
             }
         };
 
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            publish.run();
-            return;
-        }
-
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                publish.run();
-            }
+        maintenanceGuard.executeMutation("publisher.balance.enqueue", () -> {
+            maintenanceGuard.scheduleContinuation("publisher.balance.delivery", executor, () ->
+                    maintenanceGuard.executeMutation("publisher.balance.delivery", () -> {
+                        publish.run();
+                        return Boolean.TRUE;
+                    }, ignored -> false)); // Includes caught and best-effort relay failures.
+            return Boolean.TRUE;
         });
     }
 }

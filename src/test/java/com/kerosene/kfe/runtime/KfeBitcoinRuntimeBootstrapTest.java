@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import com.kerosene.kfe.service.KfeSystemWalletService;
 
 import java.util.UUID;
@@ -38,6 +39,7 @@ class KfeBitcoinRuntimeBootstrapTest {
                 "kerosene",
                 "kerosene-funds",
                 "kerosene-profit");
+        bootstrap.setMaintenanceGuard(MaintenanceTestFixture.active());
 
         bootstrap.run(null);
 
@@ -65,6 +67,7 @@ class KfeBitcoinRuntimeBootstrapTest {
                 "kerosene",
                 "kerosene-funds",
                 "kerosene-profit");
+        bootstrap.setMaintenanceGuard(MaintenanceTestFixture.active());
 
         assertThatThrownBy(() -> bootstrap.run(null))
                 .isInstanceOf(IllegalStateException.class)
@@ -91,6 +94,7 @@ class KfeBitcoinRuntimeBootstrapTest {
                 "kerosene",
                 "kerosene-funds",
                 "kerosene-profit");
+        bootstrap.setMaintenanceGuard(MaintenanceTestFixture.active());
 
         assertThatThrownBy(() -> bootstrap.run(null))
                 .isInstanceOf(IllegalStateException.class)

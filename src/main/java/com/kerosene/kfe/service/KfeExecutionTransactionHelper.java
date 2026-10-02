@@ -6,15 +6,15 @@ import jakarta.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.audit.KfeAuditEventLogger;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -31,8 +31,10 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
 @Service
 public class KfeExecutionTransactionHelper {
@@ -66,6 +68,8 @@ public class KfeExecutionTransactionHelper {
     private final KfeFinancialMetrics financialMetrics;
     private final KfeAuditEventLogger auditEventLogger;
     private final int maxRetryAttempts;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+    private Executor continuationExecutor = action -> Thread.startVirtualThread(action);
 
     public KfeExecutionTransactionHelper(
             KfeExecutionOutboxRepository outboxRepository,
@@ -124,6 +128,16 @@ public class KfeExecutionTransactionHelper {
         this.maxRetryAttempts = maxRetryAttempts;
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
+    /** Test seam: dispatch queued work only after the transaction context has been cleaned up. */
+    void setContinuationExecutor(Executor executor) {
+        this.continuationExecutor = Objects.requireNonNull(executor);
+    }
+
     public record PreparationResult(
             boolean proceed,
             String operation,
@@ -150,6 +164,11 @@ public class KfeExecutionTransactionHelper {
 
     @Transactional
     public PreparationResult prepare(UUID outboxId, UUID claimToken) {
+        return maintenanceGuard.executeMutation("execution-helper.prepare",
+                () -> prepareAdmitted(outboxId, claimToken), ignored -> false);
+    }
+
+    private PreparationResult prepareAdmitted(UUID outboxId, UUID claimToken) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId).orElse(null);
         if (outbox == null) {
             return PreparationResult.skip(claimToken);
@@ -279,6 +298,17 @@ public class KfeExecutionTransactionHelper {
             long feeSats,
             UUID sourceWalletId,
             String providerPayload) {
+        maintenanceGuard.executeMutation("execution-helper.record-outbound-broadcast", () -> {
+            recordOutboundBroadcastAdmitted(outboxId, transactionId, claimToken, provider,
+                    providerReference, blockchainTxid, feeSats, sourceWalletId, providerPayload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void recordOutboundBroadcastAdmitted(
+            UUID outboxId, UUID transactionId, UUID claimToken, String provider,
+            String providerReference, String blockchainTxid, long feeSats,
+            UUID sourceWalletId, String providerPayload) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
         requireClaimOwnership(outbox, claimToken);
@@ -351,9 +381,9 @@ public class KfeExecutionTransactionHelper {
     }
 
     /**
-     * Runs {@code action} only after the outer TX has fully completed and resources (EntityManager /
-     * connection) are unbound. Using {@code afterCommit} alone is unsafe: Spring still holds the
-     * session until {@code afterCompletion}, so nested {@code @Transactional} joins a dead context
+     * Captures a durable child before commit/enqueue and dispatches {@code action} on a
+     * transaction-free executor thread after proven commit. Using {@code afterCommit} alone is
+     * unsafe: Spring still holds the session, so nested {@code @Transactional} joins a dead context
      * ("no transaction is in progress") and peer inbound never lands.
      *
      * <p>Work is always dispatched off the calling thread so API handlers (sync-on-submit) return
@@ -367,26 +397,15 @@ public class KfeExecutionTransactionHelper {
         if (action == null) {
             return;
         }
-        Runnable safe = () -> {
-            try {
-                action.run();
-            } catch (RuntimeException exception) {
-                log.warn("[KFE Execution] after-completion hook failed: {}", exception.getMessage());
-            }
-        };
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            Thread.startVirtualThread(safe);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCompletion(int status) {
-                if (status != STATUS_COMMITTED) {
-                    return;
-                }
-                Thread.startVirtualThread(safe);
-            }
-        });
+        maintenanceGuard.scheduleContinuation("execution-helper.after-completion", continuationExecutor, () ->
+                maintenanceGuard.executeMutation("execution-helper.after-completion", () -> {
+                    try {
+                        action.run();
+                    } catch (RuntimeException exception) {
+                        log.warn("[KFE Execution] after-completion hook failed: {}", exception.getMessage());
+                    }
+                    return null;
+                }, ignored -> false)); // Caught remote errors and transport returns remain uncertain.
     }
 
     private void exposePlatformPeerInbound(KfeTransactionEntity outbound) {
@@ -447,6 +466,14 @@ public class KfeExecutionTransactionHelper {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void touchOutboundConfirmations(UUID transactionId, int confirmations,
                                            String blockHash, Integer blockHeight) {
+        maintenanceGuard.executeMutation("execution-helper.touch-outbound-confirmations", () -> {
+            touchOutboundConfirmationsAdmitted(transactionId, confirmations, blockHash, blockHeight);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void touchOutboundConfirmationsAdmitted(UUID transactionId, int confirmations,
+                                                    String blockHash, Integer blockHeight) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
         if (tx == null) {
             return;
@@ -504,6 +531,11 @@ public class KfeExecutionTransactionHelper {
      */
     @Transactional
     public boolean settleOutboundWhenConfirmed(UUID transactionId, int confirmations) {
+        return maintenanceGuard.executeMutation("execution-helper.settle-outbound-when-confirmed",
+                () -> settleOutboundWhenConfirmedAdmitted(transactionId, confirmations), ignored -> false);
+    }
+
+    private boolean settleOutboundWhenConfirmedAdmitted(UUID transactionId, int confirmations) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
         if (tx == null) {
             return false;
@@ -589,20 +621,19 @@ public class KfeExecutionTransactionHelper {
         final long notifyAmount = tx.getGrossAmountSats();
         final int notifyConfs = confirmations;
         dashboardPublisher.publishAfterCommit(tx.getUserId());
-        runAfterCommit(() -> Thread.startVirtualThread(
-                () -> {
-                    resyncCustodialObserved(sourceWalletId);
-                    FinancialNotificationPort port = notificationPort.getIfAvailable();
-                    if (port != null) {
-                        try {
-                            port.notifyPaymentConfirmed(notifyUserId, notifyTxId, sourceWalletId,
-                                    notifyRail, notifyAmount, notifyConfs);
-                        } catch (RuntimeException exception) {
-                            log.warn("[KFE Execution] confirmed notification failed txId={}: {}",
-                                    notifyTxId, exception.getMessage());
-                        }
-                    }
-                }));
+        runAfterCommit(() -> {
+            resyncCustodialObserved(sourceWalletId);
+            FinancialNotificationPort port = notificationPort.getIfAvailable();
+            if (port != null) {
+                try {
+                    port.notifyPaymentConfirmed(notifyUserId, notifyTxId, sourceWalletId,
+                            notifyRail, notifyAmount, notifyConfs);
+                } catch (RuntimeException exception) {
+                    log.warn("[KFE Execution] confirmed notification failed txId={}: {}",
+                            notifyTxId, exception.getMessage());
+                }
+            }
+        });
         return true;
     }
 
@@ -622,6 +653,17 @@ public class KfeExecutionTransactionHelper {
             long feeSats,
             UUID sourceWalletId,
             String providerPayload) {
+        maintenanceGuard.executeMutation("execution-helper.settle-outbound", () -> {
+            settleOutboundAdmitted(outboxId, transactionId, claimToken, provider, providerReference,
+                    blockchainTxid, feeSats, sourceWalletId, providerPayload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void settleOutboundAdmitted(
+            UUID outboxId, UUID transactionId, UUID claimToken, String provider,
+            String providerReference, String blockchainTxid, long feeSats,
+            UUID sourceWalletId, String providerPayload) {
         // Immediate settle path (e.g. lightning or tests). On-chain production uses
         // recordOutboundBroadcast + settleOutboundWhenConfirmed.
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
@@ -681,6 +723,17 @@ public class KfeExecutionTransactionHelper {
             long feeSats,
             UUID sourceWalletId,
             String providerPayload) {
+        maintenanceGuard.executeMutation("execution-helper.settle-outbound-lightning", () -> {
+            settleOutboundLightningAdmitted(outboxId, transactionId, claimToken, provider,
+                    providerReference, blockchainTxid, paymentHash, feeSats, sourceWalletId, providerPayload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void settleOutboundLightningAdmitted(
+            UUID outboxId, UUID transactionId, UUID claimToken, String provider,
+            String providerReference, String blockchainTxid, String paymentHash, long feeSats,
+            UUID sourceWalletId, String providerPayload) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
         requireClaimOwnership(outbox, claimToken);
@@ -878,6 +931,14 @@ public class KfeExecutionTransactionHelper {
             String providerReference,
             String providerPayload,
             String message) {
+        maintenanceGuard.executeMutation("execution-helper.mark-unknown", () -> {
+            markUnknownAdmitted(outboxId, transactionId, claimToken, providerReference, providerPayload, message);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markUnknownAdmitted(UUID outboxId, UUID transactionId, UUID claimToken,
+                                     String providerReference, String providerPayload, String message) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
         requireClaimOwnership(outbox, claimToken);
@@ -931,6 +992,14 @@ public class KfeExecutionTransactionHelper {
             UUID claimToken,
             String code,
             String message) {
+        maintenanceGuard.executeMutation("execution-helper.mark-retryable-failure", () -> {
+            markRetryableFailureAdmitted(outboxId, transactionId, claimToken, code, message);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markRetryableFailureAdmitted(UUID outboxId, UUID transactionId, UUID claimToken,
+                                             String code, String message) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(outboxId)
                 .orElseThrow(() -> new IllegalStateException("Outbox not found: " + outboxId));
         requireClaimOwnership(outbox, claimToken);
@@ -975,6 +1044,14 @@ public class KfeExecutionTransactionHelper {
             UUID claimToken,
             String code,
             String message) {
+        maintenanceGuard.executeMutation("execution-helper.mark-final-failure", () -> {
+            markFinalFailureAdmitted(outboxId, transactionId, claimToken, code, message);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markFinalFailureAdmitted(UUID outboxId, UUID transactionId, UUID claimToken,
+                                         String code, String message) {
         KfeExecutionOutboxEntity outbox = resolveOutbox(outboxId, transactionId);
         if (outboxId != null) {
             requireClaimOwnership(outbox, claimToken);
@@ -1043,6 +1120,13 @@ public class KfeExecutionTransactionHelper {
      */
     @Transactional
     public void markOutboundConflicted(UUID transactionId, int confirmations) {
+        maintenanceGuard.executeMutation("execution-helper.mark-outbound-conflicted", () -> {
+            markOutboundConflictedAdmitted(transactionId, confirmations);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markOutboundConflictedAdmitted(UUID transactionId, int confirmations) {
         KfeTransactionEntity tx = transactionRepository.findByIdForUpdate(transactionId).orElse(null);
         if (tx == null || tx.getStatus() == KfeTransactionStatus.FAILED) {
             return;
@@ -1210,6 +1294,14 @@ public class KfeExecutionTransactionHelper {
             UUID claimToken,
             String code,
             String message) {
+        maintenanceGuard.executeMutation("execution-helper.mark-requires-reconciliation", () -> {
+            markRequiresReconciliationAdmitted(outboxId, transactionId, claimToken, code, message);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markRequiresReconciliationAdmitted(UUID outboxId, UUID transactionId, UUID claimToken,
+                                                   String code, String message) {
         KfeExecutionOutboxEntity outbox = resolveOutbox(outboxId, transactionId);
         if (outboxId != null) {
             requireClaimOwnership(outbox, claimToken);

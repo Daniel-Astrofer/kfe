@@ -10,6 +10,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Pageable;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
@@ -25,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +61,7 @@ class KfeOutboundConfirmationMonitorTest {
                 finalityPolicy(1, 6),
                 5,
                 300);
+        monitor.setMaintenanceGuard(activeGuard());
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
         lenient().when(coldObservationService.getIfAvailable()).thenReturn(null);
     }
@@ -94,6 +99,7 @@ class KfeOutboundConfirmationMonitorTest {
                 finalityPolicy(3, 6),
                 5,
                 300);
+        monitor.setMaintenanceGuard(activeGuard());
         when(bitcoinCoreRpcClient.getIfAvailable()).thenReturn(core);
         stubOutboundQueries(List.of(tx), List.of());
         when(core.fetchTransactionChainStatus(tx.getBlockchainTxid()))
@@ -205,5 +211,12 @@ class KfeOutboundConfirmationMonitorTest {
         policy.setFinalityConfirmations(finality);
         policy.setReorgMonitorConfirmations(Math.max(12, finality));
         return policy;
+    }
+
+    private static KfeMaintenanceGuard activeGuard() {
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        lenient().when(store.admit(org.mockito.ArgumentMatchers.anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        return new KfeMaintenanceService(store);
     }
 }

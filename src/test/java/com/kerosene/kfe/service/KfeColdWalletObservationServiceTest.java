@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
@@ -18,11 +21,13 @@ import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -88,6 +93,14 @@ class KfeColdWalletObservationServiceTest {
                 20,
                 finalityPolicy(),
                 50);
+        // Explicit ACTIVE storage through the real guard, never a permissive production fallback.
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        when(store.observe()).thenReturn(new KfeMaintenanceStore.Observation(
+                new KfeMaintenanceStore.Control(KfeMaintenanceGuard.Mode.ACTIVE, null, 0),
+                java.time.Instant.now(), Map.of()));
+        service.setMaintenanceGuard(new KfeMaintenanceService(store));
     }
 
     private static KfeBitcoinFinalityPolicy finalityPolicy() {

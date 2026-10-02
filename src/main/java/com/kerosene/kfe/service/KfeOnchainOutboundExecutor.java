@@ -1,6 +1,8 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
 
@@ -8,6 +10,13 @@ import java.util.UUID;
 
 @Service
 public class KfeOnchainOutboundExecutor implements KfeRailExecution {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final KfeExecutionTransactionHelper transactionHelper;
     private final KfeOnchainPaymentGateway onchainPaymentGateway;
@@ -30,6 +39,13 @@ public class KfeOnchainOutboundExecutor implements KfeRailExecution {
 
     @Override
     public void execute(UUID outboxId, KfeExecutionTransactionHelper.PreparationResult prep) {
+        maintenanceGuard.executeMutation("rail.onchain-outbound", () -> {
+            executeAdmitted(outboxId, prep);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void executeAdmitted(UUID outboxId, KfeExecutionTransactionHelper.PreparationResult prep) {
         if (prep.externalReference() == null || prep.externalReference().isBlank()) {
             throw new IllegalArgumentException("externalReference must contain the destination address.");
         }

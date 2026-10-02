@@ -3,9 +3,11 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.common.financial.FinancialNotificationPort;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
@@ -24,6 +26,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -31,6 +34,13 @@ public class KfeInboundSettlementService {
 
     private static final Logger log = LoggerFactory.getLogger(KfeInboundSettlementService.class);
     private static final String ASSET_BTC = "BTC";
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final KfeTransactionRepository transactionRepository;
     private final KfeExecutionOutboxRepository outboxRepository;
@@ -83,6 +93,13 @@ public class KfeInboundSettlementService {
 
     @Transactional
     public boolean settle(InboundSettlementProof proof) {
+        // Financial IDs/proofs do not authorize a new maintenance root during drain.
+        // A synchronous caller already admitted by this guard can still finish.
+        return maintenanceGuard.executeMutation("network.inbound-settle",
+                () -> settleAdmitted(proof), ignored -> false);
+    }
+
+    private boolean settleAdmitted(InboundSettlementProof proof) {
         KfeExecutionOutboxEntity outbox = outboxRepository.findByIdForUpdate(proof.outboxId()).orElse(null);
         if (outbox == null) {
             return false;

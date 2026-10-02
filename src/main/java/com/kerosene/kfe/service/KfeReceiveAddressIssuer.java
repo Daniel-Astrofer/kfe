@@ -1,6 +1,8 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import com.kerosene.common.infra.logging.LogSanitizer;
@@ -9,6 +11,13 @@ import com.kerosene.kfe.rail.BitcoinCoreRpcClient;
 
 @Service
 public class KfeReceiveAddressIssuer {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     private final AddressDerivationService addressDerivationService;
     private final KfeDerivationCursorService cursorService;
@@ -43,6 +52,10 @@ public class KfeReceiveAddressIssuer {
     }
 
     public IssuedAddress issue(String label) {
+        return maintenanceGuard.executeMutation("receive-address.issue", () -> issueAdmitted(label), ignored -> false);
+    }
+
+    private IssuedAddress issueAdmitted(String label) {
         if (!platformMasterXpub.isBlank()) {
             int index = cursorService.nextIndex(KfeDerivationCursorService.KFE_BIP84_EXTERNAL);
             AddressDerivationService.DerivedAddress derived =

@@ -3,17 +3,17 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -37,9 +37,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.OptionalInt;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Detects external on-chain deposits into {@link KfeWalletKind#CUSTODIAL_ONCHAIN} addresses
@@ -87,6 +90,9 @@ public class KfeCustodialDepositObservationService {
     private final KfeBitcoinFinalityPolicy finalityPolicy;
     private final int missingObservationsBeforeReorg;
     private final long missingSecondsBeforeReorg;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+    // Dispatch to a worker thread, never the committing transaction's completion thread.
+    private Executor depositNotificationExecutor = ForkJoinPool.commonPool();
 
     public KfeCustodialDepositObservationService(
             KfeWalletRepository walletRepository,
@@ -138,10 +144,30 @@ public class KfeCustodialDepositObservationService {
         this.missingSecondsBeforeReorg = Math.max(0L, missingSecondsBeforeReorg);
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
+    void setDepositNotificationExecutor(Executor executor) {
+        this.depositNotificationExecutor = Objects.requireNonNull(executor);
+    }
+
     @Scheduled(
             fixedDelayString = "${kfe.custodial-deposit-observation.fixed-delay-ms:20000}",
             initialDelayString = "${kfe.custodial-deposit-observation.initial-delay-ms:12000}")
     public void reconcileCustodialDeposits() {
+        try {
+            maintenanceGuard.executeMutation("custodial-observation.reconcile", () -> {
+                reconcileCustodialDepositsAdmitted();
+                return null;
+            }, ignored -> false);
+        } catch (KfeMaintenanceGuard.MaintenanceException rejection) {
+            log.debug("[KFE Custodial Deposit] reconciliation paused: {}", rejection.getMessage());
+        }
+    }
+
+    private void reconcileCustodialDepositsAdmitted() {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
             return;
@@ -374,6 +400,14 @@ public class KfeCustodialDepositObservationService {
 
     /** Public entry for ZMQ / reactive path. */
     public void observeWallet(UUID walletId) {
+        // Merged UTXO probes may scan descriptors; admit before probing or opening a write TX.
+        maintenanceGuard.executeMutation("custodial-observation.observe-wallet", () -> {
+            observeWalletAdmitted(walletId);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void observeWalletAdmitted(UUID walletId) {
         // Probe UTXOs outside a long TX, then commit each deposit independently so one
         // failure cannot roll back earlier credits.
         KfeWalletEntity wallet = walletRepository.findById(walletId).orElse(null);
@@ -435,6 +469,14 @@ public class KfeCustodialDepositObservationService {
         if (parsed == null || walletIds == null || walletIds.isEmpty()) {
             return;
         }
+        // Caught provider failures and after-commit delivery cannot certify completion.
+        maintenanceGuard.executeMutation("custodial-observation.ingest-zmq-raw-tx", () -> {
+            ingestZmqRawTxAdmitted(parsed, walletIds);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void ingestZmqRawTxAdmitted(KfeBitcoinZmqTxMatcher.ParsedRawTx parsed, Set<UUID> walletIds) {
         String txid = parsed.txid();
         if (txid == null || txid.isBlank()) {
             return;
@@ -791,26 +833,24 @@ public class KfeCustodialDepositObservationService {
     }
 
     /**
-     * Schedules a deposit notification to fire after the current transaction commits.
+     * Captures a durable child before commit, then dispatches notification outside the transaction.
      * This prevents premature "deposit confirmed" push when the DB tx later rolls back.
      */
     private void scheduleDepositNotificationAfterCommit(
             KfeWalletEntity wallet, KfeTransactionEntity tx, long amount, int confs, boolean isSettled) {
+        if (wallet == null || tx == null || notificationPort.getIfAvailable() == null) {
+            return;
+        }
         // Capture values before transaction commits.
         final Long userId = wallet.getUserId();
         final UUID txId = tx.getId();
         final UUID walletId = wallet.getId();
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            // No active transaction — fire immediately (e.g. unit tests).
-            fireDepositNotification(userId, txId, walletId, amount, confs, isSettled);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                fireDepositNotification(userId, txId, walletId, amount, confs, isSettled);
-            }
-        });
+        maintenanceGuard.scheduleContinuation(
+                "custodial-observation.deposit-notification", depositNotificationExecutor, () ->
+                        maintenanceGuard.executeMutation("custodial-observation.deliver-deposit-notification", () -> {
+                            fireDepositNotification(userId, txId, walletId, amount, confs, isSettled);
+                            return null;
+                        }, ignored -> false));
     }
 
     private void fireDepositNotification(

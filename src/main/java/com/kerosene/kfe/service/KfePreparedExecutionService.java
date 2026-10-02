@@ -8,6 +8,8 @@ import com.kerosene.common.security.StringColumnCryptoPort;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.repository.KfeExecutionOutboxRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -20,6 +22,13 @@ import java.util.UUID;
 /** Persists the exact externally executable payload before the first provider call. */
 @Service
 public class KfePreparedExecutionService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     private static final int SCHEMA_VERSION = 1;
     private static final int MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
@@ -89,6 +98,14 @@ public class KfePreparedExecutionService {
         if (payload == null) {
             throw new IllegalArgumentException("Prepared execution payload is required.");
         }
+        return maintenanceGuard.executeMutation("execution.persist-prepared", () -> persistIfAbsentAdmitted(
+                outboxId, transactionId, claimToken, operation, payloadType, payload,
+                executionReference, payloadClass), ignored -> false);
+    }
+
+    private <T> StoredPayload<T> persistIfAbsentAdmitted(
+            UUID outboxId, UUID transactionId, UUID claimToken, String operation,
+            PayloadType payloadType, T payload, String executionReference, Class<T> payloadClass) {
         String normalizedReference = normalizeReference(executionReference);
         KfeExecutionOutboxEntity outbox = lockedOwnedOutbox(
                 outboxId, transactionId, claimToken, operation);

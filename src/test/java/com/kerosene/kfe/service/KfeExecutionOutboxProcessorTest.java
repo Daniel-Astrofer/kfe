@@ -1,5 +1,7 @@
 package com.kerosene.kfe.service;
 
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.kerosene.kfe.rail.CustodyGateway;
 import com.kerosene.kfe.rail.KfeOnchainPaymentGateway;
@@ -21,6 +23,11 @@ class KfeExecutionOutboxProcessorTest {
             onchainCustodyPort,
             lightningPaymentGateway
     );
+
+    @BeforeEach
+    void admitTestWork() {
+        processor.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     @Test
     void processOnchainOutboundDelegatesToHelperAndGateway() {

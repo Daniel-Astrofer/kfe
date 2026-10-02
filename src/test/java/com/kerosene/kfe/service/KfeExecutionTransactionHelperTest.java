@@ -7,6 +7,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.audit.KfeAuditEventLogger;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
@@ -22,8 +24,11 @@ import com.kerosene.kfe.repository.KfeWalletRepository;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -288,7 +293,7 @@ class KfeExecutionTransactionHelperTest {
         when(peerInboundProvider.getIfAvailable()).thenReturn(null);
         when(responseMapper.buildDisplayPayload(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new java.util.LinkedHashMap<>());
-        return new KfeExecutionTransactionHelper(
+        KfeExecutionTransactionHelper result = new KfeExecutionTransactionHelper(
                 outboxRepository,
                 transactionRepository,
                 walletRepository,
@@ -314,6 +319,22 @@ class KfeExecutionTransactionHelperTest {
                 mock(KfeFinancialMetrics.class),
                 mock(KfeAuditEventLogger.class),
                 maxRetryAttempts);
+        // Explicit ACTIVE fixture through the real guard, including durable child admission.
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        when(store.captureContinuation(any(), anyString(), anyBoolean())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        when(store.claimContinuation(any())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(invocation.getArgument(0), 0L));
+        KfeMaintenanceService realGuard = new KfeMaintenanceService(store);
+        result.setMaintenanceGuard(realGuard);
+        result.setContinuationExecutor(action -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            assertThat(TransactionSynchronizationManager.isSynchronizationActive()).isFalse();
+            action.run();
+        });
+        return result;
     }
 
     private KfeExecutionOutboxEntity claimedOutbox(UUID transactionId) {

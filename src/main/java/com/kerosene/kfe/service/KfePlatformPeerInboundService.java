@@ -3,6 +3,8 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +42,13 @@ import java.util.UUID;
  */
 @Service
 public class KfePlatformPeerInboundService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfePlatformPeerInboundService.class);
     public static final String PROVIDER = "PLATFORM_PEER_ONCHAIN";
@@ -117,6 +126,14 @@ public class KfePlatformPeerInboundService {
         if (address.isEmpty() || txid.isEmpty()) {
             return;
         }
+
+        maintenanceGuard.executeMutation("platform-peer.expose-inbound", () -> {
+            exposeAfterOutboundBroadcastAdmitted(outbound, address, txid);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void exposeAfterOutboundBroadcastAdmitted(KfeTransactionEntity outbound, String address, String txid) {
 
         Optional<UUID> sinkWalletId = destinationRouter.findPlatformSinkWalletIdForAddress(address);
         if (sinkWalletId.isEmpty()) {

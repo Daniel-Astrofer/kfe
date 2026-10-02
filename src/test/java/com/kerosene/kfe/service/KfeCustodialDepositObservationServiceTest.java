@@ -7,6 +7,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfeRail;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -23,6 +25,8 @@ import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
 
 import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -31,11 +35,14 @@ import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class KfeCustodialDepositObservationServiceTest {
@@ -63,6 +70,7 @@ class KfeCustodialDepositObservationServiceTest {
     private final ObjectProvider<KfeMonitoredChainAddressIndex> addressIndex =
             mock(ObjectProvider.class);
     private final TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+    private final Deque<Runnable> pendingNotifications = new ArrayDeque<>();
 
     private KfeCustodialDepositObservationService service;
 
@@ -104,6 +112,17 @@ class KfeCustodialDepositObservationServiceTest {
                 finalityPolicy,
                 3,
                 0L);
+        // Explicit ACTIVE admission fixture through the real guard, never a permissive guard mock.
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString())).thenReturn(
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        when(store.captureContinuation(any(), anyString(), anyBoolean())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        when(store.claimContinuation(any())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(invocation.getArgument(0), 0L));
+        KfeMaintenanceService realGuard = new KfeMaintenanceService(store);
+        service.setMaintenanceGuard(realGuard);
+        service.setDepositNotificationExecutor(pendingNotifications::addLast);
     }
 
     @Test
@@ -131,7 +150,8 @@ class KfeCustodialDepositObservationServiceTest {
                 .thenReturn(new KfePricingService.Quote(25_000L, 25_000L, 0L, 0L));
         when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(responseMapper.buildDisplayPayload(any(), eq(42L))).thenReturn(java.util.Map.of());
-        when(notificationPort.getIfAvailable()).thenReturn(null);
+        FinancialNotificationPort port = mock(FinancialNotificationPort.class);
+        when(notificationPort.getIfAvailable()).thenReturn(port);
 
         var parsed = new KfeBitcoinZmqTxMatcher.ParsedRawTx(
                 "aabbccdd",
@@ -147,6 +167,11 @@ class KfeCustodialDepositObservationServiceTest {
                         && walletId.equals(tx.getDestinationWalletId())));
         verify(statementService).recordUserStatement(eq(42L), eq(walletId), any(), any());
         verify(dashboardPublisher).publishAfterCommit(42L);
+        verifyNoInteractions(port);
+        assertThat(pendingNotifications).hasSize(1);
+        pendingNotifications.removeFirst().run();
+        verify(port).notifyDepositDetected(eq(42L), any(), eq(walletId), eq("ONCHAIN"),
+                eq(25_000L), eq(0));
     }
 
     @Test

@@ -2,6 +2,8 @@ package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.kfe.config.KfeBitcoinFinalityPolicy;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -68,6 +70,11 @@ class KfeNetworkMonitorTest {
                 50,
                 finalityPolicy()
         );
+        // Empty batches do not admit; all financial candidates use the real guard.
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        lenient().when(store.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0L));
+        monitor.setMaintenanceGuard(new KfeMaintenanceService(store));
     }
 
     private KfeBitcoinFinalityPolicy finalityPolicy() {

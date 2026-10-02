@@ -49,6 +49,9 @@ class KfeReceiveAddressIssuerTest {
         issuerWithNone = new KfeReceiveAddressIssuer(
                 addressDerivationService, cursorService, rpcClientProvider, "", false
         );
+        issuerWithXpub.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+        issuerWithBitcoinCore.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+        issuerWithNone.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
     }
 
     @Test
