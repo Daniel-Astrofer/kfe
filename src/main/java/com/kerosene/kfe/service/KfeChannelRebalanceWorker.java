@@ -27,6 +27,14 @@ import java.util.UUID;
 @Service
 public class KfeChannelRebalanceWorker {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(KfeChannelRebalanceWorker.class);
 
     private final KfeChannelRebalanceQueueService queueService;
@@ -90,6 +98,9 @@ public class KfeChannelRebalanceWorker {
             try {
                 executeJob(job.getId());
                 processed++;
+            } catch (com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException paused) {
+                // Do not fail a queued job merely because maintenance has paused admission.
+                break;
             } catch (RuntimeException ex) {
                 log.warn("[KFE Rebal Worker] job {} failed: {}", job.getId(), ex.getMessage());
                 queueService.fail(job.getId(), ex.getMessage());
@@ -101,6 +112,13 @@ public class KfeChannelRebalanceWorker {
 
     @Transactional
     public void executeJob(UUID jobId) {
+        maintenanceGuard.executeMutation("channel.rebalance-job", () -> {
+            executeJobAdmitted(jobId);
+            return Boolean.TRUE;
+        });
+    }
+
+    private void executeJobAdmitted(UUID jobId) {
         KfeChannelRebalanceJobEntity job = queueService.findById(jobId).orElse(null);
         if (job == null) {
             return;

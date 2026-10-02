@@ -74,6 +74,7 @@ class KfeVaultMeshDayRotationWorkerTest {
         RecordingPort port = new RecordingPort(VaultMeshDayStatus.stale("2026-07-21", TODAY));
         KfeVaultMeshDayRotationWorker worker =
                 new KfeVaultMeshDayRotationWorker(port, "kfe", false, "kfe-day-rotation", CLOCK);
+        worker.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
 
         KfeVaultMeshDayRotationWorker.Outcome out = worker.rotateIfNeeded();
 
@@ -96,7 +97,10 @@ class KfeVaultMeshDayRotationWorkerTest {
     }
 
     private static KfeVaultMeshDayRotationWorker worker(VaultMeshSettlementPort port) {
-        return new KfeVaultMeshDayRotationWorker(port, "kfe", true, "kfe-day-rotation", CLOCK);
+        KfeVaultMeshDayRotationWorker worker =
+                new KfeVaultMeshDayRotationWorker(port, "kfe", true, "kfe-day-rotation", CLOCK);
+        worker.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+        return worker;
     }
 
     private record Vote(String voter, String dayEpoch) {}

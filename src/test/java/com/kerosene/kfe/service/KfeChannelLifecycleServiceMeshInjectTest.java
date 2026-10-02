@@ -120,7 +120,7 @@ class KfeChannelLifecycleServiceMeshInjectTest {
     }
 
     private KfeChannelLifecycleService service(boolean requireInject) {
-        return new KfeChannelLifecycleService(
+        KfeChannelLifecycleService service = new KfeChannelLifecycleService(
                 decisionService,
                 channelGateway,
                 channelsMeshInject,
@@ -134,6 +134,8 @@ class KfeChannelLifecycleServiceMeshInjectTest {
                 80,
                 requireInject,
                 true);
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+        return service;
     }
 
     private static KfeOpenChannelRequest openRequest() {
@@ -280,6 +282,7 @@ class KfeChannelLifecycleServiceMeshInjectTest {
         KfeChannelMeshInjectReconciler reconciler =
                 new KfeChannelMeshInjectReconciler(
                         decisionRepository, channelsMeshInject, lifecycle, true, 20, 10);
+        reconciler.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
 
         assertThat(reconciler.retryPendingCommits(5)).isEqualTo(1);
         assertThat(commitPending.getMeshInjectPhase())

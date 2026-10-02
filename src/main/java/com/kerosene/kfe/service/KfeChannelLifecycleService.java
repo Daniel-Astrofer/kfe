@@ -37,6 +37,14 @@ import java.util.UUID;
 @Service
 public class KfeChannelLifecycleService {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     public static final String PHASE_RESERVED = "RESERVED";
     public static final String PHASE_FUNDED = "FUNDED";
     public static final String PHASE_OPENED_COMMIT_PENDING = "OPENED_COMMIT_PENDING";
@@ -94,6 +102,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse evaluateOpen(KfeOpenChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.evaluate-open", () -> evaluateOpenAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse evaluateOpenAdmitted(KfeOpenChannelRequest request) {
         boolean anchors = resolveAnchorsEnabled(request.anchorsEnabled());
         long feeRate = request.estimatedFeeRateSatVb() != null ? request.estimatedFeeRateSatVb() : 0L;
         String proposal = proposalHash("OPEN", request.peerPubkey(), request.localAmountSats());
@@ -115,6 +127,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse openChannel(KfeOpenChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.open", () -> openChannelAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse openChannelAdmitted(KfeOpenChannelRequest request) {
         KfeChannelDecisionResponse evaluated = resumeOrEvaluateOpen(request);
         if (!evaluated.passed()) {
             return evaluated;
@@ -282,6 +298,12 @@ public class KfeChannelLifecycleService {
      */
     @Transactional
     public KfeChannelDecisionResponse retryCommit(UUID decisionId) {
+        return maintenanceGuard.executeMutation("channel.retry-commit", () -> retryCommitAdmitted(decisionId),
+                result -> result.decisionReason() != null
+                        && !result.decisionReason().startsWith("OPENED_COMMIT_FAILED"));
+    }
+
+    private KfeChannelDecisionResponse retryCommitAdmitted(UUID decisionId) {
         KfeChannelOperationDecisionEntity entity = decisionRepository.findById(decisionId)
                 .orElseThrow(() -> new IllegalArgumentException("Channel decision not found."));
         if (entity.isExecuted() && PHASE_COMMITTED.equals(entity.getMeshInjectPhase())) {
@@ -364,6 +386,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse evaluateRebalance(KfeRebalanceChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.evaluate-rebalance", () -> evaluateRebalanceAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse evaluateRebalanceAdmitted(KfeRebalanceChannelRequest request) {
         LightningChannelGateway.ChannelSnapshot channel = findChannel(request.channelPoint());
         ChannelDecisionResult decision = decisionService.evaluateRebalance(
                 channel,
@@ -381,6 +407,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse rebalance(KfeRebalanceChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.rebalance", () -> rebalanceAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse rebalanceAdmitted(KfeRebalanceChannelRequest request) {
         KfeChannelDecisionResponse evaluated = evaluateRebalance(request);
         if (!evaluated.passed()) {
             return evaluated;
@@ -409,6 +439,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse evaluateClose(KfeCloseChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.evaluate-close", () -> evaluateCloseAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse evaluateCloseAdmitted(KfeCloseChannelRequest request) {
         LightningChannelGateway.ChannelSnapshot channel = findChannel(request.channelPoint());
         long feeRate = request.estimatedFeeRateSatVb() != null ? request.estimatedFeeRateSatVb() : 1L;
         ChannelDecisionResult decision = decisionService.evaluateClose(
@@ -429,6 +463,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse closeChannel(KfeCloseChannelRequest request) {
+        return maintenanceGuard.executeMutation("channel.close", () -> closeChannelAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse closeChannelAdmitted(KfeCloseChannelRequest request) {
         KfeChannelDecisionResponse evaluated = evaluateClose(request);
         if (!evaluated.passed()) {
             return evaluated;
@@ -445,6 +483,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse evaluatePpm(KfePpmAdjustRequest request) {
+        return maintenanceGuard.executeMutation("channel.evaluate-ppm", () -> evaluatePpmAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse evaluatePpmAdmitted(KfePpmAdjustRequest request) {
         long current = request.currentPpm() != null ? request.currentPpm() : 0L;
         boolean drain = Boolean.TRUE.equals(request.acceleratedDrain());
         ChannelDecisionResult decision = decisionService.evaluatePpm(current, drain);
@@ -460,6 +502,10 @@ public class KfeChannelLifecycleService {
 
     @Transactional
     public KfeChannelDecisionResponse adjustPpm(KfePpmAdjustRequest request) {
+        return maintenanceGuard.executeMutation("channel.adjust-ppm", () -> adjustPpmAdmitted(request));
+    }
+
+    private KfeChannelDecisionResponse adjustPpmAdmitted(KfePpmAdjustRequest request) {
         KfeChannelDecisionResponse evaluated = evaluatePpm(request);
         if (!evaluated.passed()) {
             return evaluated;

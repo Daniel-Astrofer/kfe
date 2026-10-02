@@ -3,6 +3,7 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -10,6 +11,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeChannelOperationDecisionEntity;
 import com.kerosene.kfe.rail.ChannelsMeshInjectGateway;
 import com.kerosene.kfe.repository.KfeChannelOperationDecisionRepository;
+import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -26,6 +29,13 @@ import java.util.List;
 public class KfeChannelMeshInjectReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(KfeChannelMeshInjectReconciler.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeChannelOperationDecisionRepository decisionRepository;
     private final ChannelsMeshInjectGateway channelsMeshInject;
@@ -57,45 +67,68 @@ public class KfeChannelMeshInjectReconciler {
         if (!enabled) {
             return;
         }
-        retryPendingCommits(batchSize);
-        releaseOrphanedReserves(batchSize);
+        try {
+            // Separate admissions: a retry batch cannot authorize a later orphan sweep.
+            retryPendingCommits(batchSize);
+            releaseOrphanedReserves(batchSize);
+        } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+            log.debug("[KFE Channel Inject] maintenance paused reconciliation: {}", paused.getMessage());
+        }
     }
 
     @Transactional
     public int retryPendingCommits(int limit) {
+        return maintenanceGuard.executeMutation("channel.mesh-retry-commits", () ->
+                retryPendingCommitsAdmitted(limit), ReconciliationResult::certain).count();
+    }
+
+    private ReconciliationResult retryPendingCommitsAdmitted(int limit) {
         List<KfeChannelOperationDecisionEntity> pending =
                 decisionRepository.findByMeshInjectPhaseAndExecutedFalseOrderByCreatedAtAsc(
                         KfeChannelLifecycleService.PHASE_OPENED_COMMIT_PENDING,
                         Pageable.ofSize(Math.max(1, limit)));
         int done = 0;
+        boolean certain = true;
         for (KfeChannelOperationDecisionEntity row : pending) {
             try {
-                lifecycleService.retryCommit(row.getId());
+                KfeChannelDecisionResponse result = lifecycleService.retryCommit(row.getId());
+                certain &= result != null && result.executed();
                 done++;
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                throw paused;
             } catch (RuntimeException ex) {
+                certain = false;
                 log.warn(
                         "[KFE Channel Inject] commit retry failed decision={}: {}",
                         row.getId(),
                         ex.getMessage());
             }
         }
-        return done;
+        return new ReconciliationResult(done, certain);
     }
 
     @Transactional
     public int releaseOrphanedReserves(int limit) {
+        return maintenanceGuard.executeMutation("channel.mesh-release-orphans", () ->
+                releaseOrphanedReservesAdmitted(limit), ReconciliationResult::certain).count();
+    }
+
+    private ReconciliationResult releaseOrphanedReservesAdmitted(int limit) {
+        requireActiveOrphanRecovery();
         LocalDateTime cutoff =
                 LocalDateTime.now(ZoneOffset.UTC).minusMinutes(orphanReserveTtlMinutes);
         List<KfeChannelOperationDecisionEntity> orphans =
                 decisionRepository.findOrphanedReserves(cutoff, Pageable.ofSize(Math.max(1, limit)));
         int released = 0;
+        boolean certain = true;
         for (KfeChannelOperationDecisionEntity row : orphans) {
+            // An unrelated admitted parent is not provenance for a legacy TTL orphan.
+            requireActiveOrphanRecovery();
             String intentId = row.getMeshIntentId();
             if (intentId == null || intentId.isBlank()) {
-                row.setMeshInjectPhase(KfeChannelLifecycleService.PHASE_RELEASED);
-                row.setDecisionReason("MESH_ORPHAN_RESERVE_CLEARED_NO_INTENT");
-                decisionRepository.save(row);
-                released++;
+                certain = false;
+                log.warn("[KFE Channel Inject] orphan requires manual recovery decision={}: missing intent",
+                        row.getId());
                 continue;
             }
             long amount = row.getAmountSats() != null ? row.getAmountSats() : 0L;
@@ -107,12 +140,24 @@ public class KfeChannelMeshInjectReconciler {
                 decisionRepository.save(row);
                 released++;
             } else {
+                certain = false;
                 log.warn(
                         "[KFE Channel Inject] orphan release failed decision={} reason={}",
                         row.getId(),
                         result.reasonCode());
             }
         }
-        return released;
+        return new ReconciliationResult(released, certain);
     }
+
+    private void requireActiveOrphanRecovery() {
+        // This observation only narrows admission; status alone never grants admission.
+        // Synchronous open-failure compensation belongs to lifecycle's admitted workflow.
+        if (maintenanceGuard.status().mode() != KfeMaintenanceGuard.Mode.ACTIVE) {
+            throw new KfeMaintenanceGuard.MaintenanceException(503,
+                    "TTL orphan recovery requires ACTIVE maintenance mode.");
+        }
+    }
+
+    private record ReconciliationResult(int count, boolean certain) { }
 }

@@ -65,6 +65,7 @@ class KfeTransactionCancellationServiceTest {
                 dashboardPublisher,
                 auditLogService,
                 lightningInvoiceGateway);
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
     }
 
     @Test

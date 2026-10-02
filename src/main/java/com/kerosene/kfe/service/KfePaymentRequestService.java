@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
 import com.kerosene.kfe.dto.KfePaymentRequestResponse;
@@ -42,6 +44,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -50,6 +53,13 @@ import org.springframework.beans.factory.annotation.Qualifier;
 
 @Service
 public class KfePaymentRequestService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = Objects.requireNonNull(guard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfePaymentRequestService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -110,6 +120,14 @@ public class KfePaymentRequestService {
         List<KfeRail> rails = resolveRails(request);
         requireReceivingWallet(wallet, request, rails);
 
+        return maintenanceGuard.executeMutation("payment-request.create",
+                () -> createAdmitted(userId, request, wallet, rails),
+                // External address/invoice issuance cannot be certified by local commit.
+                ignored -> rails.stream().allMatch(rail -> rail == KfeRail.INTERNAL));
+    }
+
+    private KfePaymentRequestResponse createAdmitted(Long userId, KfeCreatePaymentRequest request,
+                                                    KfeWalletEntity wallet, List<KfeRail> rails) {
         KfeWalletAddressEntity onchainAddress = null;
         CustodyGateway.GeneratedLightningInvoice lightningInvoice = null;
         for (KfeRail r : rails) {
@@ -218,6 +236,10 @@ public class KfePaymentRequestService {
     public KfePaymentRequestResponse expire(Long userId, UUID id) {
         KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
+        return maintenanceGuard.executeMutation("payment-request.expire", () -> expireAdmitted(paymentRequest));
+    }
+
+    private KfePaymentRequestResponse expireAdmitted(KfePaymentRequestEntity paymentRequest) {
         if (paymentRequest.getStatus() == KfePaymentRequestStatus.OPEN) {
             paymentRequest.expire();
             paymentRequest = paymentRequestRepository.save(paymentRequest);
@@ -230,6 +252,10 @@ public class KfePaymentRequestService {
     public KfePaymentRequestResponse hide(Long userId, UUID id) {
         KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
+        return maintenanceGuard.executeMutation("payment-request.hide", () -> hideAdmitted(paymentRequest));
+    }
+
+    private KfePaymentRequestResponse hideAdmitted(KfePaymentRequestEntity paymentRequest) {
         if (paymentRequest.getStatus() != KfePaymentRequestStatus.PAID) {
             paymentRequest.hide();
             paymentRequest = paymentRequestRepository.save(paymentRequest);
@@ -241,7 +267,11 @@ public class KfePaymentRequestService {
     @Transactional
     public KfePaymentRequestResponse cancel(Long userId, UUID id) {
         // Full cancel: LN invoice best-effort, fail related pending txs, dashboard refresh.
-        return toResponse(transactionCancellationService.cancelPaymentRequest(userId, id));
+        return maintenanceGuard.executeMutation("payment-request.cancel",
+                () -> toResponse(transactionCancellationService.cancelPaymentRequest(userId, id)),
+                // Delegate catches provider/compensation failures and schedules afterCommit
+                // publication. Its returned entity does not prove those effects completed.
+                ignored -> false);
     }
 
     private KfeWalletAddressEntity resolveReceivingAddress(
@@ -437,8 +467,12 @@ public class KfePaymentRequestService {
 
     private KfePaymentRequestEntity expireIfDue(KfePaymentRequestEntity paymentRequest) {
         if (paymentRequest.isExpired(LocalDateTime.now(java.time.ZoneOffset.UTC)) && findSettlementTransaction(paymentRequest).isEmpty()) {
-            paymentRequest.expire();
-            return paymentRequestRepository.save(paymentRequest);
+            // Callers resolved the owner/public-ID capability before reaching this
+            // boundary. Never dirty a managed entity before durable admission succeeds.
+            return maintenanceGuard.executeMutation("payment-request.expiry-on-read", () -> {
+                paymentRequest.expire();
+                return paymentRequestRepository.save(paymentRequest);
+            });
         }
         return paymentRequest;
     }

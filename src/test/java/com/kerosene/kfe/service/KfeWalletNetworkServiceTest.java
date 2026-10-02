@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.common.financial.FinancialTransactionApprovalPort;
 import com.kerosene.common.financial.FinancialUserDirectoryPort;
@@ -9,6 +10,8 @@ import com.kerosene.kfe.dto.KfeColdWalletPsbtRequest;
 import com.kerosene.kfe.dto.KfeColdWalletPsbtResponse;
 import com.kerosene.kfe.dto.KfeReceivingCapabilitiesResponse;
 import com.kerosene.kfe.dto.KfeUtxoResponse;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfePsbtWorkflowEntity;
 import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletAddressStatus;
@@ -65,6 +68,14 @@ class KfeWalletNetworkServiceTest {
             bitcoinAddressValidator,
             lightningInvoiceGateway,
             200);
+
+    @BeforeEach
+    void activeMaintenanceAdmission() {
+        KfeMaintenanceStore maintenanceStore = mock(KfeMaintenanceStore.class);
+        when(maintenanceStore.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        service.setMaintenanceGuard(new KfeMaintenanceService(maintenanceStore));
+    }
 
     @Test
     void returnsKfeReceivingCapabilitiesFromActiveWallets() {

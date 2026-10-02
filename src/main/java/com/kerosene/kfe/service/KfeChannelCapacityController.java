@@ -3,6 +3,7 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.application.channel.ChannelDecisionResult;
@@ -11,6 +12,7 @@ import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
 import com.kerosene.kfe.dto.KfeCloseChannelRequest;
 import com.kerosene.kfe.dto.KfeOpenChannelRequest;
 import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.Arrays;
 import java.util.List;
@@ -28,6 +30,13 @@ import java.util.stream.Collectors;
 public class KfeChannelCapacityController {
 
     private static final Logger log = LoggerFactory.getLogger(KfeChannelCapacityController.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final LightningChannelGateway channelGateway;
     private final KfeChannelDecisionService decisionService;
@@ -104,14 +113,26 @@ public class KfeChannelCapacityController {
             return;
         }
         try {
-            evaluateCloses();
-            evaluateOpens();
+            maintenanceGuard.executeMutation("channel.capacity-scan", () -> {
+                evaluateCloses();
+                evaluateOpens();
+                return Boolean.TRUE;
+            }, ignored -> true);
+        } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+            log.debug("[KFE Capacity] maintenance paused scan: {}", paused.getMessage());
         } catch (RuntimeException ex) {
             log.warn("[KFE Capacity] scan failed: {}", ex.getMessage());
         }
     }
 
     void evaluateOpens() {
+        maintenanceGuard.executeMutation("channel.capacity-evaluate-opens", () -> {
+            evaluateOpensAdmitted();
+            return Boolean.TRUE;
+        }, ignored -> true);
+    }
+
+    private void evaluateOpensAdmitted() {
         if (!autoOpen) {
             return;
         }
@@ -191,6 +212,13 @@ public class KfeChannelCapacityController {
     }
 
     void evaluateCloses() {
+        maintenanceGuard.executeMutation("channel.capacity-evaluate-closes", () -> {
+            evaluateClosesAdmitted();
+            return Boolean.TRUE;
+        }, ignored -> true);
+    }
+
+    private void evaluateClosesAdmitted() {
         if (!autoCloseDead) {
             return;
         }

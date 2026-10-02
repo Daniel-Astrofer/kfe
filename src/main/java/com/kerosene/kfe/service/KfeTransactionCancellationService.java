@@ -3,6 +3,8 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.dto.KfeTransactionResponse;
@@ -30,6 +32,13 @@ import java.util.UUID;
  */
 @Service
 public class KfeTransactionCancellationService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfeTransactionCancellationService.class);
     public static final String FAILURE_USER_CANCELLED = "USER_CANCELLED";
@@ -110,6 +119,13 @@ public class KfeTransactionCancellationService {
                     "Esta transação não pode ser cancelada (já liquidada, em execução na rede, ou sem invoice aberta).");
         }
 
+        return maintenanceGuard.executeMutation("transaction.cancel",
+                () -> cancelTransactionAdmitted(userId, transactionId, tx, hints), ignored -> false);
+    }
+
+    private KfeTransactionResponse cancelTransactionAdmitted(
+            Long userId, UUID transactionId, KfeTransactionEntity tx, CancellationHints hints) {
+
         if (CANCEL_TARGET_PAYMENT_REQUEST.equals(hints.cancelTarget()) && hints.paymentRequestId() != null) {
             cancelPaymentRequestInternal(userId, hints.paymentRequestId(), true);
             // Reload tx — may have been failed by PR cancel side-effects.
@@ -135,7 +151,8 @@ public class KfeTransactionCancellationService {
 
     @Transactional
     public KfePaymentRequestEntity cancelPaymentRequest(Long userId, UUID paymentRequestId) {
-        return cancelPaymentRequestInternal(userId, paymentRequestId, true);
+        return maintenanceGuard.executeMutation("transaction.cancel-payment-request",
+                () -> cancelPaymentRequestInternal(userId, paymentRequestId, true), ignored -> false);
     }
 
     private KfePaymentRequestEntity cancelPaymentRequestInternal(

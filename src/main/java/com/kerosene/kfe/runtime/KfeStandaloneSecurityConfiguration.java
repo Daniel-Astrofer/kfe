@@ -1,5 +1,8 @@
 package com.kerosene.kfe.runtime;
 
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import com.kerosene.kfe.maintenance.KfeMaintenanceHttpBarrier;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -30,7 +33,9 @@ public class KfeStandaloneSecurityConfiguration {
     public SecurityFilterChain kfeSecurityFilterChain(
             HttpSecurity http,
             KfeJwtAuthenticationFilter jwtAuthenticationFilter,
-            CorsConfigurationSource corsConfigurationSource) throws Exception {
+            CorsConfigurationSource corsConfigurationSource,
+            KfeMaintenanceGuard maintenanceGuard,
+            @Value("${kfe.internal.shared-secret:}") String internalSharedSecret) throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(AbstractHttpConfigurer::disable)
@@ -53,6 +58,7 @@ public class KfeStandaloneSecurityConfiguration {
                         .requestMatchers("/kfe/**").authenticated()
                         .anyRequest().denyAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+        KfeMaintenanceHttpBarrier.register(http, maintenanceGuard, internalSharedSecret);
         return http.build();
     }
 

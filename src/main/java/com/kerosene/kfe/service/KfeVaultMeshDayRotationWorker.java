@@ -27,6 +27,14 @@ import java.time.ZoneOffset;
 @ConditionalOnProperty(name = "kfe.vaultmesh.day-rotation.enabled", havingValue = "true")
 public class KfeVaultMeshDayRotationWorker {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(KfeVaultMeshDayRotationWorker.class);
 
     private final VaultMeshSettlementPort settlementPort;
@@ -96,6 +104,11 @@ public class KfeVaultMeshDayRotationWorker {
         String target = status.neededDayEpoch() == null || status.neededDayEpoch().isBlank()
                 ? utcToday
                 : status.neededDayEpoch().trim();
+        return maintenanceGuard.executeMutation("vault.day-rotation", () -> advanceAdmitted(status, target),
+                result -> result.kind() == Outcome.Kind.ADVANCED && result.error() == null);
+    }
+
+    private Outcome advanceAdmitted(VaultMeshDayStatus status, String target) {
         log.info(
                 "[KFE VaultMesh Day] advancing meshDay={} → target={} (vault derives voter; legacy voter-id={})",
                 status.dayEpoch(),

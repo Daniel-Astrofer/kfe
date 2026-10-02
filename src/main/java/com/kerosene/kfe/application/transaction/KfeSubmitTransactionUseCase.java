@@ -43,6 +43,14 @@ import java.util.UUID;
 @Service
 public class KfeSubmitTransactionUseCase {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(KfeSubmitTransactionUseCase.class);
     private static final String ASSET_BTC = "BTC";
     private static final BigDecimal SATS_PER_BTC = new BigDecimal("100000000");
@@ -156,6 +164,11 @@ public class KfeSubmitTransactionUseCase {
     }
 
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
+        // Routing may issue a receive address; admission must precede even this preflight.
+        return maintenanceGuard.executeMutation("payment.submit", () -> submitAdmitted(userId, request, deviceHash));
+    }
+
+    private KfeTransactionResponse submitAdmitted(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         request = walletResolver.resolveInternalDestinationReference(request);
         // On-chain → known Kerosene address: deliver to recipient's custodial/cold sink.
         request = onchainDestinationRouter.resolve(request);

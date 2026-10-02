@@ -1,27 +1,19 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import com.kerosene.common.financial.FinancialQuorumPort;
-import com.kerosene.kfe.application.quorum.KfeQuorumService;
 
 @Service
 public class KfeQuorumGateway {
-    private final KfeQuorumService quorumService;
 
-    @Autowired
-    public KfeQuorumGateway(KfeQuorumService quorumService) {
-        this.quorumService = quorumService;
-    }
+    private final FinancialQuorumPort quorumPort;
 
-    /** Compatibility constructor for isolated callers; new code injects the application service. */
-    @Deprecated(forRemoval = true)
     public KfeQuorumGateway(FinancialQuorumPort quorumPort) {
-        this(new KfeQuorumService(quorumPort));
+        this.quorumPort = quorumPort;
     }
 
     public Result requireHealthyUnanimousConsensus(String proposalHash) {
-        KfeQuorumService.Result result = quorumService.requireHealthyUnanimousConsensus(proposalHash);
+        FinancialQuorumPort.Result result = quorumPort.requireHealthyUnanimousConsensus(proposalHash);
         return new Result(result.acceptedNodes(), result.totalHealthyNodes());
     }
 

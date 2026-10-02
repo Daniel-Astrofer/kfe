@@ -23,6 +23,14 @@ import java.util.UUID;
 @Service
 public class KfeChannelCapacityWorker {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(KfeChannelCapacityWorker.class);
 
     private final KfeChannelCapacityQueueService queueService;
@@ -71,6 +79,9 @@ public class KfeChannelCapacityWorker {
             try {
                 executeJob(job.getId());
                 processed++;
+            } catch (com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException paused) {
+                // Pause leaves the durable queue intact; it is not a failed financial job.
+                break;
             } catch (RuntimeException ex) {
                 log.warn("[KFE Capacity Worker] job {} failed: {}", job.getId(), ex.getMessage());
                 queueService.fail(job.getId(), ex.getMessage());
@@ -81,6 +92,13 @@ public class KfeChannelCapacityWorker {
     }
 
     public void executeJob(UUID jobId) {
+        maintenanceGuard.executeMutation("channel.capacity-job", () -> {
+            executeJobAdmitted(jobId);
+            return Boolean.TRUE;
+        });
+    }
+
+    private void executeJobAdmitted(UUID jobId) {
         KfeChannelCapacityJobEntity job = queueService.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("Capacity job not found: " + jobId));
         queueService.markInProgress(jobId, "worker-start");

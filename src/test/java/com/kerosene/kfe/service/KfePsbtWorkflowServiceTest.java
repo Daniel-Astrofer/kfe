@@ -2,6 +2,7 @@ package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.dto.KfeSignedPsbtRequest;
 import com.kerosene.kfe.model.KfePsbtWorkflowEntity;
@@ -37,6 +38,11 @@ class KfePsbtWorkflowServiceTest {
             hashService,
             auditLogService,
             coldObservationProvider);
+
+    @BeforeEach
+    void admitUnitTestWork() {
+        service.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
+    }
 
     @Test
     void broadcastIsIdempotentWhenWorkflowAlreadyBroadcast() {

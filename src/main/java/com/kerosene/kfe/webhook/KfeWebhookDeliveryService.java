@@ -5,13 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
@@ -24,7 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Non-blocking webhook delivery with HMAC-SHA256 signing and exponential-backoff retry.
@@ -35,6 +35,13 @@ import java.util.concurrent.CompletableFuture;
 @Service
 @ConditionalOnProperty(name = "kfe.webhook.enabled", havingValue = "true")
 public class KfeWebhookDeliveryService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfeWebhookDeliveryService.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";
@@ -74,31 +81,23 @@ public class KfeWebhookDeliveryService {
             return;
         }
 
-        Runnable delivery = () -> deliverAsync(webhookUrl, payload);
-
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    delivery.run();
+        maintenanceGuard.executeMutation("webhook.enqueue", () -> {
+            maintenanceGuard.scheduleContinuation("webhook.delivery", ForkJoinPool.commonPool(), () -> {
+                if (!deliverWithRetry(webhookUrl, payload)) {
+                    throw new IllegalStateException("Webhook delivery remains uncertain.");
                 }
             });
-        } else {
-            delivery.run();
-        }
+            return Boolean.TRUE;
+        });
     }
 
-    private void deliverAsync(String webhookUrl, KfeWebhookPayload payload) {
-        CompletableFuture.runAsync(() -> deliverWithRetry(webhookUrl, payload));
-    }
-
-    private void deliverWithRetry(String webhookUrl, KfeWebhookPayload payload) {
+    private boolean deliverWithRetry(String webhookUrl, KfeWebhookPayload payload) {
         String signedBody;
         try {
             signedBody = signAndSerialize(payload);
         } catch (Exception e) {
             log.error("[KFE Webhook] failed to serialize payload eventId={}", payload.eventId(), e);
-            return;
+            return false;
         }
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
@@ -108,7 +107,7 @@ public class KfeWebhookDeliveryService {
                     Thread.sleep(backoffMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    return;
+                    return false;
                 }
             }
 
@@ -121,7 +120,7 @@ public class KfeWebhookDeliveryService {
                 restTemplate.postForEntity(webhookUrl, new HttpEntity<>(signedBody, headers), Void.class);
                 log.info("[KFE Webhook] delivered eventId={} type={} attempt={}",
                         payload.eventId(), payload.eventType(), attempt + 1);
-                return;
+                return true;
             } catch (RestClientResponseException e) {
                 log.warn("[KFE Webhook] rejected eventId={} type={} attempt={}/{} status={}",
                         payload.eventId(), payload.eventType(), attempt + 1, maxRetries + 1,
@@ -129,11 +128,12 @@ public class KfeWebhookDeliveryService {
             } catch (Exception e) {
                 log.warn("[KFE Webhook] failed eventId={} type={} attempt={}/{}: {}",
                         payload.eventId(), payload.eventType(), attempt + 1, maxRetries + 1,
-                        e.getMessage());
+                        e.getClass().getSimpleName());
             }
         }
         log.error("[KFE Webhook] exhausted retries eventId={} type={}",
                 payload.eventId(), payload.eventType());
+        return false;
     }
 
     private String signAndSerialize(KfeWebhookPayload payload) throws JsonProcessingException {

@@ -11,23 +11,43 @@ permissions:
 jobs:
   java:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: kfe_maintenance_test_cell
+        ports: [5432:5432]
+        options: --health-cmd="pg_isready -U postgres" --health-interval=5s --health-timeout=5s --health-retries=12
+    env:
+      KFE_MAINTENANCE_POSTGRES_DISPOSABLE: "true"
+      KFE_MAINTENANCE_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/kfe_maintenance_test_cell
+      KFE_MAINTENANCE_POSTGRES_USER: postgres
+      KFE_MAINTENANCE_POSTGRES_PASSWORD: synthetic-ci-only
+      KFE_MAINTENANCE_FULL_SCHEMA_DISPOSABLE: "true"
+      KFE_MAINTENANCE_FULL_SCHEMA_URL: jdbc:postgresql://127.0.0.1:5432/kfe_maintenance_test_full_schema_ci
     steps:
       - uses: actions/checkout@v4
         with:
           path: kerosene-kfe
       - uses: actions/checkout@v4
         with:
-          repository: Daniel-Astrofer/kerosene-contracts
+          repository: Daniel-Astrofer/contracts
+          ref: d1de045527242596bbaf74000049a92d19324ccf
           path: kerosene-contracts
       - uses: actions/checkout@v4
         with:
-          repository: Daniel-Astrofer/kerosene-shared
+          repository: Daniel-Astrofer/shared
+          ref: 125b9848b90a4b4d9bf210130d3cd1bc27b27b0d
           path: kerosene-shared
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
+      - name: Create exclusive full-migration test database
+        run: docker exec "${{ job.services.postgres.id }}" createdb -U postgres kfe_maintenance_test_full_schema_ci
       - name: Verify KFE
         working-directory: kerosene-kfe
         run: ./gradlew check --no-daemon

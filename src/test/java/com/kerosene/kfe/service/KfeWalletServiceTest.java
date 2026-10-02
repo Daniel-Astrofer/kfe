@@ -12,6 +12,8 @@ import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreateWalletRequest;
 import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
 import com.kerosene.kfe.dto.KfeWalletResponse;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
 import com.kerosene.kfe.model.KfeWalletStatus;
@@ -79,6 +81,8 @@ class KfeWalletServiceTest {
     private ObjectProvider<VaultMeshSettlementPort> vaultMeshSettlementPort;
 
     private KfeWalletService service;
+    @Mock
+    private KfeMaintenanceStore maintenanceStore;
 
     @BeforeEach
     void setUp() {
@@ -115,6 +119,9 @@ class KfeWalletServiceTest {
                 coldObs,
                 addressIndex
         );
+        lenient().when(maintenanceStore.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        service.setMaintenanceGuard(new KfeMaintenanceService(maintenanceStore));
     }
 
     @Test

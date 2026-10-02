@@ -7,6 +7,8 @@ import com.kerosene.kfe.model.KfeBalanceId;
 import com.kerosene.kfe.model.KfeChannelRebalanceJobEntity;
 import com.kerosene.kfe.model.KfeChannelRebalanceJobStatus;
 import com.kerosene.kfe.repository.KfeChannelRebalanceJobRepository;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 
 import java.util.EnumSet;
 import java.util.Optional;
@@ -14,6 +16,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -31,6 +34,10 @@ class KfeChannelRebalanceQueueServiceTest {
     void setUp() {
         service = new KfeChannelRebalanceQueueService(
                 jobRepository, systemWalletService, balanceService, auditLogService);
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString()))
+                .thenAnswer(invocation -> new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        service.setMaintenanceGuard(new KfeMaintenanceService(store));
     }
 
     @Test

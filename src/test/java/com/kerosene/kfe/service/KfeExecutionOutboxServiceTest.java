@@ -11,6 +11,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -20,6 +21,38 @@ class KfeExecutionOutboxServiceTest {
 
     private final KfeExecutionOutboxRepository repository = mock(KfeExecutionOutboxRepository.class);
     private final KfeExecutionOutboxService service = new KfeExecutionOutboxService(repository);
+
+    private final com.kerosene.kfe.maintenance.KfeMaintenanceStore maintenanceStore =
+            mock(com.kerosene.kfe.maintenance.KfeMaintenanceStore.class);
+
+    @org.junit.jupiter.api.BeforeEach
+    void admitTestWork() {
+        when(maintenanceStore.admit(anyString())).thenAnswer(ignored ->
+                new com.kerosene.kfe.maintenance.KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        service.setMaintenanceGuard(new com.kerosene.kfe.maintenance.KfeMaintenanceService(maintenanceStore));
+    }
+
+    @Test
+    void drainingRejectsBothClaimPathsBeforeTouchingTheQueue() {
+        when(maintenanceStore.admit(anyString())).thenThrow(
+                new com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException(503, "draining"));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException.class,
+                () -> service.claimDue("worker"));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException.class,
+                () -> service.claimImmediate(UUID.randomUUID(), "worker"));
+        org.mockito.Mockito.verifyNoInteractions(repository);
+    }
+
+    @Test
+    void heartbeatForAlreadyAdmittedWorkRemainsAvailableWhileDraining() {
+        UUID id = UUID.randomUUID();
+        UUID token = UUID.randomUUID();
+        when(repository.heartbeat(eq(id), eq(token), any(), any())).thenReturn(1);
+        assertThat(service.heartbeat(new KfeExecutionOutboxService.ExecutionClaim(id, token))).isTrue();
+        org.mockito.Mockito.verifyNoInteractions(maintenanceStore);
+    }
 
     @Test
     void claimsDueOutboxItemsWithNormalizedWorkerId() {

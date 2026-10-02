@@ -3,6 +3,7 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,6 +13,7 @@ import com.kerosene.kfe.dto.KfeChannelDecisionResponse;
 import com.kerosene.kfe.dto.KfePpmAdjustRequest;
 import com.kerosene.kfe.dto.KfeRebalanceChannelRequest;
 import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 /**
  * Periodic channel health: detect drain, queue rebalances, apply PPM deterrent when enabled.
@@ -20,6 +22,13 @@ import com.kerosene.kfe.rail.LightningChannelGateway;
 public class KfeChannelDrainMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfeChannelDrainMonitor.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final LightningChannelGateway channelGateway;
     private final KfeChannelDecisionService decisionService;
@@ -65,6 +74,9 @@ public class KfeChannelDrainMonitor {
         for (LightningChannelGateway.ChannelSnapshot channel : channelGateway.listChannels()) {
             try {
                 inspectChannel(channel);
+            } catch (KfeMaintenanceGuard.MaintenanceException paused) {
+                log.debug("[KFE Channel Drain] maintenance paused scan: {}", paused.getMessage());
+                break;
             } catch (RuntimeException ex) {
                 log.warn(
                         "[KFE Channel Drain] failed channelPoint={}: {}",
@@ -79,6 +91,13 @@ public class KfeChannelDrainMonitor {
         if (channel == null || channel.channelPoint() == null) {
             return;
         }
+        maintenanceGuard.executeMutation("channel.drain-inspect", () -> {
+            inspectChannelAdmitted(channel);
+            return Boolean.TRUE;
+        }, ignored -> true);
+    }
+
+    private void inspectChannelAdmitted(LightningChannelGateway.ChannelSnapshot channel) {
         // Rebalance decision (drain + profit + fund).
         ChannelDecisionResult rebal = decisionService.evaluateRebalance(
                 channel,

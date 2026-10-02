@@ -1,5 +1,7 @@
 package com.kerosene.kfe.service;
 
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -11,9 +13,17 @@ import com.kerosene.common.financial.FinancialNotificationPort;
 import com.kerosene.kfe.model.KfeFinancialNotificationOutboxEntity;
 
 import java.util.UUID;
+import java.util.Objects;
 
 @Service
 public class KfeNotificationOutboxProcessor {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = Objects.requireNonNull(guard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfeNotificationOutboxProcessor.class);
     private static final int MAX_RETRIES = 5;
@@ -33,6 +43,13 @@ public class KfeNotificationOutboxProcessor {
 
     @Transactional
     public void processDeliverable(KfeFinancialNotificationOutboxEntity entity) {
+        maintenanceGuard.executeMutation("notification.delivery", () -> {
+            processDeliverableAdmitted(entity);
+            return Boolean.TRUE;
+        }, ignored -> false);
+    }
+
+    private void processDeliverableAdmitted(KfeFinancialNotificationOutboxEntity entity) {
         UUID outboxId = entity.getId();
         String eventType = entity.getEventType();
         int attempts = entity.getAttempts();

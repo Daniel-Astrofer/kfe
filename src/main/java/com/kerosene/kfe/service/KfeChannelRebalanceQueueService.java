@@ -4,10 +4,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeChannelRebalanceJobEntity;
 import com.kerosene.kfe.model.KfeChannelRebalanceJobStatus;
 import com.kerosene.kfe.repository.KfeChannelRebalanceJobRepository;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -22,6 +24,13 @@ import java.util.UUID;
 public class KfeChannelRebalanceQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(KfeChannelRebalanceQueueService.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeChannelRebalanceJobRepository jobRepository;
     private final KfeSystemWalletService systemWalletService;
@@ -46,6 +55,14 @@ public class KfeChannelRebalanceQueueService {
             String peerPubkey,
             long estimatedCostSats,
             long expectedGainSats) {
+        return maintenanceGuard.executeMutation("channel.rebalance-enqueue", () ->
+                enqueueAdmitted(decisionId, channelPoint, peerPubkey, estimatedCostSats, expectedGainSats),
+                ignored -> true);
+    }
+
+    private Optional<KfeChannelRebalanceJobEntity> enqueueAdmitted(
+            UUID decisionId, String channelPoint, String peerPubkey,
+            long estimatedCostSats, long expectedGainSats) {
         if (channelPoint == null || channelPoint.isBlank()) {
             throw new IllegalArgumentException("channelPoint is required.");
         }
@@ -113,29 +130,38 @@ public class KfeChannelRebalanceQueueService {
 
     @Transactional
     public void markInProgress(UUID jobId, String providerReference) {
-        jobRepository.findById(jobId).ifPresent(job -> {
-            if (job.getStatus() != KfeChannelRebalanceJobStatus.PENDING
-                    && job.getStatus() != KfeChannelRebalanceJobStatus.IN_PROGRESS) {
-                return;
-            }
-            job.markInProgress(providerReference);
-            jobRepository.save(job);
-        });
+        maintenanceGuard.executeMutation("channel.rebalance-mark-in-progress", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> {
+                if (job.getStatus() != KfeChannelRebalanceJobStatus.PENDING
+                        && job.getStatus() != KfeChannelRebalanceJobStatus.IN_PROGRESS) {
+                    return;
+                }
+                job.markInProgress(providerReference);
+                jobRepository.save(job);
+            });
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 
     @Transactional
     public void complete(UUID jobId, String providerReference) {
-        jobRepository.findById(jobId).ifPresent(job -> {
-            job.markCompleted(providerReference);
-            jobRepository.save(job);
-        });
+        maintenanceGuard.executeMutation("channel.rebalance-complete", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> {
+                job.markCompleted(providerReference);
+                jobRepository.save(job);
+            });
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 
     @Transactional
     public void fail(UUID jobId, String error) {
-        jobRepository.findById(jobId).ifPresent(job -> {
-            job.markFailed(error);
-            jobRepository.save(job);
-        });
+        maintenanceGuard.executeMutation("channel.rebalance-fail", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> {
+                job.markFailed(error);
+                jobRepository.save(job);
+            });
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 }

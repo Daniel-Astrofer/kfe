@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.service.AddressDerivationService;
 import com.kerosene.kfe.dto.KfeCreatePaymentRequest;
@@ -20,6 +21,8 @@ import com.kerosene.kfe.repository.KfeTransactionRepository;
 import com.kerosene.kfe.repository.KfeWalletAddressRepository;
 import com.kerosene.kfe.repository.KfeWalletRepository;
 import com.kerosene.kfe.webhook.KfeWebhookDeliveryService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -38,6 +41,7 @@ import static org.mockito.Mockito.when;
 
 class KfePaymentRequestServiceTest {
 
+    private final KfeMaintenanceStore maintenanceStore = mock(KfeMaintenanceStore.class);
     private final KfePaymentRequestRepository paymentRequestRepository = mock(KfePaymentRequestRepository.class);
     private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
     private final KfeWalletRepository walletRepository = mock(KfeWalletRepository.class);
@@ -67,6 +71,13 @@ class KfePaymentRequestServiceTest {
             transactionCancellationService,
             new ObjectMapper(),
             webhookDeliveryService);
+
+    @BeforeEach
+    void supplyRealActiveGuard() {
+        when(maintenanceStore.admit(anyString())).thenAnswer(invocation ->
+                new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        service.setMaintenanceGuard(new KfeMaintenanceService(maintenanceStore));
+    }
 
     @Test
     void publicGetExpiresOverdueOpenRequestBeforeReturningIt() {

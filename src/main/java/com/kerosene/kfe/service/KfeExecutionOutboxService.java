@@ -18,6 +18,14 @@ import java.util.UUID;
 @Service
 public class KfeExecutionOutboxService {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final List<String> DUE_STATUSES = List.of("PENDING", "FAILED_RETRYABLE");
     private static final List<String> RECOVERABLE_OPERATIONS =
             List.of("ONCHAIN_OUTBOUND", "LIGHTNING_OUTBOUND");
@@ -44,6 +52,10 @@ public class KfeExecutionOutboxService {
 
     @Transactional
     public List<ExecutionClaim> claimDue(String workerId) {
+        return maintenanceGuard.executeMutation("outbox.claim-due", () -> claimDueAdmitted(workerId));
+    }
+
+    private List<ExecutionClaim> claimDueAdmitted(String workerId) {
         String normalizedWorkerId = normalizeWorkerId(workerId);
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         return repository.findTop100ClaimCandidates(DUE_STATUSES, RECOVERABLE_OPERATIONS, now)
@@ -79,6 +91,11 @@ public class KfeExecutionOutboxService {
         if (outboxId == null) {
             return Optional.empty();
         }
+        return maintenanceGuard.executeMutation("outbox.claim-immediate",
+                () -> claimImmediateAdmitted(outboxId, workerId));
+    }
+
+    private Optional<ExecutionClaim> claimImmediateAdmitted(UUID outboxId, String workerId) {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         UUID claimToken = UUID.randomUUID();
         int updated = repository.claimImmediate(

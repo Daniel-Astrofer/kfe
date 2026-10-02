@@ -4,11 +4,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import com.kerosene.kfe.model.KfeChannelCapacityIntent;
 import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
 import com.kerosene.kfe.model.KfeChannelCapacityJobStatus;
 import com.kerosene.kfe.repository.KfeChannelCapacityJobRepository;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -24,6 +26,13 @@ import java.util.UUID;
 public class KfeChannelCapacityQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(KfeChannelCapacityQueueService.class);
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeChannelCapacityJobRepository jobRepository;
     private final KfeSystemWalletService systemWalletService;
@@ -49,6 +58,14 @@ public class KfeChannelCapacityQueueService {
             long expectedGainSats,
             String triggerReason,
             UUID decisionId) {
+        return maintenanceGuard.executeMutation("channel.capacity-enqueue-open", () ->
+                enqueueOpenAdmitted(peerPubkey, localAmountSats, estimatedCostSats,
+                        expectedGainSats, triggerReason, decisionId), ignored -> true);
+    }
+
+    private Optional<KfeChannelCapacityJobEntity> enqueueOpenAdmitted(
+            String peerPubkey, long localAmountSats, long estimatedCostSats,
+            long expectedGainSats, String triggerReason, UUID decisionId) {
         if (peerPubkey == null || peerPubkey.isBlank()) {
             throw new IllegalArgumentException("peerPubkey is required for OPEN capacity intent.");
         }
@@ -105,6 +122,14 @@ public class KfeChannelCapacityQueueService {
             long estimatedCostSats,
             String triggerReason,
             UUID decisionId) {
+        return maintenanceGuard.executeMutation("channel.capacity-enqueue-close", () ->
+                enqueueCloseAdmitted(channelPoint, peerPubkey, estimatedCostSats,
+                        triggerReason, decisionId), ignored -> true);
+    }
+
+    private Optional<KfeChannelCapacityJobEntity> enqueueCloseAdmitted(
+            String channelPoint, String peerPubkey, long estimatedCostSats,
+            String triggerReason, UUID decisionId) {
         if (channelPoint == null || channelPoint.isBlank()) {
             throw new IllegalArgumentException("channelPoint is required for CLOSE capacity intent.");
         }
@@ -160,22 +185,31 @@ public class KfeChannelCapacityQueueService {
 
     @Transactional
     public void markInProgress(UUID jobId, String ref) {
-        jobRepository.findById(jobId).ifPresent(job -> {
-            if (job.getStatus() == KfeChannelCapacityJobStatus.PENDING
-                    || job.getStatus() == KfeChannelCapacityJobStatus.IN_PROGRESS) {
-                job.markInProgress(ref);
-            }
-        });
+        maintenanceGuard.executeMutation("channel.capacity-mark-in-progress", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> {
+                if (job.getStatus() == KfeChannelCapacityJobStatus.PENDING
+                        || job.getStatus() == KfeChannelCapacityJobStatus.IN_PROGRESS) {
+                    job.markInProgress(ref);
+                }
+            });
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 
     @Transactional
     public void complete(UUID jobId, String ref) {
-        jobRepository.findById(jobId).ifPresent(job -> job.markCompleted(ref));
+        maintenanceGuard.executeMutation("channel.capacity-complete", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> job.markCompleted(ref));
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 
     @Transactional
     public void fail(UUID jobId, String error) {
-        jobRepository.findById(jobId).ifPresent(job -> job.markFailed(error));
+        maintenanceGuard.executeMutation("channel.capacity-fail", () -> {
+            jobRepository.findById(jobId).ifPresent(job -> job.markFailed(error));
+            return Boolean.TRUE;
+        }, ignored -> true);
     }
 
     @Transactional(readOnly = true)

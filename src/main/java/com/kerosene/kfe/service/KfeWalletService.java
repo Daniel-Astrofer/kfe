@@ -6,6 +6,7 @@ import java.time.ZoneOffset;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -15,6 +16,7 @@ import com.kerosene.kfe.dto.KfeCreateWalletRequest;
 import com.kerosene.kfe.dto.KfeUpdateWalletRequest;
 import com.kerosene.kfe.dto.KfeWalletNameOption;
 import com.kerosene.kfe.dto.KfeWalletResponse;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletAddressRole;
 import com.kerosene.kfe.model.KfeWalletAddressStatus;
@@ -66,6 +68,7 @@ public class KfeWalletService {
     private final ObjectProvider<KfeOnchainBalanceSyncService> onchainBalanceSyncService;
     private final ObjectProvider<KfeColdWalletObservationService> coldWalletObservationService;
     private final ObjectProvider<KfeMonitoredChainAddressIndex> monitoredChainAddressIndex;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeWalletService(
             KfeWalletRepository walletRepository,
@@ -104,9 +107,19 @@ public class KfeWalletService {
         this.monitoredChainAddressIndex = monitoredChainAddressIndex;
     }
 
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
+
     public KfeWalletResponse createWallet(Long userId, KfeCreateWalletRequest request) {
         validateCreateRequest(request);
+        // One workflow spans both local transactions, quorum/keygen and post-commit hooks.
+        return maintenanceGuard.executeMutation("wallet.create",
+                () -> createWalletAdmitted(userId, request), ignored -> false);
+    }
 
+    private KfeWalletResponse createWalletAdmitted(Long userId, KfeCreateWalletRequest request) {
         PendingWallet pending = Objects.requireNonNull(transactionTemplate.execute(status ->
                 createPendingWallet(userId, request)));
         String proposalHash = kfeWalletCreateProposalHash(userId, pending);
@@ -496,6 +509,12 @@ public class KfeWalletService {
         if (request == null || !hasText(request.label())) {
             throw new IllegalArgumentException("Wallet label is required.");
         }
+        return maintenanceGuard.executeMutation("wallet.update",
+                () -> updateWalletAdmitted(userId, wallet, request), ignored -> false);
+    }
+
+    private KfeWalletResponse updateWalletAdmitted(
+            Long userId, KfeWalletEntity wallet, KfeUpdateWalletRequest request) {
         wallet.setLabel(request.label().trim());
         wallet = walletRepository.save(wallet);
         auditLogService.record(
@@ -519,6 +538,11 @@ public class KfeWalletService {
         if (wallet.getStatus() == KfeWalletStatus.ROTATING_ADDRESS || wallet.getStatus() == KfeWalletStatus.CREATING) {
             throw new IllegalStateException("Wallet cannot be archived while it is being created or rotated.");
         }
+        return maintenanceGuard.executeMutation("wallet.archive",
+                () -> archiveWalletAdmitted(userId, wallet), ignored -> false);
+    }
+
+    private KfeWalletResponse archiveWalletAdmitted(Long userId, KfeWalletEntity wallet) {
         wallet.setStatus(KfeWalletStatus.ARCHIVED);
         wallet.setSpendable(false);
         wallet = walletRepository.save(wallet);
@@ -564,11 +588,18 @@ public class KfeWalletService {
                 return row.getAddress().trim();
             }
         }
-        KfeWalletAddressEntity issued = issueFreshAddress(wallet, false);
-        return issued.getAddress().trim();
+        // Existing addresses are pure reads; admission is required before deriving,
+        // advancing the managed index, issuing remotely or binding a new address.
+        return maintenanceGuard.executeMutation("wallet.ensure-receive-address",
+                () -> issueFreshAddress(wallet, false).getAddress().trim(), ignored -> false);
     }
 
     public KfeAddressResponse rotateAddress(Long userId, UUID walletId) {
+        return maintenanceGuard.executeMutation("wallet.rotate-address",
+                () -> rotateAddressAdmitted(userId, walletId), ignored -> false);
+    }
+
+    private KfeAddressResponse rotateAddressAdmitted(Long userId, UUID walletId) {
         PendingAddressRotation pending = Objects.requireNonNull(transactionTemplate.execute(status ->
                 beginAddressRotation(userId, walletId)));
         KfeQuorumGateway.Result quorum;

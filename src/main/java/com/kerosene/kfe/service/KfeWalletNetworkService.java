@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -9,6 +10,7 @@ import com.kerosene.kfe.dto.KfeColdWalletPsbtRequest;
 import com.kerosene.kfe.dto.KfeColdWalletPsbtResponse;
 import com.kerosene.kfe.dto.KfeReceivingCapabilitiesResponse;
 import com.kerosene.kfe.dto.KfeUtxoResponse;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeWalletAddressEntity;
 import com.kerosene.kfe.model.KfeWalletAddressRole;
 import com.kerosene.kfe.model.KfeWalletAddressStatus;
@@ -31,6 +33,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -59,6 +62,7 @@ public class KfeWalletNetworkService {
     private final LightningInvoiceGateway lightningInvoiceGateway;
     /** Shared with cold observe / onchain sync so listUtxos sees the same gap. */
     private final int descriptorScanRange;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeWalletNetworkService(
             FinancialUserDirectoryPort userDirectory,
@@ -88,6 +92,11 @@ public class KfeWalletNetworkService {
         this.bitcoinAddressValidator = bitcoinAddressValidator;
         this.lightningInvoiceGateway = lightningInvoiceGateway;
         this.descriptorScanRange = Math.max(1, descriptorScanRange);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
     }
 
     @Transactional(readOnly = true)
@@ -225,6 +234,13 @@ public class KfeWalletNetworkService {
                 .orElseThrow(() -> new IllegalArgumentException("KFE wallet not found."));
         requireActive(wallet);
 
+        // This read starts scantxoutset and may abort a busy remote scan. Its return
+        // cannot prove that every remote attempt (including swallowed failures) ended.
+        return maintenanceGuard.executeMutation("wallet.list-utxos",
+                () -> listUtxosAdmitted(walletId, wallet), ignored -> false);
+    }
+
+    private List<KfeUtxoResponse> listUtxosAdmitted(UUID walletId, KfeWalletEntity wallet) {
         BlockchainClient blockchainClient = requireBlockchainClient();
         Map<String, KfeUtxoResponse> byOutpoint = new java.util.LinkedHashMap<>();
         for (KfeWalletAddressEntity address : activeAddresses(walletId)) {
@@ -284,6 +300,12 @@ public class KfeWalletNetworkService {
         if (wallet.getKind() != KfeWalletKind.WATCH_ONLY) {
             throw new IllegalArgumentException("Cold wallet PSBT creation requires a WATCH_ONLY wallet.");
         }
+        return maintenanceGuard.executeMutation("wallet.create-cold-psbt",
+                () -> createColdWalletPsbtAdmitted(userId, walletId, wallet, request), ignored -> false);
+    }
+
+    private KfeColdWalletPsbtResponse createColdWalletPsbtAdmitted(
+            Long userId, UUID walletId, KfeWalletEntity wallet, KfeColdWalletPsbtRequest request) {
         transactionApprovalPort.approveColdWalletPsbt(userId, request.totpCode());
 
         if (request.amountSats() <= 0L) {

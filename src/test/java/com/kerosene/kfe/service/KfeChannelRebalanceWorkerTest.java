@@ -53,6 +53,7 @@ class KfeChannelRebalanceWorkerTest {
                 5,
                 1_000L,
                 50_000L);
+        worker.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
     }
 
     @Test

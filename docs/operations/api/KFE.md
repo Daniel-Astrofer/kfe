@@ -120,6 +120,32 @@ sequenceDiagram
 
 ## Endpoints
 
+## Manutenção da Cell (standalone)
+
+`KfeMaintenanceAdminController` expõe payload raw `kerosene.kfe-maintenance/v1`,
+sem `ApiResponse`. As três rotas exigem sessão válida `ROLE_ADMIN` e identidade
+numérica positiva; o operador é derivado da autenticação, nunca do JSON.
+
+| Método | Rota | Entrada |
+|---|---|---|
+| GET | `/api/admin/kfe/maintenance/status` | Sem body. |
+| POST | `/api/admin/kfe/maintenance/drain` | `changeId`, `reason`, `expectedRevision`. |
+| POST | `/api/admin/kfe/maintenance/resume` | Mesmo changeId do drain; revisão atual e motivo. |
+
+A resposta inclui `schema`, `mode` (`ACTIVE`/`DRAINING`, ou null quando desconhecido),
+`changeId`, `revision`, `observedAt`, `safeToUpdate` e contagens em `blockers`.
+Revisão conflitante retorna 409; comandos inválidos retornam 400. Drain não cancela
+transações, não limpa incerteza e não ativa signers. Resume é uma decisão explícita
+do operador, não uma consequência automática de pods saudáveis.
+
+Na cadeia standalone a admissão HTTP ocorre depois da autorização. Rejeição de
+admissão retorna 503 raw com `errorCode=MAINTENANCE_ADMISSION_REJECTED`. Controles
+exatos e health continuam disponíveis. Consultas públicas mantêm a política
+anônima; efeitos de expiração exigem admissão no serviço depois de resolver o ID.
+Uma resposta HTTP bem-sucedida não certifica conclusão financeira: os blockers de
+cobertura continuam ativos. Veja [runbook de manutenção](../cell-maintenance.md)
+e [inventário de entrypoints](../maintenance-entrypoints.md).
+
 ## Create KFE wallet
 
 **Método e URL:** `POST /kfe/wallets`  

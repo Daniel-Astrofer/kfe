@@ -12,6 +12,8 @@ import com.kerosene.kfe.dto.KfeOpenChannelRequest;
 import com.kerosene.kfe.model.KfeChannelCapacityJobEntity;
 import com.kerosene.kfe.model.KfeChannelOperationType;
 import com.kerosene.kfe.rail.LightningChannelGateway;
+import com.kerosene.kfe.maintenance.KfeMaintenanceService;
+import com.kerosene.kfe.maintenance.KfeMaintenanceStore;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -65,6 +67,10 @@ class KfeChannelCapacityControllerTest {
                 2L,
                 "03peerpubkey",
                 10_000_000L);
+        KfeMaintenanceStore store = mock(KfeMaintenanceStore.class);
+        when(store.admit(anyString()))
+                .thenAnswer(invocation -> new KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        controller.setMaintenanceGuard(new KfeMaintenanceService(store));
     }
 
     @Test

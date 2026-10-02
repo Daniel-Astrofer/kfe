@@ -49,16 +49,19 @@ public class KfeJwtAuthenticationFilter extends OncePerRequestFilter {
                     .toList();
             SecurityContextHolder.getContext()
                     .setAuthentication(new UsernamePasswordAuthenticationToken(userId, null, authorities));
-            filterChain.doFilter(request, response);
         } catch (RuntimeException exception) {
-            logger.error("[KFE JWT] Verification failed: {}", exception.getMessage());
+            logger.warn("[KFE JWT] Session verification failed");
             SecurityContextHolder.clearContext();
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");
             response.getWriter().write("""
                     {"success":false,"message":"invalid session","errorCode":"INVALID_SESSION"}
                     """);
+            return;
         }
+        // Business/maintenance failures are not JWT failures. Never replace a
+        // committed response or swallow a downstream financial exception here.
+        filterChain.doFilter(request, response);
     }
 
     private static SimpleGrantedAuthority authority(String role) {

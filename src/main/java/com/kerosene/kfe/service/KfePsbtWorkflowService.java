@@ -29,6 +29,14 @@ import java.util.UUID;
 @Service
 public class KfePsbtWorkflowService {
 
+    private com.kerosene.kfe.maintenance.KfeMaintenanceGuard maintenanceGuard =
+            com.kerosene.kfe.maintenance.KfeMaintenanceGuard.unavailable();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaintenanceGuard(com.kerosene.kfe.maintenance.KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
+
     private static final TypeReference<List<KfeColdWalletPsbtRequest.Input>> INPUT_LIST_TYPE =
             new TypeReference<>() {};
 
@@ -63,6 +71,13 @@ public class KfePsbtWorkflowService {
             long feeSats,
             long amountSats,
             String destinationAddress,
+            List<KfeColdWalletPsbtRequest.Input> inputs) {
+        return maintenanceGuard.executeMutation("psbt.create", () -> createAdmitted(userId, walletId,
+                psbt, psbtHash, feeSats, amountSats, destinationAddress, inputs));
+    }
+
+    private KfePsbtWorkflowEntity createAdmitted(Long userId, UUID walletId, String psbt,
+            String psbtHash, long feeSats, long amountSats, String destinationAddress,
             List<KfeColdWalletPsbtRequest.Input> inputs) {
         KfePsbtWorkflowEntity workflow = new KfePsbtWorkflowEntity();
         workflow.setUserId(userId);
@@ -105,6 +120,12 @@ public class KfePsbtWorkflowService {
 
     @Transactional
     public KfePsbtWorkflowResponse attachSignedPsbt(Long userId, UUID workflowId, KfeSignedPsbtRequest request) {
+        return maintenanceGuard.executeMutation("psbt.attach-signed",
+                () -> attachSignedPsbtAdmitted(userId, workflowId, request));
+    }
+
+    private KfePsbtWorkflowResponse attachSignedPsbtAdmitted(Long userId, UUID workflowId,
+            KfeSignedPsbtRequest request) {
         if (request == null || request.signedPsbt() == null || request.signedPsbt().isBlank()) {
             throw new IllegalArgumentException("Signed PSBT is required.");
         }
@@ -274,6 +295,10 @@ public class KfePsbtWorkflowService {
 
     @Transactional
     public KfePsbtWorkflowResponse broadcast(Long userId, UUID workflowId) {
+        return maintenanceGuard.executeMutation("psbt.broadcast", () -> broadcastAdmitted(userId, workflowId));
+    }
+
+    private KfePsbtWorkflowResponse broadcastAdmitted(Long userId, UUID workflowId) {
         KfePsbtWorkflowEntity workflow = workflowRepository.findByIdAndUserId(workflowId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE PSBT workflow not found."));
         if (workflow.getStatus() == KfePsbtWorkflowStatus.BROADCAST) {

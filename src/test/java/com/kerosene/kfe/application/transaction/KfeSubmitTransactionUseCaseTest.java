@@ -45,6 +45,31 @@ import static org.mockito.Mockito.when;
 
 class KfeSubmitTransactionUseCaseTest {
 
+    private final com.kerosene.kfe.maintenance.KfeMaintenanceStore maintenanceStore =
+            mock(com.kerosene.kfe.maintenance.KfeMaintenanceStore.class);
+
+    @org.junit.jupiter.api.BeforeEach
+    void admitTestWork() {
+        when(maintenanceStore.admit(anyString())).thenAnswer(ignored ->
+                new com.kerosene.kfe.maintenance.KfeMaintenanceStore.Admission(UUID.randomUUID(), 0));
+        useCase.setMaintenanceGuard(new com.kerosene.kfe.maintenance.KfeMaintenanceService(maintenanceStore));
+    }
+
+    @Test
+    void drainingRejectsNewSubmissionBeforeReservationOrFinancialEffects() {
+        KfeSubmitTransactionRequest request = outboundRequest();
+        when(walletResolver.resolveInternalDestinationReference(request)).thenReturn(request);
+        when(onchainDestinationRouter.resolve(request)).thenReturn(request);
+        when(idempotencyUseCase.requestHash(123L, request)).thenReturn("request-hash");
+        when(maintenanceStore.admit(anyString())).thenThrow(
+                new com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException(503, "draining"));
+        assertThrows(com.kerosene.kfe.maintenance.KfeMaintenanceGuard.MaintenanceException.class,
+                () -> useCase.submit(123L, request));
+        verify(idempotencyUseCase, never()).reserve(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(walletResolver, onchainDestinationRouter, authorizationUseCase,
+                transactionRepository, balanceService, outboxUseCase, dashboardPublisher);
+    }
+
     private final KfeTransactionRepository transactionRepository = mock(KfeTransactionRepository.class);
     private final KfePricingService pricingService = mock(KfePricingService.class);
     private final KfeNetworkFeeEstimateService networkFeeEstimateService = mock(KfeNetworkFeeEstimateService.class);
