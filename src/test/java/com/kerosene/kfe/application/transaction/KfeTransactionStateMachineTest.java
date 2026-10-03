@@ -1,6 +1,8 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -28,6 +30,11 @@ class KfeTransactionStateMachineTest {
     private final KfeHashService hashService = mock(KfeHashService.class);
     private final KfeTransactionStateMachine stateMachine =
             new KfeTransactionStateMachine(transactionRepository, auditLogService, hashService);
+
+    @BeforeEach
+    void admitTestWork() {
+        stateMachine.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     // -------------------------------------------------------
     // Permitted transitions — every allowed edge in the graph

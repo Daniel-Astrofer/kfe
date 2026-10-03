@@ -1,11 +1,15 @@
 # KFE maintenance HTTP entrypoints
 
-Inventory date: 2026-10-02, updated after coordinator integration. The standalone
+Inventory date: 2026-10-03, updated after coordinator integration. The standalone
 hook, V57/V58, JWT exception-scoping repair and bounded wallet, payment-request,
 cancellation, producer, notification and webhook batches are implemented/tested.
 The continuation wave also integrates bootstrap/address/key/tax, observations,
 network/payment monitors, outbox/rail/helper/prepared/peer participants, statements,
 publisher/custodial/helper V58 children and guarded ZMQ/reactive dispatch.
+Balance and derivation cursor participants now have their own boundaries, with
+actual JPA/PostgreSQL transaction verification rather than inferred caller coverage.
+Fee/movement and liquidity/audit leaves also have independent admission boundaries;
+these do not qualify upstream quorum or remote-provider completion.
 Read with `cell-maintenance.md` and the bounded service runbooks. This inventory
 does not certify complete-Cell shutdown or remove coverage uncertainty.
 
@@ -232,9 +236,25 @@ leaf alone is insufficient if a root already writes/enqueues before reaching it.
 | `KfeWebhookDeliveryService.publishAfterCommit` / delivery executor | Persists V58 child before commit/enqueue and claims once off-thread. Retry/serialization/interruption failures stay uncertain. No restart/replay runner exists. |
 | `KfeDashboardPublisher`, `BalanceEventPublisher`, `TransactionEventPublisher`, `KfeStatementService` | Statement roots admit before flush/upsert/publication, including best effort. Publishers capture V58 children before commit/enqueue and use false completion for delivery. Actual transaction publisher/PostgreSQL commit/rollback/lost-closure tests retain blockers; recipient proof/replay still missing. |
 | `KfeStatementRetentionService.purgeExpiredStatements` | New purge guarded; completion requires observed transaction success. |
+| `KfeBalanceService` all writes and `requireForUpdate` | Admission before locks/hash/managed state; locking returns a mutable capability and remains uncertain. Financial/publication outcomes stay uncertain. Only genesis with actual observed transaction commit can locally complete; no new propagation added. |
+| `KfeDerivationCursorService.nextIndex` | Guard before cursor lock/write; original REQUIRED propagation and algorithm retained. Commit, rollback, drain and PostgreSQL commit-rejection tested with real JPA/proxy; direct no-transaction return stays uncertain. This is not concurrent absent-cursor or complete address/replay qualification. |
+| `KfeFeeSettlementService.creditKeroseneFee/reverseKeroseneFeeForReorg/restoreKeroseneFeeAfterReorg`, `KfeBalanceMovementRecorder.record` | Guard before existence checks, profit lookup and writes; original idempotency/financial ordering and absent transaction annotations retained. Even duplicate/prerequisite skips and caught integrity errors stay uncertain. Null/nonpositive fee noops and config reads remain available. |
+| `KfeLightningLiquidityService.reserveForTransaction/consumeForTransaction/releaseForTransaction/circuitBreakerOpen` | Reservation and enabled-breaker evaluation guarded before locks/probes/latch changes. Existing pure capacity observations and disabled breaker remain readable. Reserve/breaker outcomes uncertain; only local consume/release with observed synchronized commit may complete. Provider HTLC state and actual advisory-lock/terminal concurrency remain unqualified. |
+| `KfeAuditLogService.record/recordInNewTransaction` | Guard before hash/appender lock/write/log; real JPA/PostgreSQL tests prove REQUIRED rollback and REQUIRES_NEW suspension/survival with append-only enforcement. Audit/structured-log outcomes uncertain. Real financial foreign-key scenarios, concurrent audit chaining and remote logging remain unqualified. |
+| `KfeTransactionStateMachine.transition/audit`, `KfeTransactionIdempotencyUseCase.reserve/complete`, `KfeTransactionOutboxUseCase.enqueueExternal`, `KfeInternalPaymentRequestSettlementUseCase.lockAndValidate/markPaid` | Independent guards before managed state, hashing/serialization, locks and writes. Original propagation/graph/idempotency/payload/internal-Lightning semantics retained; all admitted results uncertain, including returned mutable handles. Pure lookup/hash and no-public-ID/null-request noops remain available. |
 | `KfeBitcoinRuntimeBootstrap.run` -> `KfeSystemWalletService.ensureSystemWallets` / Core ensureWalletLoaded | Startup and accounting-wallet creation now admit before effects. Rejected bootstrap pauses without aborting process and refuses readiness. Actual ADMIN routing to unready pods and RPC wallet recovery still need qualification. |
 | `ExternalRailProviderRegistry` ApplicationReady listener | Provider registration/availability initialization, not a newly admitted financial execution by itself; embedded provider effects still require caller review. |
-| `KfeFinancialWalletProvisioningAdapter`, `FinancialApi`, embedded participants | Inbound/peer/prepared/helper/direct rail, address issuance, MPC keygen and tax classify roots now guarded. The complete facade/embedded call graph, derivation cursor, balance/liquidity/movement/audit/fee participants and alternate host security chains remain unqualified; downstream guards alone do not certify upstream effects. Core's current build has no KFE dependency/financial JPA ownership, so embedding must not be inferred from its broad component scan or URL registry. |
+| `KfeFinancialWalletProvisioningAdapter`, `FinancialApi`, embedded participants | Inbound/peer/prepared/helper/direct rail, address issuance, MPC keygen, tax classify, balance/cursor and fee/movement/liquidity/audit roots now guarded. The complete facade/embedded call graph and alternate host security chains remain unqualified; downstream guards alone do not certify upstream effects. Core's current build has no KFE dependency/financial JPA ownership, so embedding must not be inferred from its broad component scan or URL registry. |
+
+Unqualified independent starts still include settlement evaluation
+(`BinarySettlementGate.evaluate/evaluateAndRequirePass`), the direct
+`KfeQuorumGateway`/`VaultMeshFinancialQuorumAdapter` consensus path and direct
+MPC/approval/notification port adapters. Effects can precede a later leaf's
+admission. Those upstream starts and their external completion contracts need
+explicit integration and evidence, not a declaration that protected leaves cover
+every caller. Real provider implementations and alternate embedded dispatchers
+also require complete inventory. The bounded transaction-participant wave is
+implemented; its unit contract is not full submit/JPA/provider qualification.
 
 Keep `mutationCoverageUnknown=1`, `callbackCoverageUnknown=1` and
 `readSideEffectsUnknown=1` exactly as currently returned by `KfeMaintenanceService`.
@@ -256,16 +276,11 @@ commit, failed resolution and unchanged unknown blockers. It also exercises a re
 exception translation and `AuthorizationFilter`; only JWT verification and durable
 storage are mocked boundaries. The hook's insertion order is asserted separately.
 
-No Gradle or test suite was run by this worker. The coordinator's earlier run
-executed 83 filter cases with one nesting-fixture failure: it changed requestURI
-without changing servletPath, so the path-consistency check returned 400. The
-fixture now updates both and asserts that nested work actually ran. Public
-exclusion tests and pipeline expectations were also revised afterward; final
-validation remains pending. Coordinator must run this focused
-test, the full KFE suite, and integration tests through the actual configured
-standalone and host chains after wiring the hook. Check frozen maintenance
-controller commands/status, invalid/absent JWT, non-ADMIN denial, valid/invalid
-internal headers, guarded ordinary expiry GETs, unchanged public GET behavior,
-the outstanding public expiry mutation gap and every permitted dispatcher type.
-PostgreSQL drain/admission races, rollback/crash/restart and full schema evidence
-remain coordinator-owned; mock-store filter tests do not validate durability.
+The coordinator completed the standalone hook and fixed the historical nesting
+fixture's requestURI/servletPath mismatch. Public exclusion/expiry-service and
+pipeline tests were included in the accepted full suite. Consult STATUS for the
+latest exact run, not the old worker's pending-validation handoff. PostgreSQL
+drain/admission races, rollback/restart, full Flyway schema and bounded real JPA
+participants have separate accepted tests; mock-store filter tests alone cannot
+prove durability. Alternate host chains, real streams, recipient proof and
+complete-Cell recovery remain unqualified.

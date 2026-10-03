@@ -1,7 +1,9 @@
 package com.kerosene.kfe.application.transaction;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
@@ -18,6 +20,11 @@ class KfeBalanceMovementRecorderTest {
 
     private final KfeBalanceMovementRepository repository = mock(KfeBalanceMovementRepository.class);
     private final KfeBalanceMovementRecorder recorder = new KfeBalanceMovementRecorder(repository);
+
+    @BeforeEach
+    void installActiveMaintenanceService() {
+        recorder.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     @Test
     void recordsNewCreditMovement() {

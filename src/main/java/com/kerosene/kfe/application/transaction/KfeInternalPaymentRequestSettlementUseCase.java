@@ -1,6 +1,8 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
 import com.kerosene.kfe.model.KfeDirection;
 import com.kerosene.kfe.model.KfePaymentRequestEntity;
@@ -15,6 +17,13 @@ import java.time.ZoneOffset;
 
 @Service
 public class KfeInternalPaymentRequestSettlementUseCase {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfePaymentRequestRepository paymentRequestRepository;
 
@@ -32,6 +41,12 @@ public class KfeInternalPaymentRequestSettlementUseCase {
             throw new IllegalArgumentException("paymentRequestPublicId is only supported for INTERNAL payments.");
         }
 
+        // The locked managed entity is a mutable capability, not completion proof.
+        return maintenanceGuard.executeMutation("transaction.internal-request-lock",
+                () -> lockAndValidateAdmitted(request, publicId), ignored -> false);
+    }
+
+    private KfePaymentRequestEntity lockAndValidateAdmitted(KfeSubmitTransactionRequest request, String publicId) {
         KfePaymentRequestEntity paymentRequest = paymentRequestRepository.findByPublicIdForUpdate(publicId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE payment request not found."));
         // INTERNAL rail PRs and platform LIGHTNING PRs (in-app loopback) settle on the ledger.
@@ -63,6 +78,13 @@ public class KfeInternalPaymentRequestSettlementUseCase {
         if (paymentRequest == null) {
             return;
         }
+        maintenanceGuard.executeMutation("transaction.internal-request-mark-paid", () -> {
+            markPaidAdmitted(paymentRequest, transaction);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void markPaidAdmitted(KfePaymentRequestEntity paymentRequest, KfeTransactionEntity transaction) {
         if (paymentRequest.getStatus() != KfePaymentRequestStatus.OPEN) {
             throw new IllegalStateException("KFE payment request is no longer open.");
         }

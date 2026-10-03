@@ -1,7 +1,9 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
 import com.kerosene.kfe.repository.KfeTransactionRepository;
@@ -13,6 +15,13 @@ import java.util.Map;
 
 @Service
 public class KfeTransactionStateMachine {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeTransactionRepository transactionRepository;
     private final KfeAuditLogService auditLogService;
@@ -41,6 +50,17 @@ public class KfeTransactionStateMachine {
             KfeTransactionStatus target,
             String eventType,
             Map<String, ?> auditPayload) {
+        maintenanceGuard.executeMutation("transaction.transition", () -> {
+            transitionAdmitted(tx, target, eventType, auditPayload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void transitionAdmitted(
+            KfeTransactionEntity tx,
+            KfeTransactionStatus target,
+            String eventType,
+            Map<String, ?> auditPayload) {
         KfeTransactionStatus previous = tx.getStatus();
         if (!canTransition(previous, target)) {
             throw new IllegalStateException("Invalid KFE transaction transition from " + previous + " to " + target + ".");
@@ -51,6 +71,18 @@ public class KfeTransactionStateMachine {
     }
 
     public void audit(
+            KfeTransactionEntity tx,
+            String eventType,
+            KfeTransactionStatus from,
+            KfeTransactionStatus to,
+            Map<String, ?> payload) {
+        maintenanceGuard.executeMutation("transaction.audit", () -> {
+            auditAdmitted(tx, eventType, from, to, payload);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void auditAdmitted(
             KfeTransactionEntity tx,
             String eventType,
             KfeTransactionStatus from,

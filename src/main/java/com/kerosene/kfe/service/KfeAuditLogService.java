@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,8 +11,10 @@ import com.kerosene.common.audit.StructuredAuditLogger;
 import com.kerosene.kfe.model.KfeAuditLogEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
 import com.kerosene.kfe.repository.KfeAuditLogRepository;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -23,6 +26,7 @@ public class KfeAuditLogService {
     private final KfeHashService hashService;
     private final ObjectMapper objectMapper;
     private final StructuredAuditLogger auditLogger;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeAuditLogService(
             KfeAuditLogRepository repository,
@@ -33,6 +37,11 @@ public class KfeAuditLogService {
         this.hashService = hashService;
         this.objectMapper = objectMapper;
         this.auditLogger = auditLogger;
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
     }
 
     /**
@@ -54,7 +63,9 @@ public class KfeAuditLogService {
             KfeTransactionStatus fromStatus,
             KfeTransactionStatus toStatus,
             Map<String, ?> redactedPayload) {
-        return persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload);
+        return maintenanceGuard.executeMutation("audit.record",
+                () -> persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload),
+                ignored -> false);
     }
 
     /**
@@ -72,7 +83,11 @@ public class KfeAuditLogService {
             KfeTransactionStatus fromStatus,
             KfeTransactionStatus toStatus,
             Map<String, ?> redactedPayload) {
-        return persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload);
+        // A persisted row/commit does not prove structured-log delivery or serialization
+        // success. This applies equally to REQUIRED and forensic REQUIRES_NEW calls.
+        return maintenanceGuard.executeMutation("audit.record-new-transaction",
+                () -> persist(eventType, transactionId, walletId, fromStatus, toStatus, redactedPayload),
+                ignored -> false);
     }
 
     private KfeAuditLogEntity persist(

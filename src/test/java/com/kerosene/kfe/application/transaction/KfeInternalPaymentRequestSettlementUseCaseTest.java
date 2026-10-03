@@ -1,6 +1,8 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.data.jpa.repository.Lock;
@@ -32,6 +34,11 @@ class KfeInternalPaymentRequestSettlementUseCaseTest {
     private final KfePaymentRequestRepository repository = mock(KfePaymentRequestRepository.class);
     private final KfeInternalPaymentRequestSettlementUseCase useCase =
             new KfeInternalPaymentRequestSettlementUseCase(repository);
+
+    @BeforeEach
+    void admitTestWork() {
+        useCase.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     @Test
     void ignoresInternalTransfersWithoutPaymentRequestReference() {

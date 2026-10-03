@@ -67,6 +67,15 @@ recorded only after successful transaction completion; failure/crash/rollback
 leaves an unresolved admission. There is no expiry-based clearance or force-clear
 endpoint. Nested work reuses the admission of an already admitted workflow.
 
+Nested financial transactions now require active completion synchronization too.
+Each nested transaction observes rollback/unknown completion before root resolution,
+including REQUIRES_NEW commit failure caught by a successful outer caller. A root
+admitted without an observed transaction cannot acquire commit proof merely by
+starting one later. Joined local committed work keeps its original completion
+contract. This repairs a reproduced real PostgreSQL case that previously marked
+the parent COMPLETED after a caught inner commit rejection; it now stays UNCERTAIN.
+No new propagation, schema, force-clear or release authority is introduced.
+
 Draining pauses new guarded submissions, claims, channel executions, PSBT writes,
 and Vault day rotation. An already admitted synchronous outbox workflow may finish
 and remains counted; a claim token alone cannot authorize fresh execution.
@@ -87,7 +96,12 @@ producers/orphan release and statement retention. Coverage remains explicitly
 incomplete despite the additional guarded address/key/tax/bootstrap, observation,
 inbound/confirmation/payment-monitor, statement/prepared/peer and direct executor
 roots. Publishers, custodial deposit notifications and helper after-completion
-work capture durable V58 children before commit/enqueue. ZMQ/debounce producers,
+work capture durable V58 children before commit/enqueue. Balance/cursor,
+fee/movement, liquidity/audit and state/idempotency/outbox/internal-request
+participants also have independent admission boundaries. Local cursor/genesis
+commit and audit REQUIRED/REQUIRES_NEW behavior have bounded real JPA/PostgreSQL
+tests; other provider/caller contracts are not inferred from those tests.
+ZMQ/debounce producers,
 all embedded participants and actual remote completion/recovery have not all
 been proved. HTTP successes and remote best-effort results remain
 UNCERTAIN, so these patches are not a usable complete-Cell drain certificate.

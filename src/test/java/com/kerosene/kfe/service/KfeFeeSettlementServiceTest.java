@@ -1,7 +1,9 @@
 package com.kerosene.kfe.service;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.model.KfeTransactionStatus;
 import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
@@ -33,6 +35,11 @@ class KfeFeeSettlementServiceTest {
             metricsProvider,
             "SUBLEDGER",
             true);
+
+    @BeforeEach
+    void installActiveMaintenanceService() {
+        service.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     @Test
     void skipsTransactionsWithoutKeroseneFee() {

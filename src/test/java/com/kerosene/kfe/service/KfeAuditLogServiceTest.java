@@ -2,6 +2,8 @@ package com.kerosene.kfe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.springframework.test.util.ReflectionTestUtils;
 import com.kerosene.common.audit.AuditEventType;
 import com.kerosene.common.audit.AuditEventPayloadSanitizer;
@@ -35,6 +37,11 @@ class KfeAuditLogServiceTest {
             hashService,
             objectMapper,
             auditLogger);
+
+    @BeforeEach
+    void activeMaintenanceAdmission() {
+        service.setMaintenanceGuard(MaintenanceTestFixture.active());
+    }
 
     @Test
     void recordsKnownEventWithSanitizedPayloadHashAndStructuredAuditLog() throws Exception {

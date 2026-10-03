@@ -1,6 +1,8 @@
 package com.kerosene.kfe.application.transaction;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
 import com.kerosene.kfe.dto.KfeTransactionResponse;
 import com.kerosene.kfe.model.KfeIdempotencyEntity;
@@ -13,6 +15,13 @@ import com.kerosene.kfe.service.KfeResponseMapper;
 
 @Service
 public class KfeTransactionIdempotencyUseCase {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeIdempotencyRepository idempotencyRepository;
     private final KfeTransactionRepository transactionRepository;
@@ -61,6 +70,11 @@ public class KfeTransactionIdempotencyUseCase {
     }
 
     public KfeIdempotencyEntity reserve(Long userId, KfeSubmitTransactionRequest request, String requestHash) {
+        return maintenanceGuard.executeMutation("transaction.idempotency-reserve",
+                () -> reserveAdmitted(userId, request, requestHash), ignored -> false);
+    }
+
+    private KfeIdempotencyEntity reserveAdmitted(Long userId, KfeSubmitTransactionRequest request, String requestHash) {
         KfeIdempotencyEntity idempotency = new KfeIdempotencyEntity();
         idempotency.setId(new KfeIdempotencyId(userId, request.idempotencyKey()));
         idempotency.setRequestHash(requestHash);
@@ -69,6 +83,13 @@ public class KfeTransactionIdempotencyUseCase {
     }
 
     public void complete(KfeIdempotencyEntity idempotency, KfeTransactionEntity tx) {
+        maintenanceGuard.executeMutation("transaction.idempotency-complete", () -> {
+            completeAdmitted(idempotency, tx);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void completeAdmitted(KfeIdempotencyEntity idempotency, KfeTransactionEntity tx) {
         idempotency.setTransactionId(tx.getId());
         idempotency.setStatus(tx.getStatus().name());
         idempotencyRepository.save(idempotency);

@@ -1,6 +1,7 @@
 package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.Test;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.model.KfeLightningLiquidityReservationEntity;
 import com.kerosene.kfe.model.KfeLiquidityReservationStatus;
@@ -80,6 +81,7 @@ class KfeLightningLiquidityConcurrencyTest {
 
         KfeLightningLiquidityService service = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, null, 0L, 0L, 10);
+        service.setMaintenanceGuard(MaintenanceTestFixture.active());
 
         AtomicInteger successes = new AtomicInteger();
         AtomicInteger failures = new AtomicInteger();

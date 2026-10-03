@@ -3,10 +3,12 @@ package com.kerosene.kfe.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import com.kerosene.kfe.application.transaction.KfeBalanceMovementRecorder;
 import com.kerosene.kfe.application.transaction.KfeLedgerMovementTypes;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeTransactionEntity;
 import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
@@ -46,6 +48,12 @@ public class KfeFeeSettlementService {
     private final ObjectProvider<KfeBalanceMetrics> balanceMetrics;
     private final String profitSegregationMode;
     private final boolean profitReconcileWithVault;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeFeeSettlementService(
             KfeSystemWalletService systemWalletService,
@@ -87,6 +95,13 @@ public class KfeFeeSettlementService {
         if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L) {
             return;
         }
+        maintenanceGuard.executeMutation("fee.credit", () -> {
+            creditKeroseneFeeAdmitted(tx);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void creditKeroseneFeeAdmitted(KfeTransactionEntity tx) {
         // Idempotent: dual inbound paths / retries must not inflate SYSTEM_PROFIT.
         if (movementRepository.existsByTransactionIdAndMovementType(tx.getId(), MOVEMENT_TYPE)) {
             log.debug(
@@ -130,8 +145,17 @@ public class KfeFeeSettlementService {
     }
 
     public void reverseKeroseneFeeForReorg(KfeTransactionEntity tx) {
-        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L
-                || !movementRepository.existsByTransactionIdAndMovementType(tx.getId(), MOVEMENT_TYPE)
+        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L) {
+            return;
+        }
+        maintenanceGuard.executeMutation("fee.reverse-reorg", () -> {
+            reverseKeroseneFeeForReorgAdmitted(tx);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void reverseKeroseneFeeForReorgAdmitted(KfeTransactionEntity tx) {
+        if (!movementRepository.existsByTransactionIdAndMovementType(tx.getId(), MOVEMENT_TYPE)
                 || movementRepository.existsByTransactionIdAndMovementType(
                         tx.getId(), KfeLedgerMovementTypes.REVERSAL_KEROSENE_FEE)) {
             return;
@@ -162,8 +186,17 @@ public class KfeFeeSettlementService {
     }
 
     public void restoreKeroseneFeeAfterReorg(KfeTransactionEntity tx) {
-        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L
-                || !movementRepository.existsByTransactionIdAndMovementType(
+        if (tx == null || tx.getId() == null || tx.getKeroseneFeeSats() <= 0L) {
+            return;
+        }
+        maintenanceGuard.executeMutation("fee.restore-reorg", () -> {
+            restoreKeroseneFeeAfterReorgAdmitted(tx);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void restoreKeroseneFeeAfterReorgAdmitted(KfeTransactionEntity tx) {
+        if (!movementRepository.existsByTransactionIdAndMovementType(
                         tx.getId(), KfeLedgerMovementTypes.REVERSAL_KEROSENE_FEE)
                 || movementRepository.existsByTransactionIdAndMovementType(
                         tx.getId(), KfeLedgerMovementTypes.RESTORE_KEROSENE_FEE)) {

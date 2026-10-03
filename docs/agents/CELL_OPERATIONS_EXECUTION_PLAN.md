@@ -160,6 +160,55 @@ and reactive-refresh runbook. Admit before sequence/refresh effects or pending
 target consumption; preserve hints on rejected admission, without claiming
 durable source replay or introducing real sockets/signers in verification.
 
+## Continuation wave — October 3
+
+All earlier workers remain closed. The coordinator alone owns
+KfeBalanceService.java, KfeDerivationCursorService.java, their new bounded
+maintenance tests and disposable PostgreSQL participant integration tests,
+the participant runbook, inventory and verification/status updates. Admit before
+locking, hashing or dirtying managed state. Preserve balance/reorg/derivation
+algorithms and existing transaction propagation; a direct invocation without
+observable transaction completion must remain uncertain. A returned locked
+mutable balance and remote/publication outcomes are not completion proof.
+No coverage blocker, deployment gate or real custody authority is removed.
+
+Two new disjoint workers may operate in this isolated checkout only. Fee/movement
+worker owns KfeFeeSettlementService.java, application/transaction/
+KfeBalanceMovementRecorder.java, their exact existing tests, a new
+maintenance/KfeFeeMovementMaintenanceTest.java and
+docs/operations/fee-movement-maintenance.md. Liquidity/audit worker owns
+KfeLightningLiquidityService.java, KfeAuditLogService.java, their exact existing
+tests, a new maintenance/KfeLiquidityAuditMaintenanceTest.java and
+docs/operations/liquidity-audit-maintenance.md. Admit before locks, managed state,
+ledger/audit writes and side-effecting breaker evaluations. Preserve algorithms,
+idempotency, REQUIRED/REQUIRES_NEW contracts and pure observations. Both keep
+remote/caught-error/direct-no-transaction uncertainty. Neither edits shared API,
+schema, status/inventory/build or another owner's files, runs Gradle, writes Git,
+deploys or removes blockers. Coordinator continues real JPA/PostgreSQL tests,
+integration, docs indexing and all verification while they implement these leaves.
+
+A third disjoint worker owns application/transaction/KfeTransactionStateMachine,
+KfeTransactionIdempotencyUseCase, KfeTransactionOutboxUseCase and
+KfeInternalPaymentRequestSettlementUseCase (Java), their exact existing tests,
+new maintenance/KfeTransactionParticipantMaintenanceTest.java and
+docs/operations/transaction-participant-maintenance.md. Protect state transitions,
+idempotency reserve/complete, outbox production and internal request lock/markPaid
+before first effects. Preserve pure lookup/hash methods, existing propagation and
+financial algorithms; returned managed capabilities and outputs remain uncertain.
+Same no-Gradle/no-Git/no-shared-files/no-deploy restrictions as the other workers.
+
+After fee/movement and liquidity/audit handoff those two workers are closed; main
+owns their integration and bounded runbook acceptance notes. Main extends only
+the full-schema PostgreSQL suite to actual audit REQUIRED/REQUIRES_NEW suspension,
+while the transaction-participant worker retains its independent write scope.
+Final handoff: all three October 3 workers are closed. Coordinator owns every
+returned file, integration repair, the full build and accepted evidence. No
+worker's static handoff is treated as executed verification or update permission.
+Coordinator additionally owns KfeMaintenanceService and its exact service test:
+observe nested transaction completion before root resolution, retain caught inner
+rollback/commit-failure uncertainty, and refuse nested unobservable transactions
+before effects. No API/schema/financial algorithm change or blocker removal.
+
 ## Invariants and verification
 
 Drain/admission serialize on one durable row; admissions outlive process

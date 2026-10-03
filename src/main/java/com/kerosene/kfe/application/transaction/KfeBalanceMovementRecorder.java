@@ -2,8 +2,10 @@ package com.kerosene.kfe.application.transaction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeBalanceMovementEntity;
 import com.kerosene.kfe.repository.KfeBalanceMovementRepository;
 
@@ -15,6 +17,12 @@ public class KfeBalanceMovementRecorder {
     private static final Logger log = LoggerFactory.getLogger(KfeBalanceMovementRecorder.class);
 
     private final KfeBalanceMovementRepository movementRepository;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeBalanceMovementRecorder(KfeBalanceMovementRepository movementRepository) {
         this.movementRepository = movementRepository;
@@ -27,6 +35,19 @@ public class KfeBalanceMovementRecorder {
      * @return true if a new row was written; false if skipped as duplicate credit
      */
     public boolean record(
+            UUID transactionId,
+            UUID walletId,
+            String movementType,
+            long amountSats,
+            String fromBucket,
+            String toBucket) {
+        // A returned row/skip, including a caught unique error, is not completion proof.
+        return maintenanceGuard.executeMutation("balance-movement.record",
+                () -> recordAdmitted(transactionId, walletId, movementType, amountSats, fromBucket, toBucket),
+                ignored -> false);
+    }
+
+    private boolean recordAdmitted(
             UUID transactionId,
             UUID walletId,
             String movementType,

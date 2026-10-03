@@ -2,6 +2,8 @@ package com.kerosene.kfe.application.transaction;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.dto.KfeSubmitTransactionRequest;
 import com.kerosene.kfe.model.KfeExecutionOutboxEntity;
 import com.kerosene.kfe.model.KfeTransactionEntity;
@@ -16,6 +18,13 @@ import java.util.UUID;
 
 @Service
 public class KfeTransactionOutboxUseCase {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private final KfeExecutionOutboxRepository outboxRepository;
     private final KfeHashService hashService;
@@ -34,6 +43,11 @@ public class KfeTransactionOutboxUseCase {
      * Enqueues external rail work and returns the outbox id (for optional sync drain).
      */
     public UUID enqueueExternal(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {
+        return maintenanceGuard.executeMutation("transaction.outbox-enqueue",
+                () -> enqueueExternalAdmitted(tx, request), ignored -> false);
+    }
+
+    private UUID enqueueExternalAdmitted(KfeTransactionEntity tx, KfeSubmitTransactionRequest request) {
         String payloadJson = outboxPayload(tx, request);
         KfeExecutionOutboxEntity outbox = new KfeExecutionOutboxEntity();
         outbox.setTransactionId(tx.getId());

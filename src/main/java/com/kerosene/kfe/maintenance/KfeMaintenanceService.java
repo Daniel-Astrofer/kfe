@@ -71,7 +71,10 @@ public class KfeMaintenanceService implements KfeMaintenanceGuard {
         Objects.requireNonNull(certainCompletion);
         Workflow existing = workflow.get();
         if (existing != null) {
-            return perform(existing, work, certainCompletion);
+            return perform(existing, () -> {
+                observeNestedTransaction(existing);
+                return work.get();
+            }, certainCompletion);
         }
         if (operation == null || operation.isBlank() || operation.length() > 128) {
             throw new IllegalArgumentException("A bounded operation name is required.");
@@ -84,9 +87,9 @@ public class KfeMaintenanceService implements KfeMaintenanceGuard {
         } catch (RuntimeException failure) {
             throw new MaintenanceException(503, "KFE maintenance admission is unavailable.");
         }
-        Workflow root = new Workflow(admission);
-        workflow.set(root);
         boolean transactionBound = TransactionSynchronizationManager.isActualTransactionActive();
+        Workflow root = new Workflow(admission, transactionBound);
+        workflow.set(root);
         try {
             if (transactionBound) {
                 if (!TransactionSynchronizationManager.isSynchronizationActive()) {
@@ -104,6 +107,42 @@ public class KfeMaintenanceService implements KfeMaintenanceGuard {
             workflow.remove();
             if (!transactionBound) {
                 resolve(root, root.certain);
+            }
+        }
+    }
+
+    private void observeNestedTransaction(Workflow root) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            root.certain = false;
+            throw new MaintenanceException(503, "KFE transaction completion cannot be observed.");
+        }
+        if (!root.transactionBound) {
+            // The root's finally block has no observed financial commit boundary.
+            // Starting a transaction later must not manufacture completion for it.
+            root.certain = false;
+        }
+        boolean observed = TransactionSynchronizationManager.getSynchronizations().stream()
+                .anyMatch(sync -> sync instanceof NestedTransactionCompletion completion && completion.root == root);
+        if (!observed) {
+            TransactionSynchronizationManager.registerSynchronization(new NestedTransactionCompletion(root));
+        }
+    }
+
+    private static final class NestedTransactionCompletion implements TransactionSynchronization {
+        private final Workflow root;
+        private NestedTransactionCompletion(Workflow root) { this.root = root; }
+
+        public int getOrder() {
+            // Observe failures before the root's ordinary completion callback resolves.
+            return org.springframework.core.Ordered.LOWEST_PRECEDENCE - 1;
+        }
+
+        public void afterCompletion(int status) {
+            if (status != STATUS_COMMITTED) {
+                root.certain = false;
             }
         }
     }
@@ -180,7 +219,7 @@ public class KfeMaintenanceService implements KfeMaintenanceGuard {
         // Direct executors must not share the parent's workflow or transaction-bound continuation.
         Workflow previous = workflow.get();
         KfeMaintenanceStore.Admission admission = store.claimContinuation(id);
-        Workflow child = new Workflow(admission);
+        Workflow child = new Workflow(admission, false);
         workflow.set(child);
         try {
             perform(child, () -> { work.run(); return Boolean.TRUE; }, ignored -> true);
@@ -206,7 +245,11 @@ public class KfeMaintenanceService implements KfeMaintenanceGuard {
 
     private static final class Workflow {
         private final KfeMaintenanceStore.Admission admission;
+        private final boolean transactionBound;
         private boolean certain = true;
-        private Workflow(KfeMaintenanceStore.Admission admission) { this.admission = admission; }
+        private Workflow(KfeMaintenanceStore.Admission admission, boolean transactionBound) {
+            this.admission = admission;
+            this.transactionBound = transactionBound;
+        }
     }
 }

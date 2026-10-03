@@ -2,6 +2,8 @@ package com.kerosene.kfe.maintenance;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -155,6 +157,65 @@ class KfeMaintenanceServiceTest {
     private void bindTransaction() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         TransactionSynchronizationManager.initSynchronization();
+    }
+
+    @Test
+    void caughtNestedUnobservableTransactionCannotExecuteOrClearParent() {
+        when(store.admit("start")).thenReturn(admission);
+        Runnable work = mock(Runnable.class);
+        service.executeMutation("start", () -> {
+            TransactionSynchronizationManager.setActualTransactionActive(true);
+            assertThatThrownBy(() -> service.executeMutation("nested", () -> { work.run(); return true; }))
+                    .isInstanceOf(MaintenanceException.class);
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+            return true;
+        });
+        verifyNoInteractions(work);
+        verify(store).resolve(admission.id(), false);
+    }
+
+    @Test
+    void nestedTransactionCannotTurnUnboundParentIntoCommitProof() {
+        when(store.admit("start")).thenReturn(admission);
+        service.executeMutation("start", () -> {
+            bindTransaction();
+            service.executeMutation("nested", () -> true);
+            finish(TransactionSynchronization.STATUS_COMMITTED);
+            TransactionSynchronizationManager.clearSynchronization();
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+            return true;
+        });
+        verify(store).resolve(admission.id(), false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {TransactionSynchronization.STATUS_ROLLED_BACK, TransactionSynchronization.STATUS_UNKNOWN})
+    void nestedFailureStaysStickyEvenIfBoundParentCommits(int completion) {
+        when(store.admit("start")).thenReturn(admission);
+        bindTransaction();
+        service.executeMutation("start", () -> {
+            var parent = TransactionSynchronizationManager.getSynchronizations();
+            TransactionSynchronizationManager.clearSynchronization();
+            bindTransaction();
+            service.executeMutation("nested", () -> true);
+            finish(completion);
+            TransactionSynchronizationManager.clearSynchronization();
+            TransactionSynchronizationManager.initSynchronization();
+            parent.forEach(TransactionSynchronizationManager::registerSynchronization);
+            return true;
+        });
+        finish(TransactionSynchronization.STATUS_COMMITTED);
+        verify(store).resolve(admission.id(), false);
+    }
+
+    @Test
+    void joinedNestedLocalCommitStillCompletesAfterRootTransaction() {
+        when(store.admit("start")).thenReturn(admission);
+        bindTransaction();
+        service.executeMutation("start", () -> service.executeMutation("nested", () -> true));
+        verify(store, never()).resolve(any(), anyBoolean());
+        finish(TransactionSynchronization.STATUS_COMMITTED);
+        verify(store).resolve(admission.id(), true);
     }
 
     private void finish(int status) {

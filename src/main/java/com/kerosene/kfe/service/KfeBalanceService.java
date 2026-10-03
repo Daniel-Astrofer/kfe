@@ -6,6 +6,9 @@ import java.time.ZoneOffset;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeBalanceEntity;
 import com.kerosene.kfe.model.KfeWalletEntity;
 import com.kerosene.kfe.model.KfeWalletKind;
@@ -18,6 +21,13 @@ import java.util.UUID;
 
 @Service
 public class KfeBalanceService {
+
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     private static final Logger log = LoggerFactory.getLogger(KfeBalanceService.class);
 
@@ -37,6 +47,12 @@ public class KfeBalanceService {
     }
 
     public KfeBalanceEntity createEmptyBalance(UUID walletId, String asset) {
+        boolean transactionBound = TransactionSynchronizationManager.isActualTransactionActive();
+        return maintenanceGuard.executeMutation("balance.create-empty",
+                () -> createEmptyBalanceAdmitted(walletId, asset), ignored -> transactionBound);
+    }
+
+    private KfeBalanceEntity createEmptyBalanceAdmitted(UUID walletId, String asset) {
         String normalizedAsset = asset != null ? asset : "BTC";
         String initialHash = hashService.initialBalanceHash(walletId.toString(), normalizedAsset);
         KfeBalanceEntity balance = KfeBalanceEntity.empty(walletId, normalizedAsset, initialHash);
@@ -45,11 +61,22 @@ public class KfeBalanceService {
     }
 
     public KfeBalanceEntity requireForUpdate(UUID walletId, String asset) {
+        // A locked managed entity is a mutation capability, not a pure read result.
+        return maintenanceGuard.executeMutation("balance.lock-for-update",
+                () -> requireForUpdateAdmitted(walletId, asset), ignored -> false);
+    }
+
+    private KfeBalanceEntity requireForUpdateAdmitted(UUID walletId, String asset) {
         return balanceRepository.findByWalletIdAndAssetForUpdate(walletId, asset != null ? asset : "BTC")
                 .orElseThrow(() -> new IllegalArgumentException("KFE balance not found for wallet " + walletId + "."));
     }
 
     public KfeBalanceEntity reserve(UUID walletId, String asset, long amountSats) {
+        return maintenanceGuard.executeMutation("balance.reserve",
+                () -> reserveAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private KfeBalanceEntity reserveAdmitted(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         balance.reserve(amountSats);
         sign(balance);
@@ -59,6 +86,11 @@ public class KfeBalanceService {
     }
 
     public KfeBalanceEntity settleReservedDebit(UUID walletId, String asset, long amountSats) {
+        return maintenanceGuard.executeMutation("balance.settle-reserved-debit",
+                () -> settleReservedDebitAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private KfeBalanceEntity settleReservedDebitAdmitted(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         balance.settleReservedDebit(amountSats);
         sign(balance);
@@ -68,6 +100,11 @@ public class KfeBalanceService {
     }
 
     public KfeBalanceEntity releaseReserved(UUID walletId, String asset, long amountSats) {
+        return maintenanceGuard.executeMutation("balance.release-reserved",
+                () -> releaseReservedAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private KfeBalanceEntity releaseReservedAdmitted(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         balance.releaseReserved(amountSats);
         sign(balance);
@@ -77,6 +114,11 @@ public class KfeBalanceService {
     }
 
     public KfeBalanceEntity creditAvailable(UUID walletId, String asset, long amountSats) {
+        return maintenanceGuard.executeMutation("balance.credit-available",
+                () -> creditAvailableAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private KfeBalanceEntity creditAvailableAdmitted(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         long availableBefore = balance.getAvailableSats();
         balance.creditAvailable(amountSats);
@@ -91,6 +133,12 @@ public class KfeBalanceService {
             UUID walletId,
             String asset,
             long amountSats) {
+        return maintenanceGuard.executeMutation("balance.reverse-reorg-credit",
+                () -> reverseAvailableCreditForReorgAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private ReorgDebitResult reverseAvailableCreditForReorgAdmitted(
+            UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         long availableBefore = balance.getAvailableSats();
         long debtBefore = balance.getReorgDebtSats();
@@ -119,6 +167,13 @@ public class KfeBalanceService {
             long observedSats,
             String probeQuality,
             String probeSource) {
+        return maintenanceGuard.executeMutation("balance.set-observed",
+                () -> setObservedAdmitted(walletId, asset, observedSats, probeQuality, probeSource),
+                ignored -> false);
+    }
+
+    private KfeBalanceEntity setObservedAdmitted(
+            UUID walletId, String asset, long observedSats, String probeQuality, String probeSource) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         long oldObserved = balance.getObservedSats();
         balance.setObservedBalance(observedSats);
@@ -142,6 +197,11 @@ public class KfeBalanceService {
         if (amountSats <= 0L) {
             throw new IllegalArgumentException("observed credit amount must be positive.");
         }
+        return maintenanceGuard.executeMutation("balance.credit-observed",
+                () -> creditObservedAdmitted(walletId, asset, amountSats), ignored -> false);
+    }
+
+    private KfeBalanceEntity creditObservedAdmitted(UUID walletId, String asset, long amountSats) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         long next = balance.getObservedSats() + amountSats;
         balance.setObservedBalance(next);
@@ -156,6 +216,11 @@ public class KfeBalanceService {
      * if any non-zero residual leaked in (defensive).
      */
     public KfeBalanceEntity zeroSpendableBucketsIfNeeded(UUID walletId, String asset) {
+        return maintenanceGuard.executeMutation("balance.zero-spendable",
+                () -> zeroSpendableBucketsIfNeededAdmitted(walletId, asset), ignored -> false);
+    }
+
+    private KfeBalanceEntity zeroSpendableBucketsIfNeededAdmitted(UUID walletId, String asset) {
         KfeBalanceEntity balance = requireForUpdate(walletId, asset);
         if (balance.getAvailableSats() == 0L
                 && balance.getPendingSats() == 0L

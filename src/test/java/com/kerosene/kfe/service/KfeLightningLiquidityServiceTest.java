@@ -2,6 +2,7 @@ package com.kerosene.kfe.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.springframework.beans.factory.ObjectProvider;
 import com.kerosene.kfe.model.KfeLightningLiquidityReservationEntity;
 import com.kerosene.kfe.model.KfeLiquidityReservationStatus;
@@ -47,6 +48,7 @@ class KfeLightningLiquidityServiceTest {
         when(signalStoreProvider.getIfAvailable()).thenReturn(null);
         service = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 0L, 10);
+        service.setMaintenanceGuard(MaintenanceTestFixture.active());
     }
 
     @Test
@@ -98,6 +100,7 @@ class KfeLightningLiquidityServiceTest {
     void circuitBreakerStaysClosedWhenFreeCapacityAboveFloor() {
         KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        breaker.setMaintenanceGuard(MaintenanceTestFixture.active());
         // free = 1M - 200k = 800k > 500k floor
         assertThat(breaker.circuitBreakerOpen()).isFalse();
     }
@@ -108,6 +111,7 @@ class KfeLightningLiquidityServiceTest {
         when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(0L);
         KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        breaker.setMaintenanceGuard(MaintenanceTestFixture.active());
         // free = 400k < 500k floor
         assertThat(breaker.circuitBreakerOpen()).isTrue();
     }
@@ -118,6 +122,7 @@ class KfeLightningLiquidityServiceTest {
         when(repository.sumAmountByStatus(KfeLiquidityReservationStatus.HELD)).thenReturn(0L);
         KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        breaker.setMaintenanceGuard(MaintenanceTestFixture.active());
         // Trip: 400k < 500k floor
         assertThat(breaker.circuitBreakerOpen()).isTrue();
 
@@ -139,6 +144,7 @@ class KfeLightningLiquidityServiceTest {
         when(client.getLocalBalance()).thenReturn(-1L);
         KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 500_000L, 10);
+        breaker.setMaintenanceGuard(MaintenanceTestFixture.active());
         assertThat(breaker.circuitBreakerOpen()).isTrue();
     }
 
@@ -146,6 +152,7 @@ class KfeLightningLiquidityServiceTest {
     void zeroFloorDisablesCircuitBreaker() {
         KfeLightningLiquidityService breaker = new KfeLightningLiquidityService(
                 clientProvider, paymentProvider, repository, signalStoreProvider, 0L, 0L, 10);
+        breaker.setMaintenanceGuard(MaintenanceTestFixture.active());
         assertThat(breaker.circuitBreakerOpen()).isFalse();
     }
 }

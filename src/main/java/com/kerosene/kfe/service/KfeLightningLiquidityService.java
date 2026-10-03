@@ -1,16 +1,20 @@
 package com.kerosene.kfe.service;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import com.kerosene.kfe.model.KfeLightningLiquidityReservationEntity;
 import com.kerosene.kfe.model.KfeLiquidityReservationStatus;
 import com.kerosene.kfe.rail.LightningClient;
 import com.kerosene.kfe.rail.LightningPaymentGateway;
 import com.kerosene.kfe.repository.KfeLightningLiquidityReservationRepository;
 
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -31,6 +35,7 @@ public class KfeLightningLiquidityService {
     private final long circuitBreakerFloorSats;
     private final int circuitBreakerStressThreshold;
     private volatile boolean circuitBreakerLatched;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
 
     public KfeLightningLiquidityService(
             ObjectProvider<LightningClient> lightningClientProvider,
@@ -48,6 +53,11 @@ public class KfeLightningLiquidityService {
         this.minOutboundSats = Math.max(0L, minOutboundSats);
         this.circuitBreakerFloorSats = Math.max(0L, circuitBreakerFloorSats);
         this.circuitBreakerStressThreshold = Math.max(1, circuitBreakerStressThreshold);
+    }
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
     }
 
     public boolean isLive() {
@@ -111,6 +121,13 @@ public class KfeLightningLiquidityService {
             return false;
         }
 
+        // An enabled evaluation probes the node and may mutate the latch. Neither is
+        // durable completion proof, including a swallowed probe failure.
+        return maintenanceGuard.executeMutation("lightning-liquidity.circuit-breaker",
+                this::circuitBreakerOpenAdmitted, ignored -> false);
+    }
+
+    private boolean circuitBreakerOpenAdmitted() {
         long free = freeOutboundCapacitySats();
 
         // Probe failure → fail closed (trip)
@@ -161,6 +178,15 @@ public class KfeLightningLiquidityService {
         if (amountSats <= 0L) {
             throw new IllegalArgumentException("liquidity reservation amount must be positive.");
         }
+        // Node probes and caught duplicate-insert failures remain uncertain even on
+        // commit. Keep the existing reservation/idempotency algorithm unchanged.
+        maintenanceGuard.executeMutation("lightning-liquidity.reserve", () -> {
+            reserveForTransactionAdmitted(transactionId, amountSats);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void reserveForTransactionAdmitted(UUID transactionId, long amountSats) {
         if (reservationRepository.findByTransactionId(transactionId).isPresent()) {
             return;
         }
@@ -197,6 +223,15 @@ public class KfeLightningLiquidityService {
         if (transactionId == null) {
             return;
         }
+        maintenanceGuard.executeMutation(consumed ? "lightning-liquidity.consume" : "lightning-liquidity.release",
+                () -> {
+                    finalizeAdmitted(transactionId, consumed);
+                    return null;
+                }, ignored -> TransactionSynchronizationManager.isActualTransactionActive()
+                        && TransactionSynchronizationManager.isSynchronizationActive());
+    }
+
+    private void finalizeAdmitted(UUID transactionId, boolean consumed) {
         reservationRepository.findByTransactionId(transactionId).ifPresent(reservation -> {
             if (reservation.getStatus() != KfeLiquidityReservationStatus.HELD) {
                 return;
