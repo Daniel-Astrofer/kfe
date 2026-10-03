@@ -3,6 +3,8 @@ package com.kerosene.kfe.integration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kerosene.common.financial.FinancialQuorumPort;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -26,6 +28,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Component
@@ -42,6 +45,12 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
     private final String apiToken;
     private final int memberCount;
     private final int threshold;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     public VaultMeshFinancialQuorumAdapter(
             RestTemplateBuilder restTemplateBuilder,
@@ -109,6 +118,11 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
             throw new IllegalArgumentException("Live financial quorum proposal required");
         }
         byte[] digest = canonicalDigest(proposal);
+        return maintenanceGuard.executeMutation("vault.quorum.threshold",
+                () -> requireThresholdConsensusAdmitted(proposal, digest), ignored -> false);
+    }
+
+    private QuorumDecision requireThresholdConsensusAdmitted(Proposal proposal, byte[] digest) {
         String pinnedGroupKey = requireThresholdGroupKeyAgreement();
         Map<String, Object> request = Map.of(
                 "proposal_hash", proposal.proposalHash(),
@@ -159,6 +173,11 @@ public final class VaultMeshFinancialQuorumAdapter implements FinancialQuorumPor
         if (proposalHash == null || !proposalHash.matches("(?i)[0-9a-f]{64}")) {
             throw new IllegalArgumentException("proposalHash must be a canonical SHA-256 hex digest");
         }
+        return maintenanceGuard.executeMutation("vault.quorum.legacy",
+                () -> requireHealthyUnanimousConsensusAdmitted(proposalHash), ignored -> false);
+    }
+
+    private Result requireHealthyUnanimousConsensusAdmitted(String proposalHash) {
         JsonNode epoch = getJson(coordinatorUrl + "/v1/financial-quorum/context");
         Instant submittedAt = Instant.now();
         QuorumDecision decision = requireThresholdConsensus(new Proposal(

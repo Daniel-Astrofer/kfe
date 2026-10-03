@@ -21,6 +21,8 @@ import com.kerosene.kfe.service.KfeLightningOpsMetrics;
 import com.kerosene.kfe.service.KfeProofOfReservesService;
 import com.kerosene.kfe.service.KfeQuorumGateway;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -73,6 +75,12 @@ public class BinarySettlementGate {
     private final boolean allowSimulatedBalances;
     private final int constitutionMemberCount;
     private final int constitutionThreshold;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard guard) {
+        this.maintenanceGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     public BinarySettlementGate(
             KfeBalanceService balanceService,
@@ -110,11 +118,17 @@ public class BinarySettlementGate {
     }
 
     /**
-     * Evaluate all flags, call quorum (MPC), audit forensically (survives rollback on fail).
+     * Admit, evaluate all flags, call quorum (MPC), and audit in the caller transaction.
+     * The gate audit rolls back with that transaction; returning does not prove remote completion.
      *
      * @throws SettlementGateRejectedException when any flag is 0
      */
     public SettlementGateResult evaluateAndRequirePass(SettlementGateCommand command) {
+        return maintenanceGuard.executeMutation("settlement.require-pass", () ->
+                evaluateAndRequirePassAdmitted(command), ignored -> false);
+    }
+
+    private SettlementGateResult evaluateAndRequirePassAdmitted(SettlementGateCommand command) {
         SettlementGateResult result = evaluate(command);
         // Join the outer submit TX for gate audit. Using recordInNewTransaction here deadlocks:
         // INTENT/VALIDATING already took pg_advisory_xact_lock(GLOBAL_AUDIT_APPENDER) on this
@@ -153,6 +167,11 @@ public class BinarySettlementGate {
     }
 
     public SettlementGateResult evaluate(SettlementGateCommand command) {
+        return maintenanceGuard.executeMutation("settlement.evaluate", () ->
+                evaluateAdmitted(command), ignored -> false);
+    }
+
+    private SettlementGateResult evaluateAdmitted(SettlementGateCommand command) {
         List<FlagEvaluation> evaluations = new ArrayList<>();
         int quorumAck = 0;
         int quorumHealthy = 0;
@@ -557,6 +576,14 @@ public class BinarySettlementGate {
      * the reject reason.
      */
     public void persistGateAuditInCallerTransaction(
+            java.util.UUID transactionId, java.util.UUID walletId, SettlementGateResult result) {
+        maintenanceGuard.executeMutation("settlement.audit", () -> {
+            persistGateAuditAdmitted(transactionId, walletId, result);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void persistGateAuditAdmitted(
             java.util.UUID transactionId, java.util.UUID walletId, SettlementGateResult result) {
         KfeTransactionStatus toStatus =
                 result.passed() ? KfeTransactionStatus.QUORUM_SYNC : KfeTransactionStatus.FAILED;

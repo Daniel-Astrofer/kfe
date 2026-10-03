@@ -209,7 +209,34 @@ observe nested transaction completion before root resolution, retain caught inne
 rollback/commit-failure uncertainty, and refuse nested unobservable transactions
 before effects. No API/schema/financial algorithm change or blocker removal.
 
+## Upstream and direct-provider continuation — October 3
+
+Coordinator owns BinarySettlementGate.java, KfeQuorumGateway.java, their exact
+existing tests, a new settlement-package maintenance suite, inventory/status and
+all Gradle verification. Admission precedes evaluation, locking, consensus, audit
+and signals; preserve gate ordering and caller transaction propagation. All
+remote/returned-capability outcomes remain uncertain; no coverage gate is removed.
+A disjoint provider worker owns integration/VaultMeshFinancialQuorumAdapter.java,
+KfeVaultMeshMpcKeyAdapter.java, their exact existing tests and a new integration/
+KfeVaultProviderMaintenanceTest.java plus its runbook. Another owns integration/
+KfeRemoteFinancialTransactionApprovalClient.java and
+KfeRemoteFinancialNotificationClient.java, their exact existing tests and a new
+integration/KfeRemoteEffectsMaintenanceTest.java plus its runbook. Both read the
+repository agent instructions, edit only those files, preserve provider contracts,
+and admit before transport/key/consensus effects with conservative completion.
+Neither runs Gradle, writes Git, changes shared maintenance APIs or deploys.
+Coordinator additionally adapts the exact KfeNotificationMaintenanceTest real
+remote-client fixture to inject the same admitted parent guard; its default
+unavailable production behavior must not be bypassed in integration tests.
+Coordinator extends KfeMaintenanceFinancialSchemaTest with bounded real-store
+quorum admission/commit/drain/recreated-store cases; the quorum port is mocked,
+so these establish durable uncertainty, not actual financial consensus.
+Both provider workers are now closed. Coordinator owns all returned files,
+fixture integration, acceptance and final build. A worker cached-classpath run
+does not substitute for the pinned Gradle/full-schema verification.
+
 ## Invariants and verification
+
 
 Drain/admission serialize on one durable row; admissions outlive process
 crashes and transaction rollback must not manufacture completed execution.

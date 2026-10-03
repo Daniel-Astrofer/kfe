@@ -248,8 +248,9 @@ class KfeNotificationMaintenanceTest {
         when(builder.build()).thenReturn(remote);
         when(remote.postForEntity(anyString(), any(), eq(Void.class)))
                 .thenThrow(new IllegalStateException("synthetic remote timeout"));
-        FinancialNotificationPort actualBestEffortClient = new KfeRemoteFinancialNotificationClient(
+        KfeRemoteFinancialNotificationClient actualBestEffortClient = new KfeRemoteFinancialNotificationClient(
                 builder, "https://synthetic.example.invalid", "synthetic-unit-test-secret", 1, 1);
+        actualBestEffortClient.setMaintenanceGuard(guard);
         KfeNotificationOutboxProcessor actual = new KfeNotificationOutboxProcessor(
                 outbox, actualBestEffortClient, metrics);
         actual.setMaintenanceGuard(guard);

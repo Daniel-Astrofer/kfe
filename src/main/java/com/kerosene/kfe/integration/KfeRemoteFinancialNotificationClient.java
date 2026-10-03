@@ -1,5 +1,7 @@
 package com.kerosene.kfe.integration;
 
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,7 @@ import com.kerosene.common.financial.FinancialOutboundNotificationRequest;
 import com.kerosene.common.financial.FinancialPaymentRequestDepositConfirmedNotificationRequest;
 
 import java.time.Duration;
+import java.util.Objects;
 import java.util.UUID;
 
 @Component
@@ -33,6 +36,12 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
     private final RestTemplate restTemplate;
     private final String baseUrl;
     private final String internalSecret;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeRemoteFinancialNotificationClient(
             RestTemplateBuilder restTemplateBuilder,
@@ -286,15 +295,26 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
     /**
      * Best-effort push to the auth/server notification API.
      *
-     * <p>Must never abort ledger settlement: a missing route (404 on older server images),
+     * <p>After maintenance admission, a missing route (404 on older server images),
      * auth glitch, or down server is not a payment failure. Mobile was seeing
      * "operation rejected" because submit rolled back when this threw.
      */
     private void post(String path, Object request) {
         // Missing secret is a deploy misconfiguration — still fail fast so ops notice.
         HttpEntity<Object> entity = internalJsonEntity(request);
+        // Keep admission and completion persistence outside the best-effort transport catch.
+        // Neither successful delivery nor a swallowed transport error proves completion.
+        maintenanceGuard.executeMutation("remote-notification" + path, () -> {
+            postAdmitted(path, entity);
+            return null;
+        }, ignored -> false);
+    }
+
+    private void postAdmitted(String path, HttpEntity<Object> entity) {
         try {
             restTemplate.postForEntity(baseUrl + path, entity, Void.class);
+        } catch (KfeMaintenanceGuard.MaintenanceException rejection) {
+            throw rejection;
         } catch (RestClientResponseException exception) {
             log.warn(
                     "[KFE Notify] auth server rejected {} with HTTP {} — continuing without push",

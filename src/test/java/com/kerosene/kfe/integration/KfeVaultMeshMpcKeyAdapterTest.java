@@ -2,7 +2,7 @@ package com.kerosene.kfe.integration;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import com.kerosene.common.financial.FinancialMpcKeyPort;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
@@ -31,7 +31,7 @@ class KfeVaultMeshMpcKeyAdapterTest {
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(port);
 
-        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        KfeVaultMeshMpcKeyAdapter adapter = activeAdapter(provider);
 
         assertThat(adapter.keygenWallet(WALLET_ID, 42L))
                 .isEqualTo("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
@@ -50,7 +50,7 @@ class KfeVaultMeshMpcKeyAdapterTest {
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(port);
 
-        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        KfeVaultMeshMpcKeyAdapter adapter = activeAdapter(provider);
 
         assertThat(adapter.keygenWallet(WALLET_ID, 42L))
                 .isEqualTo("aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011");
@@ -70,7 +70,7 @@ class KfeVaultMeshMpcKeyAdapterTest {
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(port);
 
-        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        KfeVaultMeshMpcKeyAdapter adapter = activeAdapter(provider);
 
         assertThatThrownBy(() -> adapter.keygenWallet(WALLET_ID, 42L))
                 .isInstanceOf(IllegalStateException.class)
@@ -84,7 +84,7 @@ class KfeVaultMeshMpcKeyAdapterTest {
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(port);
 
-        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        KfeVaultMeshMpcKeyAdapter adapter = activeAdapter(provider);
 
         assertThatThrownBy(() -> adapter.keygenWallet(WALLET_ID, 42L))
                 .isInstanceOf(IllegalStateException.class)
@@ -96,10 +96,16 @@ class KfeVaultMeshMpcKeyAdapterTest {
         ObjectProvider<VaultMeshSettlementPort> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(null);
 
-        FinancialMpcKeyPort adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        KfeVaultMeshMpcKeyAdapter adapter = activeAdapter(provider);
 
         assertThatThrownBy(() -> adapter.keygenWallet(WALLET_ID, 42L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("settlement port unavailable");
+    }
+
+    private KfeVaultMeshMpcKeyAdapter activeAdapter(ObjectProvider<VaultMeshSettlementPort> provider) {
+        KfeVaultMeshMpcKeyAdapter adapter = new KfeVaultMeshMpcKeyAdapter(provider);
+        adapter.setMaintenanceGuard(MaintenanceTestFixture.active());
+        return adapter;
     }
 }

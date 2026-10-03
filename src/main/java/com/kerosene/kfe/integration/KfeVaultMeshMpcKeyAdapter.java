@@ -3,6 +3,8 @@ package com.kerosene.kfe.integration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import com.kerosene.common.financial.FinancialMpcKeyPort;
@@ -10,6 +12,7 @@ import com.kerosene.common.vaultmesh.VaultMeshDepositInfo;
 import com.kerosene.common.vaultmesh.VaultMeshSettlementPort;
 
 import java.util.UUID;
+import java.util.Objects;
 
 /**
  * Real {@link FinancialMpcKeyPort} backed by the vault mesh.
@@ -39,6 +42,12 @@ public class KfeVaultMeshMpcKeyAdapter implements FinancialMpcKeyPort {
     private static final Logger log = LoggerFactory.getLogger(KfeVaultMeshMpcKeyAdapter.class);
 
     private final ObjectProvider<VaultMeshSettlementPort> settlementPort;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeVaultMeshMpcKeyAdapter(ObjectProvider<VaultMeshSettlementPort> settlementPort) {
         this.settlementPort = settlementPort;
@@ -46,6 +55,11 @@ public class KfeVaultMeshMpcKeyAdapter implements FinancialMpcKeyPort {
 
     @Override
     public String keygenWallet(UUID walletId, Long userId) {
+        return maintenanceGuard.executeMutation("vault.mpc.keygen",
+                () -> keygenWalletAdmitted(walletId, userId), ignored -> false);
+    }
+
+    private String keygenWalletAdmitted(UUID walletId, Long userId) {
         VaultMeshSettlementPort port = settlementPort.getIfAvailable();
         if (port == null) {
             throw new IllegalStateException(

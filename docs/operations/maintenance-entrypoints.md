@@ -10,6 +10,9 @@ Balance and derivation cursor participants now have their own boundaries, with
 actual JPA/PostgreSQL transaction verification rather than inferred caller coverage.
 Fee/movement and liquidity/audit leaves also have independent admission boundaries;
 these do not qualify upstream quorum or remote-provider completion.
+The next bounded wave independently admits settlement evaluation/quorum and
+direct Vault MPC, approval and notification adapter effects. Remote completion
+and complete embedded dispatch remain unqualified, even after these starts are guarded.
 Read with `cell-maintenance.md` and the bounded service runbooks. This inventory
 does not certify complete-Cell shutdown or remove coverage uncertainty.
 
@@ -246,15 +249,23 @@ leaf alone is insufficient if a root already writes/enqueues before reaching it.
 | `ExternalRailProviderRegistry` ApplicationReady listener | Provider registration/availability initialization, not a newly admitted financial execution by itself; embedded provider effects still require caller review. |
 | `KfeFinancialWalletProvisioningAdapter`, `FinancialApi`, embedded participants | Inbound/peer/prepared/helper/direct rail, address issuance, MPC keygen, tax classify, balance/cursor and fee/movement/liquidity/audit roots now guarded. The complete facade/embedded call graph and alternate host security chains remain unqualified; downstream guards alone do not certify upstream effects. Core's current build has no KFE dependency/financial JPA ownership, so embedding must not be inferred from its broad component scan or URL registry. |
 
-Unqualified independent starts still include settlement evaluation
-(`BinarySettlementGate.evaluate/evaluateAndRequirePass`), the direct
-`KfeQuorumGateway`/`VaultMeshFinancialQuorumAdapter` consensus path and direct
-MPC/approval/notification port adapters. Effects can precede a later leaf's
-admission. Those upstream starts and their external completion contracts need
-explicit integration and evidence, not a declaration that protected leaves cover
-every caller. Real provider implementations and alternate embedded dispatchers
-also require complete inventory. The bounded transaction-participant wave is
-implemented; its unit contract is not full submit/JPA/provider qualification.
+`BinarySettlementGate.evaluate/evaluateAndRequirePass` and both gate audit
+entrypoints now admit before evaluation, locking, probes, consensus, audit or
+signals. `KfeQuorumGateway` and direct `VaultMeshFinancialQuorumAdapter` consensus
+calls independently admit before transport, including the legacy context GET.
+Direct Vault MPC provisioning and typed remote approval/notification POSTs now
+have their own boundaries. These starts remain conservative on every outcome;
+validity checks and unsupported legacy approval inputs stay pure. Best-effort
+notification transport handling cannot swallow admission rejection.
+These boundaries do not implement external completion/reconciliation contracts.
+Real provider implementations and alternate embedded dispatchers still require
+complete inventory. `FinancialApi` currently delegates mutation starts without
+preceding mutation of its own; this observation is not qualification of every
+facade caller/host or provider. Jamming checks currently inspect provider HTLC
+state without financial writes; do not blanket-disable pure administration probes.
+The bounded transaction-participant wave is implemented; its unit contract is
+not full submit/JPA/provider qualification. Read the settlement and direct-provider
+runbooks for the exact tested scope and mocked proof/transport limits.
 
 Keep `mutationCoverageUnknown=1`, `callbackCoverageUnknown=1` and
 `readSideEffectsUnknown=1` exactly as currently returned by `KfeMaintenanceService`.

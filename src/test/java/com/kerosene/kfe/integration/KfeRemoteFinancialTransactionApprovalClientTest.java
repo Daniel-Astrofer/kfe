@@ -1,6 +1,7 @@
 package com.kerosene.kfe.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
@@ -143,13 +144,15 @@ class KfeRemoteFinancialTransactionApprovalClientTest {
     }
 
     private KfeRemoteFinancialTransactionApprovalClient client(String credential) {
-        return new KfeRemoteFinancialTransactionApprovalClient(
+        KfeRemoteFinancialTransactionApprovalClient client = new KfeRemoteFinancialTransactionApprovalClient(
                 new RestTemplateBuilder(),
                 new ObjectMapper(),
                 "http://server.test",
                 credential,
                 100,
                 100);
+        client.setMaintenanceGuard(MaintenanceTestFixture.active());
+        return client;
     }
 
     private RestTemplate restTemplate(KfeRemoteFinancialTransactionApprovalClient client) throws Exception {

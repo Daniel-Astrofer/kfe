@@ -2,6 +2,8 @@ package com.kerosene.kfe.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kerosene.kfe.maintenance.KfeMaintenanceGuard;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -26,6 +28,7 @@ import com.kerosene.common.financial.RecoveryApproval;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 
 @Component
 @Profile("kfe")
@@ -39,6 +42,12 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
     private final ObjectMapper objectMapper;
     private final String baseUrl;
     private final String internalSecret;
+    private KfeMaintenanceGuard maintenanceGuard = KfeMaintenanceGuard.unavailable();
+
+    @Autowired
+    public void setMaintenanceGuard(KfeMaintenanceGuard maintenanceGuard) {
+        this.maintenanceGuard = Objects.requireNonNull(maintenanceGuard);
+    }
 
     public KfeRemoteFinancialTransactionApprovalClient(
             RestTemplateBuilder restTemplateBuilder,
@@ -116,11 +125,16 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
     }
 
     private void post(String path, Object request) {
-        try {
-            restTemplate.postForEntity(baseUrl + path, internalJsonEntity(request), Void.class);
-        } catch (RestClientResponseException exception) {
-            throw mapRemoteAuthFailure(exception);
-        }
+        HttpEntity<Object> entity = internalJsonEntity(request);
+        // A remote response cannot prove durable completion, even after local commit.
+        maintenanceGuard.executeMutation("remote-approval" + path, () -> {
+            try {
+                restTemplate.postForEntity(baseUrl + path, entity, Void.class);
+            } catch (RestClientResponseException exception) {
+                throw mapRemoteAuthFailure(exception);
+            }
+            return null;
+        }, ignored -> false);
     }
 
     private StructuredPlatformException mapRemoteAuthFailure(RestClientResponseException exception) {

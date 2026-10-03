@@ -83,6 +83,7 @@ class BinarySettlementGateTest {
                 false,
                 3,
                 2);
+        gate.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
     }
 
     @Test
@@ -157,6 +158,7 @@ class BinarySettlementGateTest {
                 false,
                 3,
                 2);
+        gate.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
         UUID walletId = UUID.randomUUID();
         when(balanceService.requireForUpdate(walletId, "BTC")).thenReturn(balance(walletId, 1_000_000L));
         when(quorumGateway.requireHealthyUnanimousConsensus("proposal"))

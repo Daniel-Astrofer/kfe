@@ -15,6 +15,7 @@ class KfeQuorumGatewayTest {
 
     @Test
     void delegatesConsensusToFinancialQuorumPort() {
+        gateway.setMaintenanceGuard(com.kerosene.kfe.maintenance.MaintenanceTestFixture.active());
         when(quorumPort.requireHealthyUnanimousConsensus("hash123"))
                 .thenReturn(new FinancialQuorumPort.Result(2, 3));
 

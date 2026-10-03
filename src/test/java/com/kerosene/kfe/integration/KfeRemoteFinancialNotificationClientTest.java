@@ -1,5 +1,6 @@
 package com.kerosene.kfe.integration;
 
+import com.kerosene.kfe.maintenance.MaintenanceTestFixture;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
@@ -214,12 +215,14 @@ class KfeRemoteFinancialNotificationClientTest {
     }
 
     private KfeRemoteFinancialNotificationClient client(String credential) {
-        return new KfeRemoteFinancialNotificationClient(
+        KfeRemoteFinancialNotificationClient client = new KfeRemoteFinancialNotificationClient(
                 new RestTemplateBuilder(),
                 "http://server.test",
                 credential,
                 100,
                 100);
+        client.setMaintenanceGuard(MaintenanceTestFixture.active());
+        return client;
     }
 
     private RestTemplate restTemplate(KfeRemoteFinancialNotificationClient client) throws Exception {

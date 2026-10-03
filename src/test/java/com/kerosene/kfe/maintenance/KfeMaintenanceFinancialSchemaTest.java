@@ -397,6 +397,57 @@ class KfeMaintenanceFinancialSchemaTest {
         return new JdbcKfeMaintenanceStore(jdbc, transactions);
     }
 
+    @Test
+    void quorumReplyAndRealJpaCommitLeaveDurableUncertaintyAfterStoreRecreation() {
+        var port = mock(com.kerosene.common.financial.FinancialQuorumPort.class);
+        var service = new com.kerosene.kfe.service.KfeQuorumGateway(port);
+        service.setMaintenanceGuard(new KfeMaintenanceService(participantStore()));
+        when(port.requireHealthyUnanimousConsensus("fixture-hash"))
+                .thenReturn(new com.kerosene.common.financial.FinancialQuorumPort.Result(2, 3));
+        new TransactionTemplate(transactions).execute(status -> {
+            assertThat(service.requireHealthyUnanimousConsensus("fixture-hash").acceptedNodes()).isEqualTo(2);
+            assertThat(admissionState("quorum.consensus")).isEqualTo("IN_FLIGHT");
+            return null;
+        });
+        assertThat(admissionState("quorum.consensus")).isEqualTo("UNCERTAIN");
+        KfeMaintenanceService recreated = new KfeMaintenanceService(participantStore());
+        assertThat(recreated.status().blockers().get("admissionsUncertain")).isGreaterThanOrEqualTo(1L);
+        assertThat(recreated.status().safeToUpdate()).isFalse();
+        verify(port).requireHealthyUnanimousConsensus("fixture-hash");
+    }
+
+    @Test
+    void durableDrainAllowsAlreadyAdmittedQuorumButRejectsFreshInvocationBeforePort() {
+        JdbcKfeMaintenanceStore store = participantStore();
+        KfeMaintenanceService guard = new KfeMaintenanceService(store);
+        var port = mock(com.kerosene.common.financial.FinancialQuorumPort.class);
+        var service = new com.kerosene.kfe.service.KfeQuorumGateway(port);
+        service.setMaintenanceGuard(guard);
+        when(port.requireHealthyUnanimousConsensus("fixture-hash"))
+                .thenReturn(new com.kerosene.common.financial.FinancialQuorumPort.Result(2, 3));
+        String change = "quorum-drain-" + UUID.randomUUID();
+        AtomicReference<KfeMaintenanceStore.Control> drain = new AtomicReference<>();
+        try {
+            guard.executeMutation("fixture.quorum-parent", () -> {
+                var control = store.observe().control();
+                drain.set(store.transition(Action.DRAIN,
+                        new Command(change, "disposable quorum drain", control.revision()), 42));
+                assertThat(service.requireHealthyUnanimousConsensus("fixture-hash").acceptedNodes()).isEqualTo(2);
+                return true;
+            });
+            assertThat(admissionState("fixture.quorum-parent")).isEqualTo("UNCERTAIN");
+            assertThatThrownBy(() -> service.requireHealthyUnanimousConsensus("fresh-hash"))
+                    .isInstanceOf(MaintenanceException.class);
+            verify(port, never()).requireHealthyUnanimousConsensus("fresh-hash");
+            assertThat(new KfeMaintenanceService(participantStore()).status().safeToUpdate()).isFalse();
+        } finally {
+            if (drain.get() != null) {
+                store.transition(Action.RESUME,
+                        new Command(change, "disposable quorum cleanup", drain.get().revision()), 42);
+            }
+        }
+    }
+
     private static String admissionState(String operation) {
         return jdbc.queryForObject("SELECT state FROM financial.kfe_maintenance_admissions WHERE operation = ? "
                 + "ORDER BY admitted_at DESC LIMIT 1", String.class, operation);
