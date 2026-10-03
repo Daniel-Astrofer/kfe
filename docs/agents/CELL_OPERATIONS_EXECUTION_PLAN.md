@@ -235,8 +235,29 @@ Both provider workers are now closed. Coordinator owns all returned files,
 fixture integration, acceptance and final build. A worker cached-classpath run
 does not substitute for the pinned Gradle/full-schema verification.
 
-## Invariants and verification
+## Diagnostic continuation — October 3
 
+Coordinator owns a new maintenance/KfeMaintenanceAdmissionQuery.java and its
+unit tests, bounded full-schema PostgreSQL diagnostic cases, HTTP barrier and its
+exact tests, inventory/status/API/runbook integration and all Gradle/Git work.
+Read-only query API: Page page(int limit, String cursor), limit 1..100, opaque
+keyset cursor, unresolved rows only, coherent per-page snapshot, no resolution.
+Page fields: schema, observedAt, mode, changeId, revision, diagnosticOnly=true,
+entries and nextCursor; Entry fields: id, operation, admittedRevision, state,
+admittedAt, parentAdmissionId. No credentials, financial payloads or clear tokens.
+A bounded worker owns only controller/KfeMaintenanceAdmissionsAdminController.java
+and controller/KfeMaintenanceAdmissionsAdminControllerTest.java. GET/HEAD exact
+/api/admin/kfe/maintenance/admissions uses query.page(default limit=50,cursor=null),
+positive authenticated ROLE_ADMIN before query, Cache-Control:no-store, fixed
+400/503 error mapping. No writes or shared guard/store edits. Another worker is
+read-only: trace outbound conflict-notification payload and actual consumers,
+recommend a contract-compatible repair with evidence; do not edit financial code.
+Both read repository instructions, use isolated checkout, run no Gradle/Git/deploy
+and remove no coverage blocker. No resolution is permitted from admission IDs.
+Both diagnostic workers are closed. Main owns returned controller files and
+verification; the read-only audit is not delivery or runtime qualification.
+
+## Invariants and verification
 
 Drain/admission serialize on one durable row; admissions outlive process
 crashes and transaction rollback must not manufacture completed execution.

@@ -146,6 +146,21 @@ Uma resposta HTTP bem-sucedida não certifica conclusão financeira: os blockers
 cobertura continuam ativos. Veja [runbook de manutenção](../cell-maintenance.md)
 e [inventário de entrypoints](../maintenance-entrypoints.md).
 
+### Diagnóstico de admissões pendentes
+
+`GET /api/admin/kfe/maintenance/admissions` (também HEAD) exige a mesma identidade
+positiva `ROLE_ADMIN`, permanece disponível durante drain e não cria admissão.
+Parâmetros: `limit` padrão 50, intervalo 1–100; `cursor` opcional obtido da página
+anterior. Payload raw `kerosene.kfe-maintenance-admissions/v1`: `observedAt`,
+`mode`, `changeId`, `revision`, `diagnosticOnly=true`, `entries`, `nextCursor`.
+Cada entrada traz `id`, `operation`, `admittedRevision`, `state`, `admittedAt` e
+`parentAdmissionId`. A consulta exclui COMPLETED/CANCELLED, ordena data/UUID e
+usa snapshot consistente por página, não entre requisições. Respostas usam
+`Cache-Control: no-store`; limites/cursor inválidos retornam 400 fixo; falha de
+consulta retorna 503 fixo, sem detalhes de SQL. Não há método de limpeza/resolução,
+credencial de continuação ou permissão de atualização nesses IDs. Veja o
+[runbook de diagnóstico](../maintenance-admission-diagnostics.md).
+
 ## Create KFE wallet
 
 **Método e URL:** `POST /kfe/wallets`  

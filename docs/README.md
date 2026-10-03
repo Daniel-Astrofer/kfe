@@ -5,6 +5,7 @@ or deployment orchestration. Operational evidence is summarized in [STATUS](STAT
 
 - [Financial API](operations/api/KFE.md)
 - [Maintenance contract and persistence](operations/cell-maintenance.md)
+- [Read-only unresolved admission diagnostics](operations/maintenance-admission-diagnostics.md)
 - [HTTP, scheduled and callback inventory](operations/maintenance-entrypoints.md)
 - [Payment-request maintenance](operations/payment-request-maintenance.md)
 - [Wallet maintenance](operations/wallet-maintenance.md)

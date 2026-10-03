@@ -132,6 +132,7 @@ GET controls also accept HEAD. No prefix-wide maintenance/admin exemption exists
 | --- | --- | --- |
 | POST | `/api/admin/kfe/maintenance/drain`, `/resume` | Actual frozen ADMIN commands; operator derived by controller, durable transition in guard. |
 | GET/HEAD | `/api/admin/kfe/maintenance/status` | Guard observation; retains all unknown blockers. |
+| GET/HEAD | `/api/admin/kfe/maintenance/admissions` | Independent read-only snapshot of unresolved admission metadata, bounded keyset pagination. No admission/resolution/financial writes. |
 | GET/HEAD | `/api/admin/kfe/audit/latest`, `/events`, `/transactions/{UUID}` | `KfeAuditAdminService` reads repository data/hash roots. |
 | POST | `/api/admin/kfe/audit/root` | Despite POST, computes a Merkle root with reads/hashing, no signed-root activation or write. |
 | GET/HEAD | `/api/admin/kfe/reserves/overview` | Repository aggregation and provider tip/channel/balance probes; no financial mutation in service. |
@@ -161,6 +162,10 @@ completion/reconciliation contract exists. There is no force-clear API in this
 change. Do not deploy it assuming completed HTTP responses will make the database
 safe to update. Even benign ordinary business reads outside the control list
 receive this conservative treatment.
+The separate exact admissions read control now makes unresolved metadata
+inspectable during drain without adding admissions. Its per-page snapshot and
+diagnosticOnly flag are not completion proof; pagination does not authorize
+terminal resolution or reconstruct lost continuations.
 
 Synchronous service/filter nesting reuses the guard's current workflow, so an
 already admitted request can finish nested work after drain starts. The barrier

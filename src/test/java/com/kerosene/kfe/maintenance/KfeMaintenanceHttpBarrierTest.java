@@ -134,6 +134,7 @@ class KfeMaintenanceHttpBarrierTest {
 
     @ParameterizedTest
     @CsvSource({"GET,/api/admin/kfe/maintenance/status", "POST,/api/admin/kfe/maintenance/drain",
+            "GET,/api/admin/kfe/maintenance/admissions", "HEAD,/api/admin/kfe/maintenance/admissions",
             "GET,/api/admin/kfe/reserves/overview", "POST,/api/admin/kfe/channels/open"})
     void adminRolesAreRequiredEvenWhenCalledOutsideTheSecurityChain(String method, String path)
             throws Exception {
@@ -149,6 +150,7 @@ class KfeMaintenanceHttpBarrierTest {
     @ParameterizedTest
     @CsvSource({
             "GET,/api/admin/kfe/maintenance/status", "HEAD,/api/admin/kfe/maintenance/status",
+            "GET,/api/admin/kfe/maintenance/admissions", "HEAD,/api/admin/kfe/maintenance/admissions",
             "POST,/api/admin/kfe/maintenance/drain", "POST,/api/admin/kfe/maintenance/resume",
             "GET,/api/admin/kfe/audit/latest", "GET,/api/admin/kfe/audit/events",
             "GET,/api/admin/kfe/audit/transactions/00000000-0000-0000-0000-000000000001",
@@ -170,6 +172,9 @@ class KfeMaintenanceHttpBarrierTest {
 
     @ParameterizedTest
     @CsvSource({"GET,/api/admin/kfe/maintenance/resume", "POST,/api/admin/kfe/maintenance/status",
+            "POST,/api/admin/kfe/maintenance/admissions", "DELETE,/api/admin/kfe/maintenance/admissions",
+            "GET,/api/admin/kfe/maintenance/admissions/", "GET,/api/admin/kfe/maintenance/admissions/clear",
+            "GET,/api/admin/kfe/maintenance/%61dmissions", "GET,/api/admin/kfe/maintenance/admissions;clear=1",
             "GET,/api/admin/kfe/maintenance/status/", "GET,/api/admin/kfe/maintenance/status/callback",
             "GET,/api/admin/kfe/maintenance/status;callback=1", "GET,/api/admin/kfe/maintenance/%73tatus",
             "GET,/api/admin/kfe/reserves/psbts/00000000-0000-0000-0000-000000000001/broadcast"})

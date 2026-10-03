@@ -28,7 +28,7 @@ SETTLED callbacks use their transactional self proxy, advancing local indices on
 after it returns. ZMQ workers admit before callbacks/sequence changes; reactive
 flush admits before consuming pending hints and preserves them on rejection.
 
-The complete KFE `check` and bootJar passed locally: **1,776 tests, no failures/errors/skips**, including
+The complete KFE `check` and bootJar passed locally: **1,828 tests, no failures/errors/skips**, including
 the real full Flyway chain and disposable PostgreSQL concurrency/restart tests.
 CI is configured to enable those tests with pinned dependency revisions; a local
 pass is not a claim that hosted CI has run. Final exact totals are recorded in
@@ -38,7 +38,7 @@ publisher/PostgreSQL cases prove WAITING-before-commit, delivery by captured chi
 during drain, rollback cancellation and preservation of READY after closure loss.
 They do not implement durable replay or prove recipient delivery.
 
-The full-schema suite now executes 14 cases, including exact JPA entities/repositories
+The full-schema suite now executes 17 cases, including exact JPA entities/repositories
 and transaction proxies for balance, cursor and audit: real commit/rollback,
 PostgreSQL deferred commit rejection, admitted existing-cursor writers across
 drain, REQUIRED audit rollback and REQUIRES_NEW forensic survival. The append-only
@@ -74,5 +74,18 @@ The new remote tests also expose a pre-existing outbound-conflicted notification
 defect: the client constructs confirmations=-1, rejected by the request contract
 before admission/transport. Its four validation cases preserve and document that
 failure; they do not certify conflict notification delivery or fix its policy.
+Read-only consumer inspection additionally found no corresponding conflict route
+or notification adapter override in the inspected isolated Core sources. A zero
+confirmation sentinel alone would not implement delivery or conflict/refund semantics.
+
+The new exact ADMIN GET/HEAD admissions control exposes bounded unresolved
+metadata during drain without creating or clearing admissions. It uses independent
+read-only REPEATABLE_READ snapshots, timestamp/UUID keyset pagination and no-store
+responses, with fixed validation/unavailability errors. Tests include 25 query
+cases, 14 controller/filter+MVC cases and 10 additional barrier cases. Three actual
+full-schema PostgreSQL cases verify tied timestamps/provenance, unchanged rows
+during drain and one MVCC snapshot under interleaved durable resolution. The
+PostgreSQL suites now total 31 cases. This is diagnostic capability, not audited
+completion/replay authority, jctl/UI integration or complete-Cell qualification.
 
 See [entrypoint inventory](operations/maintenance-entrypoints.md) for exact gaps.

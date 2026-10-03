@@ -3,6 +3,7 @@ package com.kerosene.kfe.maintenance;
 import java.util.UUID;
 import java.util.Map;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -451,6 +452,100 @@ class KfeMaintenanceFinancialSchemaTest {
     private static String admissionState(String operation) {
         return jdbc.queryForObject("SELECT state FROM financial.kfe_maintenance_admissions WHERE operation = ? "
                 + "ORDER BY admitted_at DESC LIMIT 1", String.class, operation);
+    }
+
+    @Test
+    void diagnosticPaginationKeepsTimestampTiesAndParentProvenanceWithoutChangingRows() {
+        UUID group = UUID.randomUUID();
+        UUID parent = new UUID(group.getMostSignificantBits(), 1);
+        UUID waiting = new UUID(group.getMostSignificantBits(), 2);
+        UUID ready = new UUID(group.getMostSignificantBits(), 3);
+        UUID completed = new UUID(group.getMostSignificantBits(), 4);
+        UUID cancelled = new UUID(group.getMostSignificantBits(), 5);
+        Instant time = Instant.parse("2001-01-01T00:00:00.123456Z");
+        try {
+            diagnosticFixture(parent, "UNCERTAIN", time, null);
+            diagnosticFixture(waiting, "WAITING", time, parent);
+            diagnosticFixture(ready, "READY", time, parent);
+            diagnosticFixture(completed, "COMPLETED", time, null);
+            diagnosticFixture(cancelled, "CANCELLED", time, parent);
+            long countBefore = jdbc.queryForObject("SELECT count(*) FROM financial.kfe_maintenance_admissions", Long.class);
+            var query = new KfeMaintenanceAdmissionQuery(jdbc, transactions);
+            var first = query.page(2, null);
+            assertThat(first.entries()).extracting(KfeMaintenanceAdmissionQuery.Entry::id).containsExactly(parent, waiting);
+            assertThat(first.entries().getLast().parentAdmissionId()).isEqualTo(parent);
+            assertThat(first.nextCursor()).isNotNull();
+            var second = new KfeMaintenanceAdmissionQuery(jdbc, transactions).page(2, first.nextCursor());
+            assertThat(second.entries().getFirst().id()).isEqualTo(ready);
+            assertThat(second.entries()).extracting(KfeMaintenanceAdmissionQuery.Entry::id)
+                    .doesNotContain(parent, waiting, completed, cancelled);
+            assertThat(first.diagnosticOnly()).isTrue();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM financial.kfe_maintenance_admissions", Long.class))
+                    .isEqualTo(countBefore);
+            assertThat(jdbc.queryForObject("SELECT state FROM financial.kfe_maintenance_admissions WHERE id = ?",
+                    String.class, parent)).isEqualTo("UNCERTAIN");
+        } finally {
+            deleteDiagnosticFixtures(waiting, ready, cancelled, completed, parent);
+        }
+    }
+
+    @Test
+    void diagnosticReadDuringActualDrainCreatesNoAdmissionAndCannotAuthorizeUpdate() {
+        JdbcKfeMaintenanceStore store = participantStore();
+        String change = "diagnostic-drain-" + UUID.randomUUID();
+        var control = store.observe().control();
+        var drain = store.transition(Action.DRAIN, new Command(change, "disposable diagnostic test", control.revision()), 42);
+        try {
+            long before = jdbc.queryForObject("SELECT count(*) FROM financial.kfe_maintenance_admissions", Long.class);
+            var result = new KfeMaintenanceAdmissionQuery(jdbc, transactions).page(1, null);
+            assertThat(result.mode()).isEqualTo(Mode.DRAINING);
+            assertThat(result.changeId()).isEqualTo(change);
+            assertThat(result.revision()).isEqualTo(drain.revision());
+            assertThat(result.diagnosticOnly()).isTrue();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM financial.kfe_maintenance_admissions", Long.class))
+                    .isEqualTo(before);
+            assertThat(new KfeMaintenanceService(store).status().safeToUpdate()).isFalse();
+        } finally {
+            store.transition(Action.RESUME, new Command(change, "disposable diagnostic cleanup", drain.revision()), 42);
+        }
+    }
+
+    @Test
+    void diagnosticPageUsesOneActualMvccSnapshotDespiteInterleavedResolution() {
+        UUID id = UUID.randomUUID();
+        diagnosticFixture(id, "IN_FLIGHT", Instant.parse("2000-01-01T00:00:00Z"), null);
+        JdbcTemplate interleaved = spy(jdbc);
+        try {
+            doAnswer(call -> {
+                Object result = call.callRealMethod();
+                // The independent writer commits after the page's control snapshot.
+                participantStore().resolve(id, true);
+                return result;
+            }).when(interleaved).query(org.mockito.ArgumentMatchers.contains("CURRENT_TIMESTAMP AS observed_at"),
+                    org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowMapper.class));
+            var page = new KfeMaintenanceAdmissionQuery(interleaved, transactions).page(1, null);
+            assertThat(page.entries().getFirst().id()).isEqualTo(id);
+            assertThat(page.entries().getFirst().state()).isEqualTo("IN_FLIGHT");
+            assertThat(jdbc.queryForObject("SELECT state FROM financial.kfe_maintenance_admissions WHERE id = ?",
+                    String.class, id)).isEqualTo("COMPLETED");
+            assertThat(new KfeMaintenanceAdmissionQuery(jdbc, transactions).page(1, null).entries())
+                    .extracting(KfeMaintenanceAdmissionQuery.Entry::id).doesNotContain(id);
+        } finally { deleteDiagnosticFixtures(id); }
+    }
+
+    private static void diagnosticFixture(UUID id, String state, Instant time, UUID parent) {
+        // Synthetic metadata only in the asserted exclusive full-schema test database.
+        jdbc.update("INSERT INTO financial.kfe_maintenance_admissions "
+                        + "(id, operation, admitted_revision, state, admitted_at, completed_at, parent_admission_id) "
+                        + "VALUES (?, 'fixture.diagnostic', 0, ?, ?, ?, ?)", id, state,
+                java.sql.Timestamp.from(time), state.equals("COMPLETED") || state.equals("CANCELLED")
+                        ? java.sql.Timestamp.from(time) : null, parent);
+    }
+
+    private static void deleteDiagnosticFixtures(UUID... ids) {
+        for (UUID id : ids) {
+            jdbc.update("DELETE FROM financial.kfe_maintenance_admissions WHERE id = ? AND operation = 'fixture.diagnostic'", id);
+        }
     }
 
     private static UUID fixtureWallet() {

@@ -72,3 +72,19 @@ run (1,776 total, zero failures/errors/skips). Existing client and notification
 integration fixtures also passed with explicit admission. The conflict path's
 four tests assert its local rejection; delivery remains broken as documented,
 not repaired or counted as a successful remote effect.
+
+## Consumer audit — diagnostic continuation
+
+Read-only inspection of the isolated Core sources found no
+`/internal/kfe/notifications/outbound-conflicted` controller mapping and no
+`notifyOutboundConflicted` override in NotificationFinancialNotificationAdapter;
+the shared default throws UnsupportedOperationException. The helper's conflict
+notification also receives an unused refunded argument, so current payloads do
+not distinguish refund from inconclusive reconciliation. Changing -1 to 0 would
+repair construction but not supply that missing consumer or encode conflict.
+Do not redirect this event to detected/confirmed methods: their warning/success
+semantics differ. The existing V2 PaymentConflicted event requires a conflicting
+txid that the inconclusive path cannot guarantee. A coordinated, authenticated
+conflict-event receiver/adapter contract remains necessary; no code or financial
+policy was changed by this read-only audit. Filesystem evidence is not a claim
+about deployed images, remote provider behavior or source revisions not inspected.

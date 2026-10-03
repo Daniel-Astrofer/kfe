@@ -33,6 +33,7 @@ public final class KfeMaintenanceHttpBarrier extends GenericFilterBean {
     private static final String MAINTENANCE_ROOT = ADMIN_ROOT + "/maintenance";
     private static final Set<String> READ_CONTROLS = Set.of(
             MAINTENANCE_ROOT + "/status",
+            MAINTENANCE_ROOT + "/admissions",
             ADMIN_ROOT + "/audit/latest",
             ADMIN_ROOT + "/audit/events",
             ADMIN_ROOT + "/reserves/overview",
