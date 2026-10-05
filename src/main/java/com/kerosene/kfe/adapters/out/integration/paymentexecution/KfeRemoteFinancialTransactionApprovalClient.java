@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpEntity;
@@ -24,7 +24,6 @@ import com.kerosene.common.financial.approval.DeviceProof;
 import com.kerosene.common.financial.approval.PasskeyAssertion;
 import com.kerosene.common.financial.approval.RecoveryApproval;
 
-import java.time.Duration;
 import java.util.Map;
 
 /** Sends typed transaction-approval proofs to the core authentication service. */
@@ -33,9 +32,6 @@ import java.util.Map;
 @ConditionalOnProperty(name = "kfe.remote.transaction-approval.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTransactionApprovalPort {
 
-    /** Internal request header that authenticates KFE service-to-service calls. */
-    private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
-    /** Default address of the core authentication server. */
     private static final String DEFAULT_BASE_URL = "http://server:8080";
 
     /** HTTP client configured with finite connect and read timeouts. */
@@ -44,33 +40,27 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
     private final ObjectMapper objectMapper;
     /** Normalized authentication service base URL. */
     private final String baseUrl;
-    /** Shared secret sent to internal transaction approval endpoints. */
-    private final String internalSecret;
 
     /**
-     * Configures the remote approval client using the shared URL, credential, and timeout settings.
+     * Configures the remote approval client using the shared URL and timeout settings.
      *
-     * @param restTemplateBuilder builder for the bounded-time HTTP client
+     * @param restTemplateFactory factory producing mTLS/SPIFFE or legacy client
      * @param objectMapper JSON parser for remote error envelopes
      * @param baseUrl optional authentication service base URL
-     * @param internalSecret credential required by internal approval routes
      * @param connectTimeoutMs connection timeout in milliseconds
      * @param readTimeoutMs response-read timeout in milliseconds
      */
     public KfeRemoteFinancialTransactionApprovalClient(
-            RestTemplateBuilder restTemplateBuilder,
+            InternalServiceRestTemplateFactory restTemplateFactory,
             ObjectMapper objectMapper,
             @Value("${auth.remote.base-url:http://server:8080}") String baseUrl,
-            @Value("${kfe.internal.shared-secret:}") String internalSecret,
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
-        this.restTemplate = restTemplateBuilder
-                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .readTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
+        InternalServiceRestTemplateFactory.ConfiguredClient client = restTemplateFactory.create(
+                baseUrl, DEFAULT_BASE_URL, connectTimeoutMs, readTimeoutMs);
+        this.restTemplate = client.restTemplate();
         this.objectMapper = objectMapper;
-        this.baseUrl = trimTrailingSlash(baseUrl);
-        this.internalSecret = internalSecret;
+        this.baseUrl = client.baseUrl();
     }
 
     /** Sends a device-bound local-factor approval request to the core service.
@@ -169,24 +159,11 @@ public class KfeRemoteFinancialTransactionApprovalClient implements FinancialTra
 
     /** Builds an authenticated JSON entity and fails fast when the shared secret is missing. */
     private <T> HttpEntity<T> internalJsonEntity(T body) {
-        if (internalSecret == null || internalSecret.isBlank()) {
-            throw new IllegalStateException("kfe.internal.shared-secret must be configured for KFE to Auth calls");
-        }
         HttpHeaders headers = new HttpHeaders();
-        headers.set(INTERNAL_HEADER, internalSecret);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return new HttpEntity<>(body, headers);
     }
 
-    /** Normalizes the base URL for appending internal endpoint paths. */
-    private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) {
-            return DEFAULT_BASE_URL;
-        }
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
-    }
-
-    /** @return whether a remote message or code is present and nonblank */
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
     }

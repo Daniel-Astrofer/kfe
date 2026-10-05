@@ -2,7 +2,7 @@ package com.kerosene.kfe.adapters.out.integration.directory;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.ResolvableType;
@@ -21,7 +21,6 @@ import com.kerosene.common.dto.ApiResponse;
 import com.kerosene.common.financial.operations.FinancialUserDirectoryLookupRequest;
 import com.kerosene.common.financial.operations.FinancialUserDirectoryPort;
 
-import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -31,9 +30,6 @@ import java.util.Optional;
 @ConditionalOnProperty(name = "kfe.remote.user-directory.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirectoryPort {
 
-    /** Header carrying the shared credential required by internal core-service endpoints. */
-    private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
-    /** Fallback core-service address used when no remote base URL is supplied. */
     private static final String DEFAULT_BASE_URL = "http://server:8080";
     /** Core endpoint that accepts username- or ID-based directory lookup requests. */
     private static final String LOOKUP_PATH = "/internal/kfe/user-directory/lookup";
@@ -46,32 +42,24 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
     private final RestTemplate restTemplate;
     /** Normalized core-service base URL with no trailing slash. */
     private final String baseUrl;
-    /** Shared credential sent on all internal user-directory requests. */
-    private final String internalSecret;
 
     /**
      * Configures a bounded-time HTTP client for user-directory lookups.
-     * Timeout values are applied in milliseconds; the base URL is trimmed and falls back to the
-     * internal core-service address when empty.
      *
-     * @param restTemplateBuilder Spring builder used to create the HTTP client
+     * @param restTemplateFactory factory producing mTLS/SPIFFE or legacy client
      * @param baseUrl optional core-service URL, defaulting to the service DNS address
-     * @param internalSecret shared credential expected by the internal endpoint
      * @param connectTimeoutMs maximum connection-establishment time in milliseconds
      * @param readTimeoutMs maximum response-read time in milliseconds
      */
     public KfeRemoteFinancialUserDirectoryClient(
-            RestTemplateBuilder restTemplateBuilder,
+            InternalServiceRestTemplateFactory restTemplateFactory,
             @Value("${auth.remote.base-url:http://server:8080}") String baseUrl,
-            @Value("${kfe.internal.shared-secret:}") String internalSecret,
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
-        this.restTemplate = restTemplateBuilder
-                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .readTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
-        this.baseUrl = trimTrailingSlash(baseUrl);
-        this.internalSecret = internalSecret;
+        InternalServiceRestTemplateFactory.ConfiguredClient client = restTemplateFactory.create(
+                baseUrl, DEFAULT_BASE_URL, connectTimeoutMs, readTimeoutMs);
+        this.restTemplate = client.restTemplate();
+        this.baseUrl = client.baseUrl();
     }
 
     /**
@@ -137,13 +125,9 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
         }
     }
 
-    /** Builds a JSON request with the internal secret, rejecting an unconfigured credential. */
+    /** Builds a JSON request entity. */
     private <T> HttpEntity<T> internalJsonEntity(T body) {
-        if (internalSecret == null || internalSecret.isBlank()) {
-            throw unavailable("KFE internal shared secret is not configured.", null);
-        }
         HttpHeaders headers = new HttpHeaders();
-        headers.set(INTERNAL_HEADER, internalSecret);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return new HttpEntity<>(body, headers);
     }
@@ -160,13 +144,5 @@ public class KfeRemoteFinancialUserDirectoryClient implements FinancialUserDirec
                 && handle.id() > 0L
                 && handle.username() != null
                 && !handle.username().isBlank();
-    }
-
-    /** Normalizes the base URL for path concatenation, using the default service URL when blank. */
-    private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) {
-            return DEFAULT_BASE_URL;
-        }
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 }

@@ -12,6 +12,8 @@ import com.kerosene.kfe.paymentexecution.application.port.out.PaymentApprovalPor
 import com.kerosene.kfe.paymentexecution.application.usecase.AuthorizePaymentService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
+import com.kerosene.kfe.adapters.out.integration.WorkloadIdentityTestClients;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +28,7 @@ class PaymentApprovalRemoteWiringTest {
             .withInitializer(ctx -> ctx.getEnvironment().setActiveProfiles("kfe"))
             .withBean(RestTemplateBuilder.class, RestTemplateBuilder::new)
             .withBean(ObjectMapper.class, ObjectMapper::new)
+            .withBean(InternalServiceRestTemplateFactory.class, () -> WorkloadIdentityTestClients.legacy("test-secret"))
             .withUserConfiguration(Graph.class)
             .withPropertyValues("kfe.internal.shared-secret=test-secret", "auth.remote.base-url=http://server.test");
 

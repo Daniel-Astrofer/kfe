@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +23,7 @@ import java.time.Instant;
  *   <li>In production mode, revocation.required=true refuses boot if Redis unavailable</li>
  *   <li>Column crypto key is set or fallback is explicitly enabled</li>
  *   <li>In production mode, deposit min-confirmations must be &ge; 1 (mempool-only credit is unsafe)</li>
+ *   <li>SPIFFE workload identity parameters when enabled in production mode</li>
  * </ol>
  *
  * <p>Fail-closed: all missing required configs cause a boot-time {@link IllegalStateException}.
@@ -55,28 +58,19 @@ public class KfeProductionGateConfig implements ApplicationRunner {
     private final String columnCryptoKeyBase64;
     /** Explicit opt-in permitting column-key derivation from the shared internal secret. */
     private final boolean allowSharedSecretDerivation;
-    /** Internal service authentication secret, required to be strong in production. */
+    /** Internal service authentication secret, required to be strong in production when not using SPIFFE. */
     private final String internalSharedSecret;
     /** Bitcoin deposit finality settings inspected by the production confirmation gate. */
     private final KfeBitcoinFinalityPolicy finalityPolicy;
 
-    /**
-     * Captures normalized security and finality properties plus an optional Redis revocation client.
-     *
-     * @param jwtSecret active JWT signing secret
-     * @param jwtIssuer required JWT issuer claim
-     * @param jwtAudience required JWT audience claim
-     * @param previousJwtSecret optional prior signing key for rotation
-     * @param previousJwtSecretExpiresAt ISO-8601 expiry for the prior key
-     * @param productionMode enables production-only fail-closed checks
-     * @param revocationRequired whether revocation must remain required in production
-     * @param revocationCheckEnabled whether JWT verification performs revocation checks
-     * @param columnCryptoKeyBase64 dedicated Base64-encoded column encryption key
-     * @param allowSharedSecretDerivation explicit fallback key derivation switch
-     * @param internalSharedSecret inter-service authentication secret
-     * @param finalityPolicy Bitcoin deposit confirmation policy
-     * @param redisTemplateProvider optional Redis client for the startup probe
-     */
+    private final boolean workloadIdentityEnabled;
+    private final String workloadSocket;
+    private final String ownSpiffeId;
+    private final String peerSpiffeId;
+    private final String authRemoteBaseUrl;
+    private final int publicPort;
+    private final int internalPort;
+
     public KfeProductionGateConfig(
             @Value("${api.secret.token.secret:}") String jwtSecret,
             @Value("${kfe.auth.jwt.issuer:}") String jwtIssuer,
@@ -89,6 +83,14 @@ public class KfeProductionGateConfig implements ApplicationRunner {
             @Value("${kfe.column-crypto.key-base64:}") String columnCryptoKeyBase64,
             @Value("${kfe.crypto.allow-shared-secret-derivation:false}") boolean allowSharedSecretDerivation,
             @Value("${kfe.internal.shared-secret:}") String internalSharedSecret,
+            @Value("${kerosene.workload-identity.enabled:false}") boolean workloadIdentityEnabled,
+            @Value("${kerosene.workload-identity.socket:}") String workloadSocket,
+            @Value("${kerosene.workload-identity.own-spiffe-id:}") String ownSpiffeId,
+            @Value("${kerosene.workload-identity.peer-spiffe-id:}") String peerSpiffeId,
+            @Value("${auth.remote.base-url:}") String authRemoteBaseUrl,
+            @Value("${server.port:8080}") int publicPort,
+            @Value("${kerosene.workload-identity.internal-port:8443}") int internalPort,
+            Environment environment,
             KfeBitcoinFinalityPolicy finalityPolicy,
             org.springframework.beans.factory.ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.jwtSecret = blankToEmpty(jwtSecret);
@@ -96,7 +98,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         this.jwtAudience = blankToEmpty(jwtAudience);
         this.previousJwtSecret = blankToEmpty(previousJwtSecret);
         this.previousJwtSecretExpiresAt = blankToEmpty(previousJwtSecretExpiresAt);
-        this.productionMode = productionMode;
+        this.productionMode = resolveProductionMode(productionMode, environment);
         this.revocationRequired = revocationRequired;
         this.revocationCheckEnabled = revocationCheckEnabled;
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
@@ -104,16 +106,15 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         this.allowSharedSecretDerivation = allowSharedSecretDerivation;
         this.internalSharedSecret = blankToEmpty(internalSharedSecret);
         this.finalityPolicy = finalityPolicy;
+        this.workloadIdentityEnabled = workloadIdentityEnabled;
+        this.workloadSocket = blankToEmpty(workloadSocket);
+        this.ownSpiffeId = blankToEmpty(ownSpiffeId);
+        this.peerSpiffeId = blankToEmpty(peerSpiffeId);
+        this.authRemoteBaseUrl = blankToEmpty(authRemoteBaseUrl);
+        this.publicPort = publicPort;
+        this.internalPort = internalPort;
     }
 
-    /**
-     * Runs all security gates before the application begins serving requests.
-     * Production mode additionally enforces revocation availability, deposit confirmations,
-     * and a dedicated strong internal authentication secret.
-     *
-     * @param args parsed Spring Boot application arguments
-     * @throws IllegalStateException when any required gate fails
-     */
     @Override
     public void run(ApplicationArguments args) {
         checkJwtSecret();
@@ -123,6 +124,7 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         checkColumnCryptoKey();
         checkDepositMinConfirmations();
         checkInternalAuthenticationSecret();
+        checkWorkloadIdentity();
 
         if (productionMode) {
             log.warn("KFE AUTH PRODUCTION-MODE: JWT claims enforced, revocation fail-closed, "
@@ -130,11 +132,6 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         }
     }
 
-    /**
-     * Requires a configured JWT key and rejects the known sample secret.
-     *
-     * @throws IllegalStateException when the key is missing or equals the bundled default
-     */
     private void checkJwtSecret() {
         if (jwtSecret.isEmpty()) {
             throw new IllegalStateException(
@@ -148,11 +145,6 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         }
     }
 
-    /**
-     * Requires both issuer and audience so token validation has explicit intended scope.
-     *
-     * @throws IllegalStateException when either claim value is missing
-     */
     private void checkJwtClaims() {
         if (jwtIssuer.isEmpty()) {
             throw new IllegalStateException(
@@ -164,11 +156,6 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         }
     }
 
-    /**
-     * Validates that an optional previous JWT key has sufficient length and a future ISO-8601 expiry.
-     *
-     * @throws IllegalStateException when rotation properties are incomplete, malformed, or expired
-     */
     private void checkJwtKeyRotation() {
         if (previousJwtSecret.isEmpty() && previousJwtSecretExpiresAt.isEmpty()) {
             return;
@@ -190,12 +177,6 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         }
     }
 
-    /**
-     * In production, requires revocation to be enabled/required and verifies Redis is reachable.
-     * Nonproduction mode skips this production-only dependency check.
-     *
-     * @throws IllegalStateException when production revocation policy is disabled or Redis is unavailable
-     */
     private void checkRevocationRedis() {
         if (!productionMode) {
             return;
@@ -218,12 +199,6 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         log.info("JWT revocation is required and Redis connectivity confirmed.");
     }
 
-    /**
-     * Requires a dedicated Base64 column-crypto key unless shared-secret derivation was explicitly enabled.
-     * The fallback is logged as a reduced-separation mode and must be consciously configured.
-     *
-     * @throws IllegalStateException when neither a dedicated key nor the fallback opt-in exists
-     */
     private void checkColumnCryptoKey() {
         if (!columnCryptoKeyBase64.isEmpty()) {
             return;
@@ -240,14 +215,8 @@ public class KfeProductionGateConfig implements ApplicationRunner {
                         + "Set KFE_COLUMN_CRYPTO_KEY_BASE64 to a base64-encoded 32-byte AES key.");
     }
 
-    /**
-     * Rejects zero-confirmation deposit credit in production while allowing it in nonproduction.
-     *
-     * @throws IllegalStateException when production credit threshold is below one confirmation
-     */
     private void checkDepositMinConfirmations() {
         if (!productionMode) {
-            // Non-production: mempool-only credit is acceptable for dev/test.
             log.info("Deposit min-confirmations gate: production-mode=false, "
                     + "mempool-only deposit credit is allowed.");
             return;
@@ -266,24 +235,44 @@ public class KfeProductionGateConfig implements ApplicationRunner {
         log.info("Deposit credit-confirmations gate: {} (production, >=1 OK)", creditConfirmations);
     }
 
-    /**
-     * Requires a dedicated internal service secret of at least 32 characters in production mode.
-     *
-     * @throws IllegalStateException when production secret is too short
-     */
     private void checkInternalAuthenticationSecret() {
-        if (productionMode && internalSharedSecret.length() < 32) {
+        if (!workloadIdentityEnabled && productionMode && internalSharedSecret.length() < 32) {
             throw new IllegalStateException(
                     "kfe.internal.shared-secret must be a dedicated random secret of at least 32 characters.");
         }
     }
 
-    /**
-     * Normalizes optional configuration text by trimming whitespace and mapping null to empty text.
-     *
-     * @param value property value
-     * @return trimmed value or empty string when absent
-     */
+    private void checkWorkloadIdentity() {
+        if (!productionMode) {
+            return;
+        }
+        if (!workloadIdentityEnabled) {
+            throw new IllegalStateException("SPIFFE workload identity must be enabled in KFE production mode");
+        }
+        if (!workloadSocket.startsWith("unix://")) {
+            throw new IllegalStateException("SPIFFE Workload API must use a unix:// endpoint");
+        }
+        if (!ownSpiffeId.startsWith("spiffe://") || !ownSpiffeId.endsWith("/service/kfe")) {
+            throw new IllegalStateException("KFE own SPIFFE ID must end with /service/kfe");
+        }
+        if (!peerSpiffeId.startsWith("spiffe://") || !peerSpiffeId.endsWith("/service/auth")) {
+            throw new IllegalStateException("KFE peer SPIFFE ID must end with /service/auth");
+        }
+        if (!authRemoteBaseUrl.startsWith("https://")) {
+            throw new IllegalStateException("auth.remote.base-url must use https:// in production");
+        }
+        if (!internalSharedSecret.isEmpty()) {
+            throw new IllegalStateException("KFE_INTERNAL_SHARED_SECRET must be empty under SPIFFE mTLS");
+        }
+        if (publicPort == internalPort) {
+            throw new IllegalStateException("internal mTLS port must differ from server.port");
+        }
+    }
+
+    public static boolean resolveProductionMode(boolean explicitlyEnabled, Environment environment) {
+        return explicitlyEnabled || (environment != null && environment.acceptsProfiles(Profiles.of("prod", "production")));
+    }
+
     private static String blankToEmpty(String value) {
         return value == null ? "" : value.trim();
     }

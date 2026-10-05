@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import com.kerosene.common.security.workload.InternalServiceRestTemplateFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -18,7 +18,6 @@ import com.kerosene.common.financial.notification.FinancialNotificationPort;
 import com.kerosene.common.financial.notification.FinancialOutboundNotificationRequest;
 import com.kerosene.common.financial.notification.FinancialPaymentRequestDepositConfirmedNotificationRequest;
 
-import java.time.Duration;
 import java.util.UUID;
 
 /** Sends internal KFE payment and deposit events to the core service's notification API. */
@@ -29,41 +28,30 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
 
     /** Logger used when push delivery fails but financial processing is allowed to continue. */
     private static final Logger log = LoggerFactory.getLogger(KfeRemoteFinancialNotificationClient.class);
-    /** HTTP header used to authenticate KFE-to-core internal notification requests. */
-    private static final String INTERNAL_HEADER = "X-KFE-Internal-Secret";
-    /** Core service base URL used when the remote URL setting is absent or blank. */
     private static final String DEFAULT_BASE_URL = "http://server:8080";
 
     /** HTTP client configured with bounded connection and response timeouts. */
     private final RestTemplate restTemplate;
     /** Normalized core service base URL with at most one slash before endpoint paths. */
     private final String baseUrl;
-    /** Shared internal credential added to each notification request. */
-    private final String internalSecret;
 
     /**
-     * Creates the notification client using the shared core-service URL and internal credential.
-     * Timeout values are interpreted in milliseconds; an empty base URL falls back to the local
-     * service DNS address.
+     * Creates the notification client using the shared core-service URL.
      *
-     * @param restTemplateBuilder builder used to configure the HTTP client
+     * @param restTemplateFactory factory producing mTLS/SPIFFE or legacy client
      * @param baseUrl optional core-service base URL
-     * @param internalSecret shared secret accepted by internal notification endpoints
      * @param connectTimeoutMs connection timeout in milliseconds
      * @param readTimeoutMs response-read timeout in milliseconds
      */
     public KfeRemoteFinancialNotificationClient(
-            RestTemplateBuilder restTemplateBuilder,
+            InternalServiceRestTemplateFactory restTemplateFactory,
             @Value("${auth.remote.base-url:http://server:8080}") String baseUrl,
-            @Value("${kfe.internal.shared-secret:}") String internalSecret,
             @Value("${auth.remote.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${auth.remote.read-timeout-ms:5000}") long readTimeoutMs) {
-        this.restTemplate = restTemplateBuilder
-                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .readTimeout(Duration.ofMillis(readTimeoutMs))
-                .build();
-        this.baseUrl = trimTrailingSlash(baseUrl);
-        this.internalSecret = internalSecret;
+        InternalServiceRestTemplateFactory.ConfiguredClient client = restTemplateFactory.create(
+                baseUrl, DEFAULT_BASE_URL, connectTimeoutMs, readTimeoutMs);
+        this.restTemplate = client.restTemplate();
+        this.baseUrl = client.baseUrl();
     }
 
     /**
@@ -357,7 +345,6 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
     }
 
     /** Reports an unsuccessful payment; the failure code is carried as the notification hint.
-     * The current wire request does not include {@code failureMessage}.
      * @param userId payment owner
      * @param transactionId failed outgoing transaction
      * @param walletId debited wallet
@@ -381,7 +368,6 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
     }
 
     /** Reports that the payment outcome requires operator or automated reconciliation.
-     * The supplied reason is carried in the wire request's outbound hint field.
      * @param userId payment owner
      * @param transactionId payment under reconciliation
      * @param walletId associated wallet
@@ -424,21 +410,12 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
     }
 
     /**
-     * Best-effort push to the auth/server notification API.
-     *
-     * <p>Must never abort ledger settlement: a missing route (404 on older server images),
-     * auth glitch, or down server is not a payment failure. Mobile was seeing
-     * "operation rejected" because submit rolled back when this threw.
-     */
-    /**
      * Posts an internal notification and logs delivery failure without undoing the financial operation.
-     * Request creation still fails fast when the internal shared secret is missing.
      *
      * @param path internal notification route appended to {@link #baseUrl}
      * @param request typed notification payload serialized by Spring's HTTP converters
      */
     private void post(String path, Object request) {
-        // Missing secret is a deploy misconfiguration — still fail fast so ops notice.
         HttpEntity<Object> entity = internalJsonEntity(request);
         try {
             restTemplate.postForEntity(baseUrl + path, entity, Void.class);
@@ -456,22 +433,10 @@ public class KfeRemoteFinancialNotificationClient implements FinancialNotificati
         }
     }
 
-    /** Creates a JSON request carrying the configured internal authentication header. */
+    /** Creates a JSON request entity. */
     private <T> HttpEntity<T> internalJsonEntity(T body) {
-        if (internalSecret == null || internalSecret.isBlank()) {
-            throw new IllegalStateException("kfe.internal.shared-secret must be configured for KFE to Auth calls");
-        }
         HttpHeaders headers = new HttpHeaders();
-        headers.set(INTERNAL_HEADER, internalSecret);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return new HttpEntity<>(body, headers);
-    }
-
-    /** Normalizes the base URL to make later endpoint concatenation deterministic. */
-    private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) {
-            return DEFAULT_BASE_URL;
-        }
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 }

@@ -63,7 +63,7 @@ public class KfeStandaloneSecurityConfiguration {
                                 "/api/public/kfe/**",
                                 "/error")
                         .permitAll()
-                        // Internal endpoints still perform their controller-level credential check.
+                        // The workload-identity filter authenticates internal routes before Spring Security.
                         .requestMatchers("/internal/kfe/**").permitAll()
                         .requestMatchers("/api/admin/kfe/**").hasRole("ADMIN")
                         .requestMatchers("/kfe/**").authenticated()

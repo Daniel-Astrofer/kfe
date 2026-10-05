@@ -1,7 +1,7 @@
 package com.kerosene.kfe.adapters.out.integration.directory;
 
+import com.kerosene.kfe.adapters.out.integration.WorkloadIdentityTestClients;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -84,11 +84,7 @@ class KfeRemoteFinancialUserDirectoryClientTest {
     void rejectsMissingInternalCredentialBeforeCallingCore() {
         KfeRemoteFinancialUserDirectoryClient client = client("");
 
-        ResponseStatusException exception = assertThrows(
-                ResponseStatusException.class,
-                () -> client.findByUsername("alice"));
-
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, exception.getStatusCode());
+        assertThrows(IllegalStateException.class, () -> client.findByUsername("alice"));
     }
 
     @Test
@@ -128,9 +124,8 @@ class KfeRemoteFinancialUserDirectoryClientTest {
 
     private KfeRemoteFinancialUserDirectoryClient client(String credential) {
         return new KfeRemoteFinancialUserDirectoryClient(
-                new RestTemplateBuilder(),
+                WorkloadIdentityTestClients.legacy(credential),
                 "http://server.test/",
-                credential,
                 100,
                 100);
     }
