@@ -14,13 +14,21 @@ import java.util.Map;
 
 /** Pure orchestration; every effect participates in the authorized submit's transaction. */
 public final class SettleInternalPaymentService {
+    /** Loads and locks the authorized internal payment state. */
     private final InternalPaymentSettlementStatePort state;
+    /** Applies the reserved debit and destination credit to the ledger. */
     private final PaymentLedgerPort ledger;
+    /** Confirms the lifecycle transition to SETTLED. */
     private final PaymentExecutionLifecycleUseCase lifecycle;
+    /** Settles fee accounting associated with the execution. */
     private final PaymentFeeSettlementPort fees;
+    /** Records sender and optional recipient statement entries. */
     private final PaymentStatementPort statements;
+    /** Schedules sender and optional recipient notifications. */
     private final InternalPaymentNotificationPort notifications;
 
+    /** Creates the internal settlement coordinator with transactional ports. */
+    /** @param state payment state loader and lock @param ledger financial ledger port @param lifecycle execution lifecycle use case @param fees fee settlement port @param statements statement writer @param notifications notification scheduler */
     public SettleInternalPaymentService(
             InternalPaymentSettlementStatePort state, PaymentLedgerPort ledger,
             PaymentExecutionLifecycleUseCase lifecycle, PaymentFeeSettlementPort fees,
@@ -33,6 +41,13 @@ public final class SettleInternalPaymentService {
         this.notifications = notifications;
     }
 
+    /**
+     * Settles the reserved sender debit and recipient credit, records SETTLED, settles fees,
+     * and creates statement/notification effects for each participating account.
+     * All writes must share the submit transaction.
+     * @param command identifies the authorized internal payment
+     * @return confirmed LOCKED-to-SETTLED lifecycle event
+     */
     public PaymentExecutionStatusChanged settle(SettleInternalPaymentCommand command) {
         var payment = state.lockAndLoad(command.userId(), command.executionId());
         payment.requireReadyFor(command.userId(), command.executionId());

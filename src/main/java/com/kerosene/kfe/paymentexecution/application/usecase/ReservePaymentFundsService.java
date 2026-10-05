@@ -12,12 +12,19 @@ import java.util.Map;
 
 /** Pure reservation orchestration; ledger, capacity and LOCKED share the owning submit transaction. */
 public final class ReservePaymentFundsService {
+    /** Locks and reloads the prepared execution state. */
     private final PaymentFundsReservationStatePort state;
+    /** Acquires and validates ownership of the source wallet when a reserve is required. */
     private final PaymentWalletLookupPort wallets;
+    /** Records the ledger debit reservation for the execution. */
     private final PaymentLedgerPort ledger;
+    /** Reserves outbound network capacity for rails that require it. */
     private final PaymentLiquidityPort liquidity;
+    /** Confirms the transition from QUORUM_SYNC to LOCKED after all required reservations. */
     private final PaymentExecutionLifecycleUseCase lifecycle;
 
+    /** Creates the reservation coordinator with wallet, ledger, liquidity, and lifecycle ports. */
+    /** @param state locked reservation state port @param wallets owned wallet lookup port @param ledger ledger reservation port @param liquidity outbound capacity reservation port @param lifecycle execution transition use case */
     public ReservePaymentFundsService(
             PaymentFundsReservationStatePort state, PaymentWalletLookupPort wallets,
             PaymentLedgerPort ledger, PaymentLiquidityPort liquidity, PaymentExecutionLifecycleUseCase lifecycle) {
@@ -28,6 +35,12 @@ public final class ReservePaymentFundsService {
         this.lifecycle = lifecycle;
     }
 
+    /**
+     * Reserves source funds and required Lightning capacity, then transitions the execution
+     * to LOCKED. All effects must participate in the caller's submission transaction.
+     * @param command identifies the account and execution to reserve
+     * @return confirmed transition event for QUORUM_SYNC to LOCKED
+     */
     public PaymentExecutionStatusChanged reserve(ReservePaymentFundsCommand command) {
         var payment = state.lockAndLoad(command.userId(), command.executionId());
         payment.requireReadyFor(command.userId(), command.executionId());

@@ -4,5 +4,10 @@ import com.kerosene.kfe.paymentexecution.domain.event.PaymentExecutionStatusChan
 import com.kerosene.kfe.paymentexecution.domain.model.PaymentRail;
 import java.util.UUID;
 
-/** Only outbound work is eligible for the caller's optional post-commit immediate dispatch. */
+/**
+ * Routing outcome. Only outbound work is eligible for optional post-commit immediate dispatch.
+ * @param transition confirmed lifecycle event produced by routing or internal settlement
+ * @param rail rail selected for the payment
+ * @param immediateDispatchOutboxId outbound command eligible for an immediate post-commit worker attempt, or null
+ */
 public record PaymentRoutingResult(PaymentExecutionStatusChanged transition, PaymentRail rail, UUID immediateDispatchOutboxId) {}

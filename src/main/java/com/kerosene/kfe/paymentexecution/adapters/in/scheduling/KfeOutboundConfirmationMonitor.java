@@ -40,17 +40,28 @@ public class KfeOutboundConfirmationMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(KfeOutboundConfirmationMonitor.class);
 
+    /** Queries candidate transactions and persists chain-observation metadata. */
     private final KfeTransactionRepository transactionRepository;
+    /** Applies confirmation progress and final settlement against the current locked row. */
     private final KfeExecutionTransactionHelper transactionHelper;
+    /** Optional Bitcoin Core source of transaction chain status. */
     private final ObjectProvider<BitcoinCoreRpcClient> bitcoinCoreRpcClient;
+    /** Optional observer that updates non-custodial cold-wallet confirmations. */
     private final ObjectProvider<KfeColdWalletObservationService> coldObservationService;
+    /** Records network absence signals for operational monitoring. */
     private final KfeFinancialMetrics financialMetrics;
+    /** Maximum number of candidate rows loaded for each status group. */
     private final int batchSize;
+    /** Credit finality threshold for settling a reserved outbound debit. */
     private final int minConfirmations;
+    /** Confirmation count at which client confirmation rings stop advancing. */
     private final int uiConfirmationTarget;
+    /** Consecutive missing probes required before classifying a transaction as disappeared. */
     private final int maxNotFoundCount;
+    /** Minimum duration of repeated absence before reconciliation escalation. */
     private final int notFoundGracePeriodSeconds;
 
+    /** Wires chain observers, transaction helpers, finality thresholds, and bounded disappearance policy. */
     public KfeOutboundConfirmationMonitor(
             KfeTransactionRepository transactionRepository,
             KfeExecutionTransactionHelper transactionHelper,

@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
+/** Reconciles inbound Bitcoin and Lightning executions against authoritative provider evidence. */
 @Component
 @ConditionalOnProperty(name = "kfe.network-monitor.enabled", havingValue = "true")
 public class KfeNetworkMonitor {
@@ -39,15 +40,24 @@ public class KfeNetworkMonitor {
     private static final Pattern TXID = Pattern.compile("^[0-9a-fA-F]{64}$");
     private static final BigDecimal SATOSHIS_PER_BTC = new BigDecimal("100000000");
 
+    /** Repository that pages durable inbound reconciliation candidates. */
     private final KfeExecutionOutboxRepository outboxRepository;
+    /** Repository used to load current transaction state for candidate outbox rows. */
     private final KfeTransactionRepository transactionRepository;
+    /** Settlement boundary that validates and applies observed inbound evidence. */
     private final KfeInboundSettlementService settlementService;
+    /** Optional Bitcoin RPC client used to verify inbound chain evidence. */
     private final ObjectProvider<BlockchainClient> blockchainClient;
+    /** Optional external Lightning gateway used to verify invoice settlement. */
     private final ObjectProvider<LightningInvoiceGateway> lightningInvoiceGateway;
+    /** Parser for persisted outbox payloads. */
     private final ObjectMapper objectMapper;
+    /** Maximum candidate count inspected in one scheduled pass. */
     private final int batchSize;
+    /** Confirmation threshold required before on-chain inbound credit. */
     private final int minOnchainConfirmations;
 
+    /** Wires repositories, optional provider clients, parsing, and the credit finality threshold. */
     public KfeNetworkMonitor(
             KfeExecutionOutboxRepository outboxRepository,
             KfeTransactionRepository transactionRepository,
@@ -71,6 +81,7 @@ public class KfeNetworkMonitor {
     @Scheduled(
             fixedDelayString = "${kfe.network-monitor.fixed-delay-ms:30000}",
             initialDelayString = "${kfe.network-monitor.initial-delay-ms:20000}")
+    /** Loads one bounded batch of eligible inbound commands and isolates failures per candidate. */
     public void reconcileInbound() {
         List<KfeExecutionOutboxEntity> candidates = outboxRepository.findInboundReconciliationCandidates(
                 INBOUND_OPERATIONS,
@@ -85,6 +96,7 @@ public class KfeNetworkMonitor {
         }
     }
 
+    /** Loads the transaction and dispatches reconciliation only while its state remains executing or uncertain. */
     private void inspect(KfeExecutionOutboxEntity outbox) {
         Optional<KfeTransactionEntity> optionalTx = transactionRepository.findById(outbox.getTransactionId());
         if (optionalTx.isEmpty()) {
@@ -104,6 +116,7 @@ public class KfeNetworkMonitor {
         }
     }
 
+    /** Credits on-chain evidence only after the configured confirmation threshold is met. */
     private void inspectOnchain(KfeExecutionOutboxEntity outbox, KfeTransactionEntity tx, JsonNode payload) {
         BlockchainClient client = blockchainClient.getIfAvailable();
         if (client == null) {
@@ -127,6 +140,7 @@ public class KfeNetworkMonitor {
                 value.rawPayload()));
     }
 
+    /** Finds a matching transaction by known txid or scans address receipts for sufficient value and finality. */
     private Optional<OnchainProof> findOnchainProof(
             BlockchainClient client,
             KfeExecutionOutboxEntity outbox,
@@ -163,6 +177,7 @@ public class KfeNetworkMonitor {
         return Optional.empty();
     }
 
+    /** Loads raw chain evidence and returns empty when RPC cannot provide a usable transaction. */
     private Optional<OnchainProof> loadOnchainTx(
             BlockchainClient client,
             String txid,
@@ -180,6 +195,7 @@ public class KfeNetworkMonitor {
         }
     }
 
+    /** Queries the external invoice status and settles only provider-confirmed received value. */
     private void inspectLightning(KfeExecutionOutboxEntity outbox, KfeTransactionEntity tx, JsonNode payload) {
         LightningInvoiceGateway gateway = lightningInvoiceGateway.getIfAvailable();
         if (gateway == null || !gateway.isLive()) {
@@ -218,6 +234,7 @@ public class KfeNetworkMonitor {
                 status.rawPayload()));
     }
 
+    /** Parses persisted command JSON, treating absent or malformed payload as an empty object. */
     private JsonNode payload(KfeExecutionOutboxEntity outbox) {
         if (outbox.getPayloadJson() == null || outbox.getPayloadJson().isBlank()) {
             return objectMapper.createObjectNode();
@@ -229,6 +246,7 @@ public class KfeNetworkMonitor {
         }
     }
 
+    /** Selects the first valid transaction reference from persisted execution and provider fields. */
     private String txid(KfeExecutionOutboxEntity outbox, KfeTransactionEntity tx, JsonNode payload) {
         String externalReference = text(payload, "externalReference");
         return firstNonBlank(
@@ -239,6 +257,7 @@ public class KfeNetworkMonitor {
                 looksLikeTxid(externalReference) ? externalReference : null);
     }
 
+    /** Extracts a receive address without mistaking a txid or Lightning invoice for an address. */
     private String targetAddress(JsonNode payload) {
         String externalReference = text(payload, "externalReference");
         return firstNonBlank(
@@ -246,6 +265,7 @@ public class KfeNetworkMonitor {
                 !looksLikeTxid(externalReference) && !looksLikeLightningInvoice(externalReference) ? externalReference : null);
     }
 
+    /** Extracts a Lightning payment request from recognized payload fields or the external reference. */
     private String paymentRequest(JsonNode payload) {
         String externalReference = text(payload, "externalReference");
         return firstNonBlank(
@@ -253,6 +273,7 @@ public class KfeNetworkMonitor {
                 looksLikeLightningInvoice(externalReference) ? externalReference : null);
     }
 
+    /** Validates direct or array-form transaction identifiers from an address-history entry. */
     private String txidFromReceivedEntry(JsonNode entry) {
         String direct = text(entry, "txid");
         if (looksLikeTxid(direct)) {
@@ -266,6 +287,7 @@ public class KfeNetworkMonitor {
         return null;
     }
 
+    /** Reads nonnegative satoshi fields first, then converts BTC-denominated values. */
     private long amountSats(JsonNode node) {
         long sats = satsField(node, "sats", "satoshis", "amountSats", "amount_sats", "valueSats", "value_sats");
         if (sats > 0L) {
@@ -278,6 +300,7 @@ public class KfeNetworkMonitor {
         return amountFromBtcField(node, "value");
     }
 
+    /** Totals only receive details and outputs paying the target address, with whole-transaction value as a fallback. */
     private long amountSats(JsonNode node, String targetAddress) {
         if (targetAddress == null || targetAddress.isBlank()) {
             return amountSats(node);
@@ -305,6 +328,7 @@ public class KfeNetworkMonitor {
         return total > 0L ? total : amountSats(node);
     }
 
+    /** Checks direct and legacy array-form script addresses for an exact destination match. */
     private boolean scriptPaysAddress(JsonNode scriptPubKey, String targetAddress) {
         if (targetAddress.equals(text(scriptPubKey, "address"))) {
             return true;
@@ -320,11 +344,13 @@ public class KfeNetworkMonitor {
         return false;
     }
 
+    /** Returns a nonnegative integral confirmation count, defaulting malformed values to zero. */
     private int confirmations(JsonNode node) {
         JsonNode confirmations = node.path("confirmations");
         return confirmations.isIntegralNumber() ? Math.max(0, confirmations.asInt()) : 0;
     }
 
+    /** Reads the first usable integral or numeric-string satoshi property without allowing negative values. */
     private long satsField(JsonNode node, String... fields) {
         for (String field : fields) {
             JsonNode value = node.path(field);
@@ -341,6 +367,7 @@ public class KfeNetworkMonitor {
         return 0L;
     }
 
+    /** Converts a positive numeric BTC value to satoshis, rounding fractional satoshis down. */
     private long amountFromBtcField(JsonNode node, String field) {
         JsonNode value = node.path(field);
         if (!value.isNumber()) {
@@ -355,6 +382,7 @@ public class KfeNetworkMonitor {
                 .longValue();
     }
 
+    /** Recognizes provider terminal-success labels after case and whitespace normalization. */
     private boolean isSettled(String status) {
         if (status == null) {
             return false;
@@ -365,10 +393,12 @@ public class KfeNetworkMonitor {
         };
     }
 
+    /** Validates a 64-character hexadecimal transaction identifier. */
     private boolean looksLikeTxid(String value) {
         return value != null && TXID.matcher(value.trim()).matches();
     }
 
+    /** Recognizes mainnet, testnet, and regtest BOLT11 invoice prefixes. */
     private boolean looksLikeLightningInvoice(String value) {
         if (value == null) {
             return false;
@@ -377,6 +407,7 @@ public class KfeNetworkMonitor {
         return lower.startsWith("lnbc") || lower.startsWith("lntb") || lower.startsWith("lnbcrt");
     }
 
+    /** Returns the first nonblank textual property among candidate JSON field names. */
     private String text(JsonNode node, String... fields) {
         if (node == null || fields == null) {
             return null;
@@ -390,6 +421,7 @@ public class KfeNetworkMonitor {
         return null;
     }
 
+    /** Returns the first nonblank candidate after trimming, or null when none is available. */
     private String firstNonBlank(String... values) {
         if (values == null) {
             return null;
@@ -402,6 +434,12 @@ public class KfeNetworkMonitor {
         return null;
     }
 
+    /** Immutable verified Bitcoin receipt evidence used to authorize inbound settlement.
+     * @param txid canonical Bitcoin transaction identifier
+     * @param observedAmountSats amount observed for the candidate receipt in satoshis
+     * @param confirmations confirmation count reported for the transaction
+     * @param rawPayload provider evidence retained for audit and reconciliation
+     */
     private record OnchainProof(
             String txid,
             long observedAmountSats,

@@ -5,9 +5,21 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Minimal recipient-owned request state used by an internal payment, not the full Request aggregate. */
+/**
+ * Minimal recipient-owned request state used by an internal payment, not the full Request aggregate.
+ * @param id persisted request identity
+ * @param publicId client-visible request identifier
+ * @param recipientUserId account that owns the requested funds
+ * @param walletId recipient wallet identifier
+ * @param rail request rail supported by the request
+ * @param open whether the request can accept a payment
+ * @param amountSats optional exact amount required by the request
+ * @param expiresAt request expiry instant, if configured
+ * @param paidExecutionId execution already linked as payment, if any
+ */
 public record PaymentRequestLinkSnapshot(UUID id, String publicId, long recipientUserId, UUID walletId,
         PaymentRail rail, boolean open, Long amountSats, Instant expiresAt, UUID paidExecutionId) {
+    /** Requires a valid request identity, recipient, wallet, rail, and optional positive amount. */
     public PaymentRequestLinkSnapshot {
         Objects.requireNonNull(id, "request id is required");
         Objects.requireNonNull(walletId, "request wallet is required");
@@ -18,6 +30,8 @@ public record PaymentRequestLinkSnapshot(UUID id, String publicId, long recipien
         }
     }
 
+    /** Confirms the request is open and uses a rail eligible for in-app ledger settlement. */
+    /** @throws IllegalArgumentException when the request rail is not eligible @throws IllegalStateException when the request is closed or already paid */
     public void requireOpenForLedger() {
         if (rail != PaymentRail.INTERNAL && rail != PaymentRail.LIGHTNING) {
             throw new IllegalArgumentException("KFE payment request rail does not support INTERNAL ledger settlement. "
@@ -28,6 +42,14 @@ public record PaymentRequestLinkSnapshot(UUID id, String publicId, long recipien
         }
     }
 
+    /**
+     * Validates open state, expiry, destination wallet, and optional exact amount at acceptance time.
+     * @param destinationWalletId wallet selected by the paying user
+     * @param paymentAmountSats proposed payment amount in integer satoshis
+     * @param now current acceptance instant
+     * @throws IllegalStateException when the request is expired or no longer open
+     * @throws IllegalArgumentException when wallet or amount does not match the request
+     */
     public void requireAccepts(UUID destinationWalletId, long paymentAmountSats, Instant now) {
         requireOpenForLedger();
         if (PaymentRequestLifecyclePolicy.isExpired(
@@ -43,6 +65,7 @@ public record PaymentRequestLinkSnapshot(UUID id, String publicId, long recipien
         }
     }
 
+    /** Returns request state metadata while redacting the public identifier. */
     @Override
     public String toString() {
         return "PaymentRequestLinkSnapshot[id=" + id + ", recipientUserId=" + recipientUserId

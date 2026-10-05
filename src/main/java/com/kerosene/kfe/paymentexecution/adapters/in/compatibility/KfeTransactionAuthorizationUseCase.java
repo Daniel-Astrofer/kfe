@@ -9,12 +9,15 @@ import com.kerosene.kfe.paymentexecution.application.port.in.AuthorizePaymentUse
 @Service
 public class KfeTransactionAuthorizationUseCase {
 
+    /** Application policy that evaluates required payment authorization factors. */
     private final AuthorizePaymentUseCase authorization;
 
+    /** Supplies the authorization policy delegated to by this compatibility bridge. */
     public KfeTransactionAuthorizationUseCase(AuthorizePaymentUseCase authorization) {
         this.authorization = authorization;
     }
 
+    /** Maps a legacy request and delegates its authorization decision to the core use case. */
     public void authorize(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         authorization.authorize(LegacyPaymentSubmissionMapper.toCommand(userId, request, deviceHash));
     }

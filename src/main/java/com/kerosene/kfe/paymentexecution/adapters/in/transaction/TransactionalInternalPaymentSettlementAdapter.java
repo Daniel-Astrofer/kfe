@@ -12,12 +12,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class TransactionalInternalPaymentSettlementAdapter implements SettleInternalPaymentUseCase {
+    /** Internal settlement workflow delegated under the mandatory transaction. */
     private final SettleInternalPaymentService service;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalInternalPaymentSettlementAdapter(SettleInternalPaymentService service) {
         this.service = service;
     }
 
+    /** Applies internal settlement as part of the existing caller transaction. */
     @Override
     public PaymentExecutionStatusChanged settle(SettleInternalPaymentCommand command) {
         return service.settle(command);

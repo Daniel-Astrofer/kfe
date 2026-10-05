@@ -18,14 +18,23 @@ import java.util.Objects;
 
 /** Route only inside the owning submit; this service persists work but never dispatches a rail. */
 public final class RouteLockedPaymentService {
+    /** Locks and reads the execution that has passed quorum and funds reservation. */
     private final PaymentRoutingStatePort state;
+    /** Settles internal transfers without creating an external-rail command. */
     private final SettleInternalPaymentUseCase internal;
+    /** Persists external work to the transactional execution outbox. */
     private final ExecutionCommandStore commands;
+    /** Records and validates the transition from LOCKED to the routing outcome. */
     private final PaymentExecutionLifecycleUseCase lifecycle;
+    /** Writes the payment statement entry within the surrounding transaction. */
     private final PaymentStatementPort statements;
+    /** Schedules initiated-payment notification effects. */
     private final PaymentInitiatedNotificationPort notifications;
+    /** Notifies the vault subsystem about an outbound payment intent. */
     private final PaymentVaultIntentPort vault;
 
+    /** Creates the routing service with transaction state and required settlement/outbox ports. */
+    /** @param state locked execution state port @param internal internal transfer settlement use case @param commands transactional external execution command store @param lifecycle execution state transition use case @param statements payment statement writer @param notifications initiation notification port @param vault outbound vault intent port */
     public RouteLockedPaymentService(PaymentRoutingStatePort state, SettleInternalPaymentUseCase internal,
             ExecutionCommandStore commands, PaymentExecutionLifecycleUseCase lifecycle, PaymentStatementPort statements,
             PaymentInitiatedNotificationPort notifications, PaymentVaultIntentPort vault) {
@@ -33,6 +42,13 @@ public final class RouteLockedPaymentService {
         this.statements = statements; this.notifications = notifications; this.vault = vault;
     }
 
+    /**
+     * Settles INTERNAL payments directly; for other rails, validates authorized references,
+     * enqueues external work, marks EXECUTING, flushes the execution row, and records associated
+     * statement, notification, and vault effects. The method never calls the rail itself.
+     * @param command routing inputs produced by the authorized submission
+     * @return resulting execution, selected rail, and outbound outbox identifier when applicable
+     */
     public PaymentRoutingResult route(RouteLockedPaymentCommand command) {
         var payment = state.lockAndLoad(command.userId(), command.executionId());
         payment.requireReadyFor(command.userId(), command.executionId());
@@ -64,6 +80,8 @@ public final class RouteLockedPaymentService {
                 payment.direction() == PaymentDirection.OUTBOUND ? outboxId : null);
     }
 
+    /** Confirms that the lifecycle adapter recorded the expected transition from LOCKED. */
+    /** @param event lifecycle transition result @param id expected execution identifier @param target expected resulting state @throws IllegalStateException when the event does not confirm the transition */
     private static void requireConfirmed(PaymentExecutionStatusChanged event, PaymentExecutionId id, ExecutionStatus target) {
         if (event == null || !id.equals(event.executionId()) || event.previousStatus() != ExecutionStatus.LOCKED
                 || event.currentStatus() != target) {
@@ -71,5 +89,7 @@ public final class RouteLockedPaymentService {
         }
     }
 
+    /** Trims an optional reference and treats null or blank text as absent. */
+    /** @param value input reference @return trimmed nonblank value or null */
     private static String clean(String value) { return value == null || value.isBlank() ? null : value.trim(); }
 }

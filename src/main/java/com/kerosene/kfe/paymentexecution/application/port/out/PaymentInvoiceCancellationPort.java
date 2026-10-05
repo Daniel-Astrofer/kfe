@@ -8,5 +8,7 @@ import com.kerosene.kfe.paymentexecution.application.command.CancelPaymentInvoic
  */
 public interface PaymentInvoiceCancellationPort {
 
+    /** Calls the provider-side cancellation API; the external effect cannot be undone by local rollback. */
+    /** @param command owner and provider invoice identifiers @return true only when provider confirms cancellation */
     boolean cancel(CancelPaymentInvoiceCommand command);
 }

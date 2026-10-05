@@ -8,12 +8,22 @@ import com.kerosene.kfe.paymentexecution.domain.model.PaymentExecutionId;
 
 /** Read-only eligibility, independent of cancellation effects, persistence and response mappers. */
 public final class PaymentCancellationHintsService implements PaymentCancellationHintsUseCase {
+    /** Participant-visible, ownership-aware state query for cancellation UI hints. */
     private final PaymentCancellationQueryPort query;
 
+    /** Creates read-only eligibility resolution with the participant visibility query. */
+    /** @param query transaction visibility and cancellation-state port */
     public PaymentCancellationHintsService(PaymentCancellationQueryPort query) {
         this.query = query;
     }
 
+    /**
+     * Returns cancellation hints only for a visible transaction owned by the caller,
+     * preferring payment-request cancellation when the execution belongs to a request.
+     * @param userId authenticated account identifier
+     * @param executionId requested execution identifier
+     * @return cancellable target details, or an empty result for invalid, invisible, or ineligible state
+     */
     @Override
     public PaymentCancellationHints hintsFor(long userId, PaymentExecutionId executionId) {
         if (userId <= 0L || executionId == null) {

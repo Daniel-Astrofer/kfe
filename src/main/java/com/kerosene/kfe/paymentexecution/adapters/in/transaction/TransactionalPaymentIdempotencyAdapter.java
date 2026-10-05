@@ -13,17 +13,23 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
 
+/** Separates read-only idempotency lookup from reservation joined to the caller transaction. */
 @Component
 public class TransactionalPaymentIdempotencyAdapter implements GetIdempotentPaymentUseCase, ReservePaymentIdempotencyUseCase {
+    /** Read-only lookup service for prior payments bound to an idempotency key. */
     private final GetIdempotentPaymentService queries;
+    /** Transactional reservation service that binds the key to a single request fingerprint. */
     private final ReservePaymentIdempotencyService reservations;
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentIdempotencyAdapter(GetIdempotentPaymentService queries, ReservePaymentIdempotencyService reservations) {
         this.queries = queries;
         this.reservations = reservations;
     }
+    /** Reads an owner-scoped idempotent payment result in a read-only transaction. */
     @Override
     @Transactional(readOnly = true)
     public Optional<PaymentExecutionResult> find(GetIdempotentPaymentQuery query) { return queries.find(query); }
+    /** Reserves payment funds under the caller-owned submission transaction. */
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public PaymentIdempotencyReservationResult reserve(ReservePaymentIdempotencyCommand command) { return reservations.reserve(command); }

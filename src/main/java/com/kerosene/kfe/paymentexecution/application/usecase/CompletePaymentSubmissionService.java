@@ -13,11 +13,17 @@ import java.util.Objects;
 
 /** Completion only: no authorization, money movement, state transition or provider dispatch. */
 public final class CompletePaymentSubmissionService {
+    /** Loads the completed payment snapshot and creates its participant response projection. */
     private final PaymentSubmissionCompletionPort state;
+    /** Marks the matching idempotency reservation complete with the resulting payment state. */
     private final IdempotencyReservationStore idempotency;
+    /** Resolves the destination owner for inbound-payment dashboard notifications. */
     private final PaymentWalletLookupPort wallets;
+    /** Schedules dashboard refresh notifications only after successful transaction commit. */
     private final PaymentSubmissionDashboardPort dashboards;
 
+    /** Creates submission completion with persisted-state, idempotency, wallet, and dashboard ports. */
+    /** @param state completion snapshot and response projection port @param idempotency idempotency reservation store @param wallets destination wallet lookup port @param dashboards after-commit dashboard notifier */
     public CompletePaymentSubmissionService(PaymentSubmissionCompletionPort state, IdempotencyReservationStore idempotency,
             PaymentWalletLookupPort wallets, PaymentSubmissionDashboardPort dashboards) {
         this.state = state;
@@ -26,6 +32,13 @@ public final class CompletePaymentSubmissionService {
         this.dashboards = dashboards;
     }
 
+    /**
+     * Locks and verifies the persisted payment, completes the matching idempotency record,
+     * schedules affected dashboards, and validates that the response matches persisted identity
+     * and state. It does not authorize, move funds, transition execution, or dispatch a provider.
+     * @param command completion inputs tied to the owning submission
+     * @return verified payment execution response
+     */
     public PaymentExecutionResult complete(CompletePaymentSubmissionCommand command) {
         Objects.requireNonNull(command, "completion command is required");
         var snapshot = Objects.requireNonNull(state.lockAndLoad(command.userId(), command.executionId()),
@@ -47,6 +60,8 @@ public final class CompletePaymentSubmissionService {
         return response;
     }
 
+    /** Resolves a distinct recipient for inbound payments and validates destination ownership. */
+    /** @param snapshot immutable persisted completion snapshot @return destination account for inbound flow, or null for outbound */
     private Long recipient(PaymentSubmissionCompletionSnapshot snapshot) {
         if (snapshot.direction() == PaymentDirection.OUTBOUND) { return null; }
         var destination = wallets.findById(snapshot.destinationWalletId())

@@ -9,6 +9,8 @@ import java.util.Optional;
 /** Durable client-scoped idempotency boundary. */
 public interface IdempotencyReservationStore {
 
+    /** Reads one account-scoped key reservation without mutating it. */
+    /** @param userId reservation owner @param key client-provided idempotency key @return reservation when present */
     Optional<IdempotencyReservation> find(long userId, IdempotencyKey key);
 
     /** Atomic insert only in the caller's READ_COMMITTED financial transaction. False never overwrites an existing row. */

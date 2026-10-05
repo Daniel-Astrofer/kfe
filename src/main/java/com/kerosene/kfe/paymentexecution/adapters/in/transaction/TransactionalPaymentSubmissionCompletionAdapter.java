@@ -8,10 +8,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Requires the caller submission transaction to save completion and its projection atomically. */
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class TransactionalPaymentSubmissionCompletionAdapter implements CompletePaymentSubmissionUseCase {
+    /** Submission completion workflow delegated within the caller commit. */
     private final CompletePaymentSubmissionService service;
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentSubmissionCompletionAdapter(CompletePaymentSubmissionService service) { this.service = service; }
+    /** Saves the completion and consumer projection atomically in the caller transaction. */
     @Override public PaymentExecutionResult complete(CompletePaymentSubmissionCommand command) { return service.complete(command); }
 }

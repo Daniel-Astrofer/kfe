@@ -10,13 +10,23 @@ import java.util.Objects;
 
 /** Scalar request validation; Bitcoin/Lightning integration checks stay behind the destination port. */
 public final class ValidatePaymentRequestService {
+    /** Maximum accepted principal or fee amount expressed as integer satoshis. */
     private static final long MAX_SATOSHIS = 2_100_000_000_000_000L;
+    /** Validates rail-specific destination syntax through its integration adapter. */
     private final PaymentDestinationValidationPort destinations;
 
+    /** Creates scalar validation with the destination-specific adapter. */
+    /** @param destinations rail destination validation port */
     public ValidatePaymentRequestService(PaymentDestinationValidationPort destinations) {
         this.destinations = Objects.requireNonNull(destinations, "payment destination validation port is required");
     }
 
+    /**
+     * Validates idempotency key length, positive bounded amount, nonnegative bounded fee,
+     * rail/direction compatibility, and required external outbound destinations.
+     * @param command scalar payment request fields
+     * @throws IllegalArgumentException when any request invariant is invalid
+     */
     public void validate(ValidatePaymentRequestCommand command) {
         Objects.requireNonNull(command, "payment validation command is required");
         if (command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {

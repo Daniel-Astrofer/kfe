@@ -14,13 +14,16 @@ import java.util.Map;
 @Component
 public class TransactionalPaymentExecutionLifecycleAdapter implements PaymentExecutionLifecycleUseCase {
 
+    /** Lifecycle workflow that records state and audit events. */
     private final PaymentExecutionLifecycleService lifecycleService;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentExecutionLifecycleAdapter(
             PaymentExecutionLifecycleService lifecycleService) {
         this.lifecycleService = lifecycleService;
     }
 
+    /** Persists the current lifecycle state and audit event transactionally. */
     @Override
     @Transactional
     public void recordCurrentState(
@@ -31,6 +34,7 @@ public class TransactionalPaymentExecutionLifecycleAdapter implements PaymentExe
         lifecycleService.recordCurrentState(executionId, currentStatus, eventType, auditPayload);
     }
 
+    /** Applies a lifecycle transition and audit event in one transaction. */
     @Override
     @Transactional
     public PaymentExecutionStatusChanged transition(

@@ -10,16 +10,36 @@ import java.util.List;
 
 /** Binary gate rules and orchestration; used only within the owning, authorized submit transaction. */
 public final class PaymentSettlementGateService {
+    /** Maximum supported integer amount in satoshis (21 million BTC). */
     private static final long MAX_SATOSHIS = 2_100_000_000_000_000L;
+    /** Locks and reads source-wallet available balance inside the submit transaction. */
     private final PaymentGateBalancePort balance;
+    /** Supplies ledger-derived solvency snapshots when the proof-of-reserve gate is enabled. */
     private final PaymentGateSolvencyPort solvency;
+    /** Obtains consensus evidence for the proposal hash. */
     private final PaymentGateQuorumPort quorum;
+    /** Supplies outbound Lightning capacity, health, jamming, and circuit-breaker state. */
     private final PaymentGateLightningPort lightning;
+    /** Identifies whether the current runtime is production. */
     private final PaymentGateEnvironmentPort environment;
+    /** Persists an immutable gate decision under the submit transaction's existing lock. */
     private final PaymentGateAuditPort audit;
+    /** Emits gate, liquidity, and solvency outcome measurements. */
     private final PaymentGateTelemetryPort telemetry;
+    /** Runtime policy controlling solvency and Lightning-risk enforcement thresholds. */
     private final SettlementGatePolicy policy;
 
+    /**
+     * Creates the settlement gate with all probes, audit/telemetry sinks, and policy.
+     * @param balance source wallet balance lock and read port
+     * @param solvency ledger-derived solvency snapshot port
+     * @param quorum consensus evidence port
+     * @param lightning Lightning capacity and risk port
+     * @param environment production-mode detector
+     * @param audit decision audit sink
+     * @param telemetry gate telemetry sink
+     * @param policy enforcement policy
+     */
     public PaymentSettlementGateService(PaymentGateBalancePort balance, PaymentGateSolvencyPort solvency,
             PaymentGateQuorumPort quorum, PaymentGateLightningPort lightning, PaymentGateEnvironmentPort environment,
             PaymentGateAuditPort audit, PaymentGateTelemetryPort telemetry, SettlementGatePolicy policy) {
@@ -27,6 +47,14 @@ public final class PaymentSettlementGateService {
         this.environment = environment; this.audit = audit; this.telemetry = telemetry; this.policy = policy;
     }
 
+    /**
+     * Evaluates all gates, writes audit and telemetry, then rejects failed results.
+     * Must run in the owning authorized submission transaction; it does not create
+     * a nested audit transaction or convert a diagnostic result into a retry token.
+     * @param command immutable facts about the execution being submitted
+     * @return quorum counts required by downstream settlement handling
+     * @throws SettlementGateRejectedException when any required gate fails
+     */
     public PaymentSettlementGateResult requirePass(PaymentSettlementGateCommand command) {
         var result = evaluate(command);
         // No nested audit transaction: the submit already holds the shared audit appender lock.
@@ -61,6 +89,7 @@ public final class PaymentSettlementGateService {
         return new SettlementGateEvaluation(orderFlags(evaluations), mpc.ackCount(), mpc.healthyNodes());
     }
 
+    /** Requires that idempotency has been reserved and the request key is present. */
     private FlagEvaluation evaluateIdempotencia(PaymentSettlementGateCommand command) {
         if (!command.idempotencyReserved()) {
             return FlagEvaluation.fail(SettlementFlag.V_IDEMPOTENCIA, "IDEMPOTENCY_NOT_RESERVED");
@@ -71,6 +100,7 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_IDEMPOTENCIA, "IDEMPOTENCY_RESERVED_DB");
     }
 
+    /** Validates positive integer amounts, nonnegative fee, maximum range, and sum overflow. */
     private FlagEvaluation evaluateAtomicidade(PaymentSettlementGateCommand command) {
         if (command.amountSats() <= 0L) {
             return FlagEvaluation.fail(SettlementFlag.V_ATOMICIDADE, "AMOUNT_NOT_POSITIVE");
@@ -94,6 +124,7 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_ATOMICIDADE, "INTEGER_SATS_OK");
     }
 
+    /** Acquires the source-wallet row lock and compares available funds with total debit. */
     private LockSaldoOutcome evaluateLockSaldo(PaymentSettlementGateCommand command) {
         if (!command.requiresSourceReserve()) {
             return new LockSaldoOutcome(
@@ -120,6 +151,7 @@ public final class PaymentSettlementGateService {
         }
     }
 
+    /** Prevents simulated balances in production and records the environment decision. */
     private FlagEvaluation evaluateDinheiroReal() {
         boolean production = environment.isProduction();
         if (production && policy.allowSimulatedBalances()) {
@@ -133,6 +165,7 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_DINHEIRO_REAL, "NON_PRODUCTION_OK");
     }
 
+    /** Checks live outbound Lightning capacity for Lightning withdrawals. */
     private FlagEvaluation evaluateLiquidez(PaymentSettlementGateCommand command) {
         if (!isLightningOutbound(command)) {
             return FlagEvaluation.pass(SettlementFlag.V_LIQUIDEZ, "NOT_APPLICABLE");
@@ -152,10 +185,12 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_LIQUIDEZ, "FREE_OUTBOUND_CAPACITY_OK:" + free);
     }
 
+    /** Emits the current explicit P2P gate result, which is not applicable to this flow. */
     private FlagEvaluation evaluateP2p() {
         return FlagEvaluation.pass(SettlementFlag.V_P2P, "NOT_APPLICABLE");
     }
 
+    /** Requires a proposal hash and evaluates accepted and healthy MPC quorum counts. */
     private MpcOutcome evaluateMpc(PaymentSettlementGateCommand command) {
         if (command.proposalHash() == null || command.proposalHash().isBlank()) {
             return new MpcOutcome(
@@ -248,6 +283,7 @@ public final class PaymentSettlementGateService {
         }
     }
 
+    /** Computes ledger liabilities and eligible assets, then applies the configured solvency gate. */
     private long computeCustomerLiabilities(List<SettlementBalanceSnapshot> balances) {
         long total = 0L;
         for (var b : balances) {
@@ -259,6 +295,7 @@ public final class PaymentSettlementGateService {
         return total;
     }
 
+    /** Sums available balances assigned to the system-profit role. */
     private long computeSystemProfitBalance(List<SettlementBalanceSnapshot> balances) {
         long total = 0L;
         for (var b : balances) {
@@ -269,6 +306,7 @@ public final class PaymentSettlementGateService {
         return total;
     }
 
+    /** Sums observed asset amounts for customer-role balances. */
     private long computeEligibleAssets(List<SettlementBalanceSnapshot> balances) {
         long total = 0L;
         for (var b : balances) {
@@ -279,6 +317,7 @@ public final class PaymentSettlementGateService {
         return total;
     }
 
+    /** Checks the Lightning jamming signal and applies strict or beta-limited policy. */
     private FlagEvaluation evaluateNoJamming(PaymentSettlementGateCommand command) {
         if (!isLightningOutbound(command)) {
             return FlagEvaluation.pass(SettlementFlag.V_NO_JAMMING, "NOT_APPLICABLE");
@@ -293,6 +332,7 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_NO_JAMMING, "BETA_LIMITED:" + check.reason());
     }
 
+    /** Fails Lightning withdrawals while the outbound circuit is open or gateway is offline. */
     private FlagEvaluation evaluateCircuitBreaker(PaymentSettlementGateCommand command) {
         if (!isLightningOutbound(command)) {
             return FlagEvaluation.pass(SettlementFlag.V_CIRCUIT_BREAKER, "NOT_APPLICABLE");
@@ -309,10 +349,12 @@ public final class PaymentSettlementGateService {
         return FlagEvaluation.pass(SettlementFlag.V_CIRCUIT_BREAKER, "CIRCUIT_CLOSED");
     }
 
+    /** Converts unavailable Lightning risk evidence into a fail-closed flag result. */
     private FlagEvaluation lightningRiskFlag(SettlementFlag flag, String missingReason) {
         return FlagEvaluation.fail(flag, missingReason);
     }
 
+    /** Identifies payments that consume outbound Lightning capacity. */
     private boolean isLightningOutbound(PaymentSettlementGateCommand command) {
         return command.rail() == PaymentRail.LIGHTNING && command.direction() == PaymentDirection.OUTBOUND;
     }
@@ -326,6 +368,7 @@ public final class PaymentSettlementGateService {
         return message.length() > 120 ? message.substring(0, 120) : message;
     }
 
+    /** Orders one evaluation per declared settlement flag for stable API and audit output. */
     private static List<FlagEvaluation> orderFlags(List<FlagEvaluation> evaluations) {
         List<FlagEvaluation> ordered = new ArrayList<>();
         for (SettlementFlag flag : SettlementFlag.values()) {
@@ -337,6 +380,25 @@ public final class PaymentSettlementGateService {
         return ordered;
     }
 
-    private record LockSaldoOutcome(FlagEvaluation lockFlag, FlagEvaluation saldoFlag, Long availableSats) {}
-    private record MpcOutcome(FlagEvaluation flag, int ackCount, int healthyNodes) {}
+    /**
+     * Result of the combined row-lock and available-balance probe.
+     * @param lockFlag whether a database row lock was acquired
+     * @param saldoFlag whether the locked balance covers the full debit
+     * @param availableSats available satoshis observed under the lock, or null if unavailable
+     */
+    private record LockSaldoOutcome(
+            FlagEvaluation lockFlag,
+            FlagEvaluation saldoFlag,
+            Long availableSats) {}
+
+    /**
+     * Consensus flag and member counts returned by the quorum probe.
+     * @param flag pass/fail result for the MPC signature quorum
+     * @param ackCount number of accepted quorum acknowledgements
+     * @param healthyNodes number of healthy quorum members observed
+     */
+    private record MpcOutcome(
+            FlagEvaluation flag,
+            int ackCount,
+            int healthyNodes) {}
 }

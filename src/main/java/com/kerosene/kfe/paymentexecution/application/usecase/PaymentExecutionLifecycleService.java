@@ -12,9 +12,13 @@ import java.util.Map;
 /** Framework-free lifecycle coordination. Transactionality is supplied by an inbound adapter. */
 public final class PaymentExecutionLifecycleService {
 
+    /** Loads and persists aggregate execution state transitions. */
     private final PaymentExecutionRepository repository;
+    /** Writes a corresponding audit row in the caller's transaction. */
     private final PaymentExecutionAuditPort auditPort;
 
+    /** Creates lifecycle coordination with persistence and audit ports. */
+    /** @param repository execution aggregate repository @param auditPort transactional lifecycle audit writer */
     public PaymentExecutionLifecycleService(
             PaymentExecutionRepository repository,
             PaymentExecutionAuditPort auditPort) {
@@ -22,6 +26,8 @@ public final class PaymentExecutionLifecycleService {
         this.auditPort = auditPort;
     }
 
+    /** Records an audit event only if persisted state still equals the expected current status. */
+    /** @param executionId target execution @param currentStatus expected current state @param eventType audit event discriminator @param auditPayload event-specific audit fields @throws IllegalStateException when current status has changed */
     public void recordCurrentState(
             PaymentExecutionId executionId,
             ExecutionStatus currentStatus,
@@ -36,6 +42,8 @@ public final class PaymentExecutionLifecycleService {
         auditPort.record(executionId, eventType, null, currentStatus, auditPayload);
     }
 
+    /** Transitions an execution aggregate, persists the new state, and records its audit event. */
+    /** @param executionId target execution @param targetStatus requested next state @param eventType audit event discriminator @param auditPayload event-specific audit fields @return immutable state-change event */
     public PaymentExecutionStatusChanged transition(
             PaymentExecutionId executionId,
             ExecutionStatus targetStatus,
@@ -53,6 +61,8 @@ public final class PaymentExecutionLifecycleService {
         return event;
     }
 
+    /** Loads an execution aggregate or reports that the requested transaction does not exist. */
+    /** @param executionId target execution identity @return persisted aggregate to transition */
     private PaymentExecution load(PaymentExecutionId executionId) {
         return repository.findById(executionId)
                 .orElseThrow(() -> new IllegalArgumentException("KFE transaction not found."));

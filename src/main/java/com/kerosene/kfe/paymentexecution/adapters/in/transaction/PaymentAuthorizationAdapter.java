@@ -15,12 +15,15 @@ import java.util.Map;
 /** Authorization must finish before opening the financial transaction, including direct calls without a proxy. */
 @Component
 public class PaymentAuthorizationAdapter implements AuthorizePaymentUseCase {
+    /** Core authorization policy that evaluates payment factors before ledger mutation. */
     private final AuthorizePaymentService service;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public PaymentAuthorizationAdapter(AuthorizePaymentService service) {
         this.service = service;
     }
 
+    /** Delegates authorization before writes after asserting that no transaction is active. */
     @Override
     public void authorize(SubmitPaymentCommand command) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {

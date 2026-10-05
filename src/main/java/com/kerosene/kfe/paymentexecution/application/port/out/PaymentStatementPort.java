@@ -4,5 +4,6 @@ import com.kerosene.kfe.paymentexecution.application.command.RecordPaymentStatem
 
 /** Writes the participant statement in the financial caller's transaction. */
 public interface PaymentStatementPort {
+    /** Records the participant-facing statement entry described by the command. */
     void record(RecordPaymentStatementCommand command);
 }

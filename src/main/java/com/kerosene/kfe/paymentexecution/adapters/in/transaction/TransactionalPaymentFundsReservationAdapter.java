@@ -12,10 +12,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class TransactionalPaymentFundsReservationAdapter implements ReservePaymentFundsUseCase {
+    /** Funds reservation workflow delegated inside the payment submission transaction. */
     private final ReservePaymentFundsService service;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentFundsReservationAdapter(ReservePaymentFundsService service) { this.service = service; }
 
+    /** Reserves payment funds under the caller-owned submission transaction. */
     @Override
     public PaymentExecutionStatusChanged reserve(ReservePaymentFundsCommand command) { return service.reserve(command); }
 }

@@ -4,11 +4,14 @@ import com.kerosene.kfe.paymentexecution.application.command.SubmitPaymentComman
 import com.kerosene.kfe.paymentexecution.application.result.PaymentExecutionResult;
 import com.kerosene.kfe.paymentexecution.domain.model.IdempotencyKey;
 
+/** Maps validated HTTP data to application commands and application results to API DTOs. */
 final class PaymentExecutionHttpMapper {
 
+    /** Prevents construction of this stateless mapping utility. */
     private PaymentExecutionHttpMapper() {
     }
 
+    /** Adds the authenticated owner and device context to the application's submission command. */
     static SubmitPaymentCommand toSubmitCommand(long userId, SubmitPaymentRequest request, String deviceHash) {
         return new SubmitPaymentCommand(
                 userId,
@@ -32,6 +35,7 @@ final class PaymentExecutionHttpMapper {
                 deviceHash);
     }
 
+    /** Projects an application result into the stable HTTP response representation. */
     static PaymentExecutionResponse toResponse(PaymentExecutionResult result) {
         return new PaymentExecutionResponse(
                 result.id(), result.status(), result.displayStatus(), result.productStatus(),

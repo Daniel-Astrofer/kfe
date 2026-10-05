@@ -14,17 +14,21 @@ import java.util.UUID;
 @Component
 @Transactional
 public class TransactionalPaymentCancellationAdapter implements CancelPaymentUseCase, CancelPaymentRequestUseCase {
+    /** Cancellation policy and persistence workflow executed in this transaction. */
     private final CancelPaymentService service;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentCancellationAdapter(CancelPaymentService service) {
         this.service = service;
     }
 
+    /** Cancels an execution under the adapter-owned transaction. */
     @Override
     public PaymentExecutionResult cancel(CancelPaymentCommand command) {
         return service.cancel(command);
     }
 
+    /** Cancels a payment request under the same transaction boundary. */
     @Override
     public UUID cancelPaymentRequest(CancelPaymentRequestCommand command) {
         return service.cancelPaymentRequest(command);

@@ -22,13 +22,18 @@ import com.kerosene.kfe.bootstrap.time.Utc;
 
 import java.util.UUID;
 
+/** Builds legacy wallet, address, transaction, and frozen statement payloads for KFE clients. */
 @Component
 public class KfeResponseMapper {
 
+    /** Resolves the current active address shown in wallet responses. */
     private final KfeWalletAddressRepository addressRepository;
+    /** Resolves wallet labels and participant ownership for response perspectives. */
     private final KfeWalletRepository walletRepository;
+    /** Computes participant-visible cancellation capability and linked request status. */
     private final PaymentCancellationHintsUseCase cancellationHints;
 
+    /** Supplies read repositories and cancellation policy used to build response projections. */
     public KfeResponseMapper(
             KfeWalletAddressRepository addressRepository,
             KfeWalletRepository walletRepository,
@@ -38,6 +43,7 @@ public class KfeResponseMapper {
         this.cancellationHints = cancellationHints;
     }
 
+    /** Maps a wallet entity and its newest active address into the legacy wallet DTO. */
     public KfeWalletResponse toWalletResponse(KfeWalletEntity wallet) {
         String activeAddress = addressRepository
                 .findTopByWalletIdAndStatusOrderByCreatedAtDesc(wallet.getId(), KfeWalletAddressStatus.ACTIVE)
@@ -59,6 +65,7 @@ public class KfeResponseMapper {
                 Utc.toInstant(wallet.getUpdatedAt()));
     }
 
+    /** Maps a persisted wallet address and converts stored UTC timestamps to instants. */
     public KfeAddressResponse toAddressResponse(KfeWalletAddressEntity address) {
         return new KfeAddressResponse(
                 address.getId(),
@@ -73,10 +80,12 @@ public class KfeResponseMapper {
                 Utc.toInstant(address.getRetiredAt()));
     }
 
+    /** Builds the transaction response from the transaction owner's perspective. */
     public KfeTransactionResponse toTransactionResponse(KfeTransactionEntity tx) {
         return toTransactionResponse(tx, tx.getUserId());
     }
 
+    /** Builds a participant-relative response with safe labels, cancellation hints, and sanitized failures. */
     public KfeTransactionResponse toTransactionResponse(KfeTransactionEntity tx, Long requestingUserId) {
         UUID perspectiveId = perspectiveWalletId(tx, requestingUserId);
         String sourceLabel = walletLabel(tx.getSourceWalletId());
@@ -137,6 +146,7 @@ public class KfeResponseMapper {
                 tx.getAccountingStatus());
     }
 
+    /** Returns no cancellation capability when identifiers are missing or the hint query fails. */
     private PaymentCancellationHints cancelHints(
             KfeTransactionEntity tx, Long requestingUserId) {
         if (tx == null || tx.getId() == null || requestingUserId == null) {
@@ -154,6 +164,7 @@ public class KfeResponseMapper {
      * frozen rows stay complete (rail, amounts, labels, refs) — incomplete maps were the
      * root cause of sparse Lightning history on the client.
      */
+    /** Creates the canonical snapshot used by home and statement consumers for complete frozen rows. */
     public java.util.Map<String, Object> buildDisplayPayload(KfeTransactionEntity tx, Long requestingUserId) {
         Long uid = requestingUserId != null ? requestingUserId : tx.getUserId();
         UUID perspectiveId = perspectiveWalletId(tx, uid);
@@ -208,6 +219,7 @@ public class KfeResponseMapper {
         return payload;
     }
 
+    /** Hides chain confirmation counts for Lightning and internal ledger transfers. */
     private static int displayConfirmations(KfeTransactionEntity tx) {
         if (tx.getRail() == KfeRail.LIGHTNING || tx.getRail() == KfeRail.INTERNAL) {
             return 0;
@@ -215,10 +227,12 @@ public class KfeResponseMapper {
         return tx.getConfirmations();
     }
 
+    /** Converts an optional UUID to the string representation used by display payloads. */
     private static String uuidString(UUID id) {
         return id != null ? id.toString() : null;
     }
 
+    /** Reads a nonblank label for a wallet, returning null when no label is available. */
     private String walletLabel(UUID walletId) {
         if (walletId == null) {
             return null;
@@ -229,6 +243,7 @@ public class KfeResponseMapper {
                 .orElse(null);
     }
 
+    /** Derives a concise participant-relative counterparty label without exposing full invoices. */
     private String counterpartyLabel(
             KfeTransactionEntity tx,
             Long requestingUserId,
@@ -284,6 +299,7 @@ public class KfeResponseMapper {
         return cold ? "Endereço cold externo" : "Endereço externo";
     }
 
+    /** Determines whether the execution credits the requesting participant, including internal transfers. */
     private boolean isInboundForRequester(KfeTransactionEntity tx, Long requestingUserId) {
         if (tx.getDirection() == KfeDirection.INBOUND) {
             return true;
@@ -303,6 +319,7 @@ public class KfeResponseMapper {
     /**
      * Stable provider taxonomy for clients (COLD_OBSERVE, COLD_SPEND, …).
      */
+    /** Maps provider implementation names to the stable taxonomy exposed to clients. */
     static String normalizeProvider(String provider) {
         if (provider == null || provider.isBlank()) {
             return null;
@@ -329,6 +346,7 @@ public class KfeResponseMapper {
         return p;
     }
 
+    /** Abbreviates long addresses, hashes, or references while retaining their identifying ends. */
     private static String shorten(String value, int head, int tail) {
         if (value.length() <= head + tail + 1) {
             return value;
@@ -336,6 +354,7 @@ public class KfeResponseMapper {
         return value.substring(0, head) + "…" + value.substring(value.length() - tail);
     }
 
+    /** Trims a nonblank display string and maps blank content to null. */
     private String emptyToNull(String value) {
         return hasText(value) ? value.trim() : null;
     }
@@ -344,10 +363,12 @@ public class KfeResponseMapper {
      * KFE stores UTC wall-clock in {@code LocalDateTime} columns. Emit Instant with explicit
      * {@code Z} so Flutter converts to the device timezone (e.g. America/Sao_Paulo).
      */
+    /** Interprets stored UTC wall-clock time as an Instant with an explicit UTC offset. */
     private static java.time.Instant toUtcInstant(java.time.LocalDateTime value) {
         return Utc.toInstant(value);
     }
 
+    /** Selects the wallet visible from the requesting participant's side of the execution. */
     private UUID perspectiveWalletId(KfeTransactionEntity tx, Long requestingUserId) {
         if (requestingUserId == null) {
             return null;
@@ -358,6 +379,7 @@ public class KfeResponseMapper {
         return tx.getDestinationWalletId();
     }
 
+    /** Tests whether a display string contains non-whitespace content. */
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
@@ -367,6 +389,7 @@ public class KfeResponseMapper {
      * Map known codes + safe substrings of the raw provider message to short copy;
      * FE can still localize from {@code failureCode}.
      */
+    /** Reduces provider/internal failure details to approved short client-facing copy. */
     static String sanitizeFailureMessage(String failureCode, String failureMessage) {
         String raw = failureMessage != null ? failureMessage.toLowerCase(java.util.Locale.ROOT) : "";
         // Prefer provider-hinted reasons even when code is generic (PROVIDER_FINAL_FAILURE).
@@ -408,6 +431,7 @@ public class KfeResponseMapper {
         };
     }
 
+    /** Returns the product explanation for a wallet kind, including spendability boundaries. */
     public String walletTypeDescription(KfeWalletKind kind) {
         if (kind == null) {
             return "Conta Assegurada";

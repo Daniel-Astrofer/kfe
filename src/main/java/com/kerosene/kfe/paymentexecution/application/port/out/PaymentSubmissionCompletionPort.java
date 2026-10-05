@@ -6,6 +6,8 @@ import com.kerosene.kfe.paymentexecution.domain.model.PaymentSubmissionCompletio
 
 /** Owner-scoped persistence and consumer projection within the submission transaction. */
 public interface PaymentSubmissionCompletionPort {
+    /** Locks and loads a submission owned by the user before completion. */
     PaymentSubmissionCompletionSnapshot lockAndLoad(long userId, PaymentExecutionId executionId);
+    /** Persists the expected state transition and updates its consumer projection atomically. */
     PaymentExecutionResult saveAndProject(PaymentSubmissionCompletionSnapshot expected);
 }

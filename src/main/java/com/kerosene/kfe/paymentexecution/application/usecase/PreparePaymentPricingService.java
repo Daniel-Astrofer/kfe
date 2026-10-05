@@ -16,12 +16,18 @@ import java.math.RoundingMode;
 /** Coordinates submission pricing without depending on Spring, persistence, or another context's domain. */
 public final class PreparePaymentPricingService implements PreparePaymentPricingUseCase {
 
+    /** Conversion constant used to format satoshi amounts as BTC display amounts. */
     private static final BigDecimal SATS_PER_BTC = new BigDecimal("100000000");
 
+    /** Supplies a minimum network-fee reserve for outbound on-chain payments. */
     private final PaymentNetworkFeeFloorPort networkFeeFloor;
+    /** Produces the authoritative principal, fee, and total-debit quote. */
     private final PaymentPricingPort pricing;
+    /** Supplies current fiat display rates without affecting settlement values. */
     private final PaymentDisplayRatesPort displayRates;
 
+    /** Creates pricing coordination with fee-floor, quote, and display-rate ports. */
+    /** @param networkFeeFloor outbound on-chain fee reserve calculator @param pricing authoritative payment quote provider @param displayRates current fiat display-rate provider */
     public PreparePaymentPricingService(
             PaymentNetworkFeeFloorPort networkFeeFloor,
             PaymentPricingPort pricing,
@@ -31,6 +37,13 @@ public final class PreparePaymentPricingService implements PreparePaymentPricing
         this.displayRates = displayRates;
     }
 
+    /**
+     * Calculates a bounded network reserve, obtains the authoritative quote, and attaches
+     * BTC-to-fiat display snapshots. Display-rate conversion is informational and never
+     * changes the satoshi quote used for reservation or settlement.
+     * @param command rail, direction, amount, and client fee inputs
+     * @return reserved fee, authoritative quote, and optional display conversions
+     */
     @Override
     public PaymentSubmissionPricing prepare(PreparePaymentPricingCommand command) {
         long reservedNetworkFee = Math.max(0L, command.requestedNetworkFeeSats());
@@ -50,6 +63,8 @@ public final class PreparePaymentPricingService implements PreparePaymentPricing
         return new PaymentSubmissionPricing(reservedNetworkFee, quote, display);
     }
 
+    /** Converts a BTC display amount into a two-decimal fiat snapshot when the rate is positive. */
+    /** @param amountBtc receiver amount expressed in BTC @param btcPrice fiat value per BTC @return fiat amount rounded half-up to two decimals, or null for an unavailable/nonpositive rate */
     private static BigDecimal convertSnapshot(BigDecimal amountBtc, BigDecimal btcPrice) {
         if (btcPrice == null || btcPrice.compareTo(BigDecimal.ZERO) <= 0) {
             return null;

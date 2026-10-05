@@ -14,10 +14,14 @@ import java.util.Optional;
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class TransactionalPaymentRequestLinkAdapter implements PaymentRequestLinkUseCase {
+    /** Payment-request link workflow used by the enclosing submission transaction. */
     private final PaymentRequestLinkService service;
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentRequestLinkAdapter(PaymentRequestLinkService service) { this.service = service; }
+    /** Prepares the request link while joining the caller transaction and lock order. */
     @Override
     public Optional<PreparedPaymentRequestLink> prepare(PreparePaymentRequestLinkCommand command) { return service.prepare(command); }
+    /** Persists submission completion and projection in the caller transaction. */
     @Override
     public void complete(CompletePaymentRequestLinkCommand command) { service.complete(command); }
 }

@@ -21,14 +21,19 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+/** Serves participant-scoped payment execution reads and cancellation requests. */
 @RestController
 @RequestMapping("/kfe/transactions")
 public class PaymentExecutionController {
 
+    /** Retrieves one execution only when visible to the authenticated participant. */
     private final GetPaymentUseCase getPayment;
+    /** Lists executions visible to the authenticated participant with pagination and time filtering. */
     private final ListPaymentsUseCase listPayments;
+    /** Applies the domain cancellation policy to an authenticated participant's execution. */
     private final CancelPaymentUseCase cancelPayment;
 
+    /** Wires the participant-scoped read and cancellation use cases. */
     public PaymentExecutionController(
             GetPaymentUseCase getPayment,
             ListPaymentsUseCase listPayments,
@@ -38,6 +43,7 @@ public class PaymentExecutionController {
         this.cancelPayment = cancelPayment;
     }
 
+    /** Returns one owner-visible execution by its identifier. */
     @GetMapping("/{transactionId}")
     public ResponseEntity<ApiResponse<PaymentExecutionResponse>> get(
             @PathVariable UUID transactionId,
@@ -48,6 +54,7 @@ public class PaymentExecutionController {
                 "KFE transaction retrieved.", PaymentExecutionHttpMapper.toResponse(result)));
     }
 
+    /** Attempts cancellation and returns the resulting execution representation. */
     @PostMapping("/{transactionId}/cancel")
     public ResponseEntity<ApiResponse<PaymentExecutionResponse>> cancel(
             @PathVariable UUID transactionId,
@@ -59,6 +66,7 @@ public class PaymentExecutionController {
                 "KFE transaction cancelled.", PaymentExecutionHttpMapper.toResponse(result)));
     }
 
+    /** Returns a page of owner-visible executions, optionally restricted to a lower time bound. */
     @GetMapping
     public ResponseEntity<ApiResponse<List<PaymentExecutionResponse>>> list(
             @RequestParam(defaultValue = "0") int page,

@@ -7,7 +7,26 @@ import com.kerosene.kfe.paymentexecution.domain.model.PaymentRail;
 
 import java.util.UUID;
 
-/** Stable application message persisted before an external rail is invoked. */
+/**
+ * Stable application message persisted before an external rail is invoked.
+ * It captures normalized execution facts so asynchronous delivery does not depend
+ * on mutable HTTP request state.
+ * @param executionId persisted payment execution identity
+ * @param idempotencyKey key used to make external dispatch retries safe
+ * @param userId owning account identifier
+ * @param rail external payment rail to invoke
+ * @param direction direction interpreted by the selected rail
+ * @param sourceWalletId optional source wallet identifier
+ * @param destinationWalletId optional resolved destination wallet identifier
+ * @param amountSats principal amount in integer satoshis
+ * @param networkFeeSats network fee in integer satoshis
+ * @param totalDebitSats amount plus fees reserved or debited from the source
+ * @param externalReference normalized external destination/reference
+ * @param memo canonical memo associated with the payment
+ * @param quorumProposalHash proposal digest used for settlement quorum validation
+ * @param feeRateSatsPerVbyte optional Bitcoin fee quote rate
+ * @param feeTargetBlocks optional confirmation target used to derive a Bitcoin fee
+ */
 public record ScheduleExternalExecutionCommand(
         PaymentExecutionId executionId,
         IdempotencyKey idempotencyKey,
@@ -25,6 +44,7 @@ public record ScheduleExternalExecutionCommand(
         Long feeRateSatsPerVbyte,
         Integer feeTargetBlocks) {
 
+    /** Validates required execution selectors and prevents negative monetary amounts. */
     public ScheduleExternalExecutionCommand {
         if (executionId == null || idempotencyKey == null || rail == null || direction == null) {
             throw new IllegalArgumentException("execution identity, rail and direction are required");
@@ -34,6 +54,7 @@ public record ScheduleExternalExecutionCommand(
         }
     }
 
+    /** Returns routing metadata while redacting external references and proposal material. */
     @Override
     public String toString() {
         return "ScheduleExternalExecutionCommand[executionId=" + executionId + ", userId=" + userId

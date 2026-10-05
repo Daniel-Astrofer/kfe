@@ -15,13 +15,21 @@ import java.util.Objects;
 
 /** Canonicalize, validate and replay before approval. The result is only for the immediate owning submit. */
 public final class PreflightPaymentService {
+    /** Resolves destination wallets and enforces wallet-level payment constraints. */
     private final PaymentWalletsUseCase wallets;
+    /** Resolves a request's destination into canonical rail reference and memo values. */
     private final PaymentCanonicalDestinationPort canonicalDestinations;
+    /** Applies structural, rail, and amount validation before idempotency replay. */
     private final ValidatePaymentRequestService validation;
+    /** Creates a stable request fingerprint used to bind an idempotency key to request data. */
     private final PaymentRequestFingerprintPort fingerprints;
+    /** Retrieves a matching prior result without creating a new execution. */
     private final GetIdempotentPaymentUseCase replays;
+    /** Performs the required user and device authorization for a new payment. */
     private final AuthorizePaymentUseCase authorization;
 
+    /** Creates the preflight pipeline and rejects any missing collaborator immediately. */
+    /** @param wallets wallet resolution use case @param canonicalDestinations canonical destination resolver @param validation payment request validator @param fingerprints stable request fingerprint port @param replays idempotent result lookup @param authorization authorization use case */
     public PreflightPaymentService(PaymentWalletsUseCase wallets, PaymentCanonicalDestinationPort canonicalDestinations,
             ValidatePaymentRequestService validation, PaymentRequestFingerprintPort fingerprints,
             GetIdempotentPaymentUseCase replays, AuthorizePaymentUseCase authorization) {
@@ -33,6 +41,13 @@ public final class PreflightPaymentService {
         this.authorization = Objects.requireNonNull(authorization, "payment authorization port is required");
     }
 
+    /**
+     * Resolves and canonicalizes the destination, validates the request, and checks for a
+     * matching idempotent result before enforcing self-payment and authorization rules for a new payment.
+     * A replay returns immediately and is intended only for the owning submit operation.
+     * @param command raw transport-independent submission values
+     * @return canonical command, request fingerprint, and optional prior result
+     */
     public PaymentPreflightResult preflight(SubmitPaymentCommand command) {
         Objects.requireNonNull(command, "payment command is required");
         var destinationWallet = wallets.resolveDestinationReference(walletCommand(command));
@@ -51,6 +66,8 @@ public final class PreflightPaymentService {
         return new PaymentPreflightResult(canonical, fingerprint, existing);
     }
 
+    /** Projects submission values into the wallet-selection request contract. */
+    /** @param command payment submission @return wallet resolution input */
     private static ResolvePaymentWalletsCommand walletCommand(SubmitPaymentCommand command) {
         return new ResolvePaymentWalletsCommand(command.userId(), command.rail(), command.direction(),
                 command.sourceWalletId(), command.destinationWalletId(), command.externalReference());

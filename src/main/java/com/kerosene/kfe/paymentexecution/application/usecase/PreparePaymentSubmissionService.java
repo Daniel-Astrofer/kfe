@@ -10,14 +10,32 @@ import java.util.Map;
 
 /** Prepare exactly once within the submit that authorized and created the intent. Never reserves or dispatches. */
 public final class PreparePaymentSubmissionService {
+    /** Locks and updates the payment intent within the caller-owned transaction. */
     private final PaymentSubmissionStatePort state;
+    /** Resolves and validates source and destination wallet selection. */
     private final PaymentWalletsUseCase wallets;
+    /** Calculates the rail-specific quote and complete debit amounts. */
     private final PreparePaymentPricingUseCase pricing;
+    /** Produces the canonical proposal digest checked by the settlement quorum. */
     private final PaymentProposalHashPort hasher;
+    /** Enforces idempotency, funds, quorum, solvency, and rail risk gates. */
     private final PaymentSettlementGateUseCase gate;
+    /** Applies and confirms each legal execution lifecycle transition. */
     private final PaymentExecutionLifecycleUseCase lifecycle;
+    /** Records payment fee-reserve adjustments for operational visibility. */
     private final PaymentSubmissionTelemetryPort telemetry;
 
+    /**
+     * Creates intent preparation with state, wallet, pricing, hashing, gate, lifecycle,
+     * and telemetry collaborators.
+     * @param state locked payment-intent persistence port
+     * @param wallets wallet resolution use case
+     * @param pricing pricing preparation use case
+     * @param hasher canonical payment proposal hash port
+     * @param gate settlement authorization gate
+     * @param lifecycle execution lifecycle transition use case
+     * @param telemetry fee adjustment telemetry port
+     */
     public PreparePaymentSubmissionService(PaymentSubmissionStatePort state, PaymentWalletsUseCase wallets,
             PreparePaymentPricingUseCase pricing, PaymentProposalHashPort hasher, PaymentSettlementGateUseCase gate,
             PaymentExecutionLifecycleUseCase lifecycle, PaymentSubmissionTelemetryPort telemetry) {
@@ -25,6 +43,13 @@ public final class PreparePaymentSubmissionService {
         this.gate = gate; this.lifecycle = lifecycle; this.telemetry = telemetry;
     }
 
+    /**
+     * Validates and locks the intent, resolves wallets and fees, hashes and gates the proposal,
+     * then records VALIDATING and QUORUM_SYNC transitions. It deliberately performs no reserve
+     * or external dispatch; those are later steps in the same owning submission transaction.
+     * @param command normalized values and authorization context for the locked intent
+     * @return prepared submission snapshot and resolved destination
+     */
     public PreparedPaymentSubmission prepare(PreparePaymentSubmissionCommand command) {
         var intent = state.lockAndLoad(command.userId(), command.executionId());
         intent.requireReadyFor(command.userId(), command.executionId(), command.externalReference(), command.paymentRequestPublicId());
@@ -61,6 +86,8 @@ public final class PreparePaymentSubmissionService {
         return new PreparedPaymentSubmission(ready, selection.destination());
     }
 
+    /** Requires the lifecycle adapter to confirm the exact execution and expected transition. */
+    /** @param event transition event returned by the lifecycle port @param id expected execution @param previous required prior state @param target required resulting state @throws IllegalStateException when confirmation is missing or mismatched */
     private static void requireConfirmed(PaymentExecutionStatusChanged event, PaymentExecutionId id,
             ExecutionStatus previous, ExecutionStatus target) {
         if (event == null || !id.equals(event.executionId()) || event.previousStatus() != previous || event.currentStatus() != target) {

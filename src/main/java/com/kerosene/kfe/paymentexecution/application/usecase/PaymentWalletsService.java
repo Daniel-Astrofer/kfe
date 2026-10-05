@@ -12,14 +12,20 @@ import java.util.UUID;
 
 /** Payment-specific wallet decisions, independent of HTTP, JPA and the user-directory transport. */
 public final class PaymentWalletsService {
+    /** Loads owned source/destination wallets and acquires source locks where required. */
     private final PaymentWalletLookupPort wallets;
+    /** Resolves internal recipient usernames to active user accounts. */
     private final PaymentRecipientDirectoryPort recipients;
 
+    /** Creates payment-specific wallet decisions with wallet and recipient lookups. */
+    /** @param wallets wallet ownership and spendability port @param recipients username-to-recipient directory port */
     public PaymentWalletsService(PaymentWalletLookupPort wallets, PaymentRecipientDirectoryPort recipients) {
         this.wallets = wallets;
         this.recipients = recipients;
     }
 
+    /** Resolves an internal destination UUID from a supplied wallet ID, UUID reference, or username. */
+    /** @param command payment direction, source/destination, and destination reference @return resolved destination wallet ID, or null when no destination reference is supplied */
     public UUID resolveDestinationReference(ResolvePaymentWalletsCommand command) {
         if (command.direction() != PaymentDirection.INTERNAL || command.destinationWalletId() != null) {
             return command.destinationWalletId();
@@ -37,6 +43,8 @@ public final class PaymentWalletsService {
                 .orElseThrow(() -> new IllegalArgumentException("Destination user has no active KFE wallet.")).id();
     }
 
+    /** Rejects self-directed wallet transfers and external destinations that map to the source wallet. */
+    /** @param command normalized payment wallet selection request @throws PaymentSelfTransferRejected when sender and destination resolve to the same owned wallet */
     public void requireNotSelfPayment(ResolvePaymentWalletsCommand command) {
         if (command.direction() == PaymentDirection.INTERNAL || command.rail() == PaymentRail.INTERNAL) {
             if (command.sourceWalletId() != null && command.sourceWalletId().equals(command.destinationWalletId())) {
@@ -53,6 +61,12 @@ public final class PaymentWalletsService {
                 .ifPresent(wallet -> { throw new PaymentSelfTransferRejected(); });
     }
 
+    /**
+     * Loads and verifies owned, spendable source and destination snapshots, locking the source
+     * when the rail requires an available-funds reservation.
+     * @param command selection request produced by payment preflight
+     * @return validated source/destination pair for pricing and settlement
+     */
     public PaymentWalletSelection resolve(ResolvePaymentWalletsCommand command) {
         PaymentWalletSnapshot source = null;
         if (command.requiresSourceReserve()) {
@@ -83,6 +97,8 @@ public final class PaymentWalletsService {
         return new PaymentWalletSelection(source, destination);
     }
 
+    /** Trims a destination reference and removes repeated username sigils. */
+    /** @param value raw username or wallet reference @return normalized value, or null for blank input */
     private static String normalize(String value) {
         if (value == null) { return null; }
         String normalized = value.trim();
@@ -90,6 +106,8 @@ public final class PaymentWalletsService {
         return normalized.isBlank() ? null : normalized;
     }
 
+    /** Parses a destination reference as a UUID without treating other references as errors. */
+    /** @param reference normalized reference @return parsed UUID, or null when the reference is not a UUID */
     private static UUID parseUuid(String reference) {
         try { return UUID.fromString(reference); }
         catch (IllegalArgumentException ignored) { return null; }

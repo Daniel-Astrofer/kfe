@@ -11,12 +11,19 @@ import com.kerosene.kfe.paymentexecution.domain.model.PaymentExecutionId;
 
 /** Financial cancellation effects; the caller must already hold the batch fence in its transaction. */
 public final class CancelPaymentEffectsService {
+    /** Reloads the fenced execution before applying any effect. */
     private final PaymentCancellationStatePort state;
+    /** Releases a previously reserved ledger debit when required by the snapshot. */
     private final PaymentLedgerPort ledger;
+    /** Releases reserved rail capacity when required by the snapshot. */
     private final PaymentLiquidityPort liquidity;
+    /** Records the cancellation statement row after state transition. */
     private final PaymentStatementPort statement;
+    /** Records durable cancellation audit data. */
     private final PaymentCancellationAuditPort audit;
 
+    /** Creates the cancellation effect coordinator with state and financial side-effect ports. */
+    /** @param state authoritative cancellation state loader @param ledger reserved debit release port @param liquidity capacity release port @param statement statement writer @param audit cancellation audit port */
     public CancelPaymentEffectsService(
             PaymentCancellationStatePort state, PaymentLedgerPort ledger, PaymentLiquidityPort liquidity,
             PaymentStatementPort statement, PaymentCancellationAuditPort audit) {
@@ -27,6 +34,13 @@ public final class CancelPaymentEffectsService {
         this.audit = audit;
     }
 
+    /**
+     * Reloads execution state after the caller's fence, releases outstanding reservations,
+     * marks the execution cancelled, then records statement and audit effects.
+     * @param executionId execution protected by the caller's request/outbox/execution fences
+     * @param message cancellation reason recorded with state
+     * @throws PaymentCancellationRejected when the current state cannot be cancelled
+     */
     public void cancel(PaymentExecutionId executionId, String message) {
         // Never decide from a snapshot obtained before the caller acquired its fence.
         var previous = state.load(executionId);

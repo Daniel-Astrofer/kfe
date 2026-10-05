@@ -12,8 +12,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class TransactionalPaymentRoutingAdapter implements RouteLockedPaymentUseCase {
+    /** Routing workflow delegated while the caller transaction remains active. */
     private final RouteLockedPaymentService service;
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public TransactionalPaymentRoutingAdapter(RouteLockedPaymentService service) { this.service = service; }
+    /** Routes a locked payment and schedules its durable execution command transactionally. */
     @Override
     public PaymentRoutingResult route(RouteLockedPaymentCommand command) { return service.route(command); }
 }

@@ -43,28 +43,47 @@ import com.kerosene.kfe.paymentexecution.application.command.PreparePaymentSubmi
 import com.kerosene.kfe.paymentexecution.application.port.in.PreparePaymentSubmissionUseCase;
 import com.kerosene.kfe.paymentexecution.domain.model.RequestFingerprint;
 
+/** Coordinates the legacy KFE submit API with the payment execution application and outbox. */
 @Service
 public class KfeSubmitTransactionUseCase {
 
+    /** Logger for operational events in the synchronous submit and outbox-dispatch path. */
     private static final Logger log = LoggerFactory.getLogger(KfeSubmitTransactionUseCase.class);
+    /** Stable worker identity used when the request thread claims an outbox command immediately. */
     private static final String SYNC_WORKER_ID = "kfe-submit-sync-lightning";
 
+    /** Owner-scoped legacy transaction repository used to reload the committed response. */
     private final KfeTransactionRepository transactionRepository;
+    /** Validates and prepares the authorized submission after preflight. */
     private final PreparePaymentSubmissionUseCase prepareSubmission;
+    /** Reserves the requested payment amount and related fees atomically. */
     private final ReservePaymentFundsUseCase reservePaymentFunds;
+    /** Maps the persisted legacy transaction into its HTTP response shape. */
     private final KfeResponseMapper responseMapper;
+    /** Persists submission completion and its participant-facing projection. */
     private final CompletePaymentSubmissionUseCase completeSubmission;
+    /** Performs preflight validation and resolves idempotent replays before the write transaction. */
     private final PreflightPaymentUseCase preflight;
+    /** Atomically reserves the user's idempotency key for this request fingerprint. */
     private final ReservePaymentIdempotencyUseCase reserveIdempotency;
+    /** Records execution lifecycle transitions alongside submission state. */
     private final PaymentExecutionLifecycleUseCase executionLifecycle;
+    /** Selects and persists the payment route for the locked execution. */
     private final RouteLockedPaymentUseCase routePayment;
+    /** Creates the durable payment intent represented by this legacy transaction. */
     private final CreatePaymentIntentUseCase createPaymentIntent;
+    /** Prepares and completes optional links to participant payment requests. */
     private final PaymentRequestLinkUseCase paymentRequestLinks;
+    /** Attempts immediate processing of a committed outbox command. */
     private final ExecutionCommandDispatcher commandDispatcher;
+    /** Enables post-commit immediate Lightning dispatch in the submit request thread. */
     private final boolean lightningSyncOnSubmit;
+    /** Enables post-commit immediate on-chain dispatch in the submit request thread. */
     private final boolean onchainSyncOnSubmit;
+    /** Owns the short READ COMMITTED transaction for authorized ledger mutations. */
     private final TransactionTemplate transactionTemplate;
 
+    /** Wires the payment collaborators and creates the submission transaction policy. */
     public KfeSubmitTransactionUseCase(
             KfeTransactionRepository transactionRepository,
             PreparePaymentSubmissionUseCase prepareSubmission,
@@ -114,10 +133,12 @@ public class KfeSubmitTransactionUseCase {
      * the client spinning on EXECUTING. Async worker remains the safety net if sync is disabled
      * or claim races. On-chain also supports optional post-commit immediate dispatch.
      */
+    /** Submits a request without a device hash, preserving the legacy two-argument API. */
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request) {
         return submit(userId, request, null);
     }
 
+    /** Runs preflight outside the financial transaction, commits the payment, then optionally drains its outbox. */
     public KfeTransactionResponse submit(Long userId, KfeSubmitTransactionRequest request, String deviceHash) {
         // This boundary owns the commit: joining an outer transaction would dispatch before its real commit.
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -147,6 +168,7 @@ public class KfeSubmitTransactionUseCase {
         return outcome.response();
     }
 
+    /** Performs idempotency reservation and every authorized payment mutation in one transaction. */
     private SubmissionOutcome submitAuthorized(
             Long userId,
             KfeSubmitTransactionRequest request,
@@ -198,6 +220,7 @@ public class KfeSubmitTransactionUseCase {
      * After the ledger TX commits: claim the outbox item and run provider execution now
      * (Lightning pay or on-chain broadcast). Reloads the transaction for the HTTP response.
      */
+    /** Claims committed provider work immediately and reloads the owner-scoped transaction response. */
     private KfeTransactionResponse drainOutboxSync(Long userId, SubmissionOutcome outcome, String railLabel) {
         UUID outboxId = outcome.lightningOutboxId() != null
                 ? outcome.lightningOutboxId()
@@ -243,10 +266,20 @@ public class KfeSubmitTransactionUseCase {
      * @param lightningOutboxId non-null when LIGHTNING OUTBOUND should drain sync
      * @param onchainOutboxId non-null when ONCHAIN OUTBOUND should drain sync
      */
+    /** Carries the committed response and optional outbox identifiers to post-commit dispatch.
+     * @param response response used if a post-dispatch reload cannot be completed
+     * @param transactionId committed transaction identity for the owner-scoped reload
+     * @param lightningOutboxId optional Lightning command to process immediately
+     * @param onchainOutboxId optional on-chain command to process immediately
+     */
     private record SubmissionOutcome(
+            /** Response to use when no newer committed transaction state can be reloaded. */
             KfeTransactionResponse response,
+            /** Persisted transaction identifier used for a safe post-dispatch reload. */
             UUID transactionId,
+            /** Outbox command for immediate Lightning processing, when applicable. */
             UUID lightningOutboxId,
+            /** Outbox command for immediate on-chain processing, when applicable. */
             UUID onchainOutboxId) {
     }
 

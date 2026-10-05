@@ -10,14 +10,25 @@ import java.util.Optional;
 
 /** Read-only replay decision. A replay uses the current owned execution and never repeats financial effects. */
 public final class GetIdempotentPaymentService {
+    /** Reads reservation state and request fingerprint for account-scoped replay decisions. */
     private final IdempotencyReservationStore reservations;
+    /** Loads an owned execution result only after the reservation is complete and matching. */
     private final PaymentIdempotencyQueryPort payments;
 
+    /** Creates read-only replay lookup with reservation and payment query ports. */
+    /** @param reservations idempotency reservation lookup port @param payments account-owned execution result lookup port */
     public GetIdempotentPaymentService(IdempotencyReservationStore reservations, PaymentIdempotencyQueryPort payments) {
         this.reservations = reservations;
         this.payments = payments;
     }
 
+    /**
+     * Returns empty when no reservation exists; otherwise verifies the request fingerprint,
+     * requires a completed execution, and returns its current owned projection.
+     * @param query account, key, and request fingerprint used for replay binding
+     * @return current payment result for a completed matching reservation
+     * @throws IllegalStateException when the reservation conflicts, remains pending, or points to missing state
+     */
     public Optional<PaymentExecutionResult> find(GetIdempotentPaymentQuery query) {
         Objects.requireNonNull(query, "idempotent payment query is required");
         var existing = Objects.requireNonNull(reservations.find(query.userId(), query.idempotencyKey()),

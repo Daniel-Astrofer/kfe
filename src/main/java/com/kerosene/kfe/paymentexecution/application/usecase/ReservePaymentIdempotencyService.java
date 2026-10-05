@@ -10,14 +10,24 @@ import java.util.Objects;
 
 /** Insert-or-replay within the authorized submission. Only the insert winner may begin financial effects. */
 public final class ReservePaymentIdempotencyService {
+    /** Atomic insert-or-conflict operation for account-scoped idempotency reservations. */
     private final IdempotencyReservationStore reservations;
+    /** Reads a committed winning payment after a uniqueness conflict. */
     private final GetIdempotentPaymentService replay;
 
+    /** Creates idempotency reservation orchestration with storage and replay lookup. */
+    /** @param reservations unique reservation persistence port @param replay idempotent result lookup service */
     public ReservePaymentIdempotencyService(IdempotencyReservationStore reservations, GetIdempotentPaymentService replay) {
         this.reservations = reservations;
         this.replay = replay;
     }
 
+    /**
+     * Reserves a fresh request or returns the committed matching result after a uniqueness conflict.
+     * Only the insert winner may continue into payment financial effects.
+     * @param command account, key, and canonical request fingerprint
+     * @return newly reserved result or replay of the existing payment
+     */
     public PaymentIdempotencyReservationResult reserve(ReservePaymentIdempotencyCommand command) {
         Objects.requireNonNull(command, "idempotency reservation command is required");
         var reservation = IdempotencyReservation.pending(command.idempotencyKey(), command.fingerprint());

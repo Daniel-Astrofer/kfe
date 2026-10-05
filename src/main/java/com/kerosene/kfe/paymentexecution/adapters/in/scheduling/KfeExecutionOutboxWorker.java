@@ -13,16 +13,22 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
+/** Claims due durable commands and processes them without holding a transaction across provider I/O. */
 @Component
 @ConditionalOnProperty(name = "kfe.execution.enabled", havingValue = "true", matchIfMissing = true)
 public class KfeExecutionOutboxWorker {
 
+    /** Operational logger for claims and failures that need lease recovery or reconciliation. */
     private static final Logger log = LoggerFactory.getLogger(KfeExecutionOutboxWorker.class);
+    /** Unique lease owner identity so concurrent worker instances do not share claims. */
     private final String workerId = "kfe-execution-worker-" + UUID.randomUUID();
 
+    /** Atomically claims due commands and renews current leases. */
     private final ExecutionClaimPort outboxService;
+    /** Executes each claimed command through the application boundary. */
     private final ProcessExecutionUseCase processor;
 
+    /** Supplies the lease port and execution workflow for this worker instance. */
     public KfeExecutionOutboxWorker(
             ExecutionClaimPort outboxService,
             ProcessExecutionUseCase processor) {
@@ -30,6 +36,7 @@ public class KfeExecutionOutboxWorker {
         this.processor = Objects.requireNonNull(processor);
     }
 
+    /** Claims one due batch and processes each item independently, leaving recovery to leases on failure. */
     @Scheduled(
             fixedDelayString = "${kfe.execution.outbox.fixed-delay-ms:5000}",
             initialDelayString = "${kfe.execution.outbox.initial-delay-ms:10000}")

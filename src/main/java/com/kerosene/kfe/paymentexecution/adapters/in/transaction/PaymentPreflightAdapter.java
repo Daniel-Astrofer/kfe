@@ -10,12 +10,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** Orchestration without an encompassing transaction; queries may own short transactions through their ports. */
 @Component
 public class PaymentPreflightAdapter implements PreflightPaymentUseCase {
+    /** Preflight service that checks request eligibility and idempotent replay. */
     private final PreflightPaymentService service;
 
+    /** Wires the application service whose transaction semantics this adapter enforces. */
     public PaymentPreflightAdapter(PreflightPaymentService service) {
         this.service = service;
     }
 
+    /** Performs preflight outside an encompassing transaction so adapters can use short reads. */
     @Override
     public PaymentPreflightResult preflight(SubmitPaymentCommand command) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
